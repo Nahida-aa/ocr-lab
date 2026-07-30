@@ -1,0 +1,34 @@
+[package]
+name = "rapidocr-ort"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# 既是库（供 ui_probe 等上层调用）也是二进制（命令行直接对图片跑 OCR）。
+[lib]
+name = "rapidocr_ort"
+path = "src/lib.rs"
+
+[[bin]]
+name = "rapidocr-ort"
+path = "src/main.rs"
+
+[dependencies]
+# ONNX Runtime 推理（workspace 已 pin rc.13）。开 ndarray feature 以便直接吃
+# ndarray::Array 构造输入张量。模型权重在 models/rapidocr 下，通过 --model 运行
+# 时参数选择，不条件编译。
+ort = { workspace = true, features = ["ndarray"] }
+# 图像读取 + 预处理（Resize/Normalize/CHW 排列）。
+image = "0.25"
+# 矩阵/张量：版本必须与 ort(rc.13) 内部锁定的 ndarray 0.17 一致，否则 Array
+# 类型不匹配（ort 的 OwnedTensorArrayData 只对其锁定的那份 ndarray 实现）。
+ndarray = "0.17"
+# 字典解析：v3 的 ppocr_keys.json 是 JSON 数组，v6 的 .txt 按行。
+serde_json = "1"
+# 错误链。
+anyhow.workspace = true
+
+# 二进制侧依赖
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }

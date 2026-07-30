@@ -1,0 +1,31 @@
+[workspace]
+members = [
+    # "apps/*",
+    "crates/*",
+]
+
+# default-members：当你只敲 `cargo build` / `cargo run`（不带 -p）时，
+# cargo 实际去构建哪些成员。这里只默认构建 apps/*（二进制例子），
+# 不碰 crates/*（库）。原因：
+#   - 库本身没有 main，单独 `cargo run` 无意义；
+#   - 新人clone后直接 `cargo run` 不会误触发所有内部库的编译，体验更轻。
+# 想全量构建时，用 `cargo build --workspace`。
+# default-members = [
+#     "apps/*",
+# ]
+
+# [workspace.package] 里写的字段会被子包用 `version.workspace = true` 继承。
+# 这样全仓库版本号、edition、license 统一改一处即可。
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+publish = false
+
+[workspace.dependencies]
+anyhow = "1.0"
+rust-embed = { version = "8.11", features = ["include-exclude"] }
+opencv = "0.100.0"
+ort = "2.0.0-rc.13"
+burn = "0.21.0"
+util = { path = "crates/util" }
