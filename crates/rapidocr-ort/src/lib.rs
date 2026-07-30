@@ -499,3 +499,55 @@ fn bbox_center(bbox: &[f32; 8]) -> [f32; 2] {
     let cy = (bbox[1] + bbox[3] + bbox[5] + bbox[7]) / 4.0;
     [cx, cy]
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    /// 仓库根：crate 在 crates/rapidocr-ort，往上两级即仓库根。
+    fn repo_root() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .to_path_buf()
+    }
+
+    fn load_image(path: &Path) -> Array3<u8> {
+        let img = image::open(path).unwrap().to_rgb8();
+        let (w, h) = (img.width() as usize, img.height() as usize);
+        Array3::from_shape_vec((h, w, 3), img.into_raw()).unwrap()
+    }
+
+    #[test]
+    fn v3_detects_text_on_fixtures() {
+        let root = repo_root();
+        let model_dir = root.join("models/rapidocr");
+        let fixtures = root.join("tests/fixtures");
+
+        let mut engine = OcrEngine::from_profile(ModelProfile::V3, &model_dir)
+            .expect("加载 v3 引擎失败（确认 models/rapidocr 权重已就绪）");
+
+        // (fixture, 期望出现在结果里的子串)
+        let cases = [
+            ("stable1.png", "Count"),
+            ("big1.png", "OCR"),
+            ("nat1.png", "World"),
+        ];
+        for (name, expect) in cases {
+            let img = load_image(&fixtures.join(name));
+            let results = engine.detect(&img).expect("OCR 推理失败");
+            assert!(!results.is_empty(), "{} 应检测到文字", name);
+            let joined: String = results.iter().map(|r| r.text.clone()).collect();
+            assert!(
+                joined.contains(expect),
+                "{} 识别结果 {} 应包含 '{}'",
+                name,
+                joined,
+                expect
+            );
+        }
+    }
+}
