@@ -242,6 +242,61 @@ impl Agent {
     }
 }
 
+/// 闭环验证结果。
+#[derive(Debug, Clone)]
+pub struct VerifyResult {
+    /// 点击前计数。
+    pub before: Option<i32>,
+    /// 点击后计数。
+    pub after: Option<i32>,
+    /// 被点击的控件标签。
+    pub label: String,
+}
+
+impl VerifyResult {
+    /// 点击带来的计数变化（点击后 − 点击前）；任一侧未识别到数字则为 None。
+    pub fn delta(&self) -> Option<i32> {
+        match (self.before, self.after) {
+            (Some(b), Some(a)) => Some(a - b),
+            _ => None,
+        }
+    }
+}
+
+impl Agent {
+    /// 闭环验证：点击某控件后重新抓取一帧，读出点击后的计数，与点击前对比。
+    ///
+    /// 这是「识别 → 定位 → 点击 → 观测」完整链路的收口：`capture_after` 由调用方
+    /// 提供（通常是 `capturer` 重新抓一帧），`ocr-agent` 不直接依赖捕获后端，保持
+    /// 解耦。`capture_after` 必须在点击**之后**调用，才能反映操作效果。
+    ///
+    /// 典型用法（伪代码）：
+    /// ```ignore
+    /// let after = || -> Result<RgbImage> { Ok(capturer.capture_app_token("")?.0.to_rgb8()) };
+    /// let r = agent.verify_click(&img_before, "Reload", after)?;
+    /// assert_eq!(r.delta(), Some(50)); // testing_08 的 Reload 使 count += 50
+    /// ```
+    pub fn verify_click<F>(
+        &mut self,
+        img_before: &RgbImage,
+        label: &str,
+        capture_after: F,
+    ) -> Result<VerifyResult>
+    where
+        F: FnOnce() -> Result<RgbImage>,
+    {
+        let before = self.read_count(img_before)?;
+        self.click_by_label(img_before, label)?;
+        let img_after = capture_after()?;
+        let after = self.read_count(&img_after)?;
+        Ok(VerifyResult {
+            before,
+            after,
+            label: label.to_string(),
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -285,6 +340,33 @@ mod tests {
         let ws = [mk(0, "", 0.05), mk(1, "Load", 0.04)];
         let hit = find_widget_by_label(&ws, "load").expect("应命中 Load");
         assert_eq!(hit.label, "Load");
+    }
+
+    #[test]
+    fn verify_result_delta() {
+        // 正常：点击后 − 点击前。
+        let r = VerifyResult {
+            before: Some(0),
+            after: Some(50),
+            label: "Reload".to_string(),
+        };
+        assert_eq!(r.delta(), Some(50));
+
+        // 任一侧未识别到数字 → None。
+        let r = VerifyResult {
+            before: None,
+            after: Some(50),
+            label: "Reload".to_string(),
+        };
+        assert_eq!(r.delta(), None);
+
+        // 计数器下降也是正常差值（如 Decrement 按钮）。
+        let r = VerifyResult {
+            before: Some(10),
+            after: Some(9),
+            label: "Decrement".to_string(),
+        };
+        assert_eq!(r.delta(), Some(-1));
     }
 
     #[test]

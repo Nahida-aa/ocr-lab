@@ -4075,6 +4075,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "ocr-agent"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "image",
+ "ocr-layout",
+ "rapidocr-ort",
+ "serde_json",
+]
+
+[[package]]
 name = "ocr-layout"
 version = "0.1.0"
 dependencies = [

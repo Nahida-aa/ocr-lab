@@ -1,5 +1,5 @@
 //! 命令行：演示 `ocr-agent` 对 testing_08 的「识别 → 定位 → 点击」链路，
-//! 并演示**自动反推窗口偏移**（无需 xdotool/kdotool，纯图像方法）。
+//! 并演示**自动反推窗口偏移**（无需 xdotool/kdotool，纯图像方法）与**闭环验证**。
 //!
 //! 用法：
 //!   # 默认：PrintExecutor（dry-run），手动无偏移。
@@ -13,12 +13,18 @@
 //!   cargo run -p ocr-agent --example agent -- <window.png> \
 //!       --auto-offset --full <full.png> --window <window.png> --real
 //!
+//!   # 闭环验证：直接对比「点击前 / 点击后」两帧的计数（两帧由你在点击前后各
+//!   # 抓一次，如用 pw_probe）。delta 即本次操作带来的计数变化。
+//!   cargo run -p ocr-agent --example agent --verify-before <before.png> --verify-after <after.png>
+//!   # 真点 Reload 的完整闭环（需显示环境 + ydotool + capturer 接线）：
+//!   #   抓 before → agent --real 点 Reload → 抓 after → 上面 --verify 比 delta(应=50)
+//!
 //! 说明：PrintExecutor 不会真点，所以前后 count 不变；--real 且窗口在前台时，
 //! 点 Reload 后 count 应 +50。
 //!
 //! 注：在线抓取（用 capturer 抓全屏+窗口流再反推）需引入 capturer/async-io
 //! （会拉 opencv 重依赖），本示例默认只演示「离线双图反推」，live 抓取请在
-//! 本地自行接线（参考 infer_window_offset 的调用方式）。
+//! 本地自行接线（参考 infer_window_offset / verify_click 的调用方式）。
 
 use anyhow::Context as _;
 use ocr_agent::{Agent, Executor, PrintExecutor, YdotoolExecutor, infer_window_offset};
@@ -40,27 +46,64 @@ fn repo_root() -> PathBuf {
 fn main() -> anyhow::Result<()> {
     let args: Vec<String> = std::env::args().collect();
     if args.len() < 2 {
-        anyhow::bail!("用法: agent <image.png> [--auto-offset --full F --window W] [--real]");
+        anyhow::bail!(
+            "用法: agent <image.png> [--auto-offset --full F --window W] [--real] | agent --verify-before B --verify-after A"
+        );
     }
-    let image_path = args[1].clone();
 
     let mut auto_offset = false;
     let mut full_path: Option<String> = None;
     let mut window_path: Option<String> = None;
     let mut real = false;
+    let mut verify_before: Option<String> = None;
+    let mut verify_after: Option<String> = None;
 
-    let mut i = 2;
+    let mut i = 1; // 从 1 开始，跳过程序名（首参可能是 image 或 --verify-before）
     while i < args.len() {
         match args[i].as_str() {
             "--auto-offset" => auto_offset = true,
             "--full" => full_path = args.get(i + 1).cloned(),
             "--window" => window_path = args.get(i + 1).cloned(),
             "--real" => real = true,
+            "--verify-before" => verify_before = args.get(i + 1).cloned(),
+            "--verify-after" => verify_after = args.get(i + 1).cloned(),
             _ => {}
         }
         i += 1;
     }
 
+    // ---- 闭环验证模式：直接对比两帧计数 ----
+    if let (Some(b), Some(a)) = (verify_before, verify_after) {
+        let model_dir = repo_root().join("models/rapidocr");
+        let analyzer = LayoutAnalyzer::with_ocr(ModelProfile::V3, &model_dir, Default::default())
+            .context("构建 OCR 引擎失败（确认 models/rapidocr 权重就绪）")?;
+        let mut agent = Agent::new(analyzer, Box::new(PrintExecutor));
+
+        let img_b = image::open(&b)
+            .with_context(|| format!("读取 before 图失败: {b}"))?
+            .to_rgb8();
+        let img_a = image::open(&a)
+            .with_context(|| format!("读取 after 图失败: {a}"))?
+            .to_rgb8();
+        let before = agent.read_count(&img_b)?;
+        let after = agent.read_count(&img_a)?;
+        let delta = match (before, after) {
+            (Some(b), Some(a)) => Some(a - b),
+            _ => None,
+        };
+        println!(
+            "闭环验证：before={:?} after={:?} delta={:?}",
+            before, after, delta
+        );
+        if delta == Some(50) {
+            println!("✓ delta=50，与 testing_08 的 Reload(count+=50) 一致，闭环通过");
+        } else {
+            println!("（delta 非 50：可能 before/after 不是 Reload 点击前后，或识别有偏差）");
+        }
+        return Ok(());
+    }
+
+    let image_path = args[1].clone();
     let img = image::open(&image_path)
         .with_context(|| format!("读取图片失败: {image_path}"))?
         .to_rgb8();
