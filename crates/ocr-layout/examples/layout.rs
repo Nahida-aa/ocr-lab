@@ -34,13 +34,29 @@ fn main() -> anyhow::Result<()> {
     let args: Vec<String> = std::env::args().collect();
     if args.len() < 2 {
         anyhow::bail!(
-            "用法: layout <image.png> [--no-ocr] [model_dir] [quant_bits] [merge_distance] [min_area_ratio]"
+            "用法: layout <image.png> [--no-ocr] [--annotate <out.png>] [model_dir] [quant_bits] [merge_distance] [min_area_ratio]"
         );
     }
     let image_path = args[1].clone();
     let no_ocr = args.iter().any(|a| a == "--no-ocr");
+    // 解析 --annotate <path>。
+    let mut annotate_path: Option<String> = None;
+    let mut i = 2;
+    while i < args.len() {
+        if args[i] == "--annotate" {
+            if let Some(p) = args.get(i + 1) {
+                annotate_path = Some(p.clone());
+                i += 2;
+                continue;
+            }
+        }
+        i += 1;
+    }
 
-    let mut positional = args.iter().skip(2).filter(|a| *a != "--no-ocr");
+    let mut positional = args
+        .iter()
+        .skip(2)
+        .filter(|a| *a != "--no-ocr" && *a != "--annotate" && annotate_path.as_ref() != Some(*a));
     let model_dir = positional
         .next()
         .map(PathBuf::from)
@@ -73,8 +89,17 @@ fn main() -> anyhow::Result<()> {
 
     let out = Output {
         image: image_path,
-        widgets,
+        widgets: widgets.clone(),
     };
     println!("{}", serde_json::to_string_pretty(&out)?);
+
+    // 可选：把控件画回原图，方便人工核对 UI 理解是否正确。
+    if let Some(p) = annotate_path {
+        let annotated = ocr_layout::annotate(&img, &widgets);
+        annotated
+            .save(&p)
+            .with_context(|| format!("保存标注图失败: {p}"))?;
+        eprintln!("已保存标注图: {}", p);
+    }
     Ok(())
 }

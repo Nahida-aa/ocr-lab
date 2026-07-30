@@ -57,6 +57,9 @@ pub struct LayoutAnalyzer {
     opts: SegmentOpts,
     /// 背景判定阈值：区域像素数 ≥ 全图此比例视为背景，丢弃。
     bg_ratio: f32,
+    /// 最小边长（像素）：颜色区域任一边 < 此值的视为线状伪影（窗口边框 /
+    /// 分隔线），不作为控件输出。默认 3。
+    min_dim: u32,
 }
 
 impl LayoutAnalyzer {
@@ -67,6 +70,7 @@ impl LayoutAnalyzer {
             ocr,
             opts,
             bg_ratio: 0.9,
+            min_dim: 3,
         })
     }
 
@@ -76,12 +80,19 @@ impl LayoutAnalyzer {
             ocr: None,
             opts,
             bg_ratio: 0.9,
+            min_dim: 3,
         }
     }
 
     /// 自定义背景阈值（默认 0.9）。
     pub fn set_bg_ratio(&mut self, r: f32) -> &mut Self {
         self.bg_ratio = r.clamp(0.0, 1.0);
+        self
+    }
+
+    /// 自定义最小边长阈值（默认 3）；小于它的线状区域不作为控件。
+    pub fn set_min_dim(&mut self, d: u32) -> &mut Self {
+        self.min_dim = d.max(1);
         self
     }
 
@@ -107,10 +118,18 @@ impl LayoutAnalyzer {
             None => Vec::new(),
         };
 
-        // 3. 过滤背景区域：覆盖全图比例过高的视为背景。
+        // 3. 过滤背景区域与退化线状区域。
+        //    - 覆盖全图比例过高 → 背景。
+        //    - 任一边长 < min_dim（默认 3px）→ 线状伪影（如窗口顶部 1px 高光
+        //      边、1px 分隔线），不是控件，剔除。否则这种全宽 1px 条会因面积
+        //      占比极小而漏过背景判定，作为无意义控件输出。
         let fg: Vec<_> = regions
             .into_iter()
             .filter(|r| (r.pixel_count as f32) < total * self.bg_ratio)
+            .filter(|r| {
+                let (_, _, w, h) = r.rect;
+                w >= self.min_dim && h >= self.min_dim
+            })
             .collect();
 
         // 4. 合并「文字笔画细条」到其所属容器。
@@ -180,6 +199,140 @@ impl LayoutAnalyzer {
             wd.id = i;
         }
         Ok(widgets)
+    }
+}
+
+/// 把控件列表画回原图，生成一张带标注的图（不修改入参）。
+///
+/// 每个控件：
+/// - 用按 `id` 取色的矩形边框标出包围盒（不同控件不同色，便于区分）。
+/// - 在几何中心画一个「＋」十字（即操作回灌的点击目标）。
+/// - 在左上角用内置 3×5 点阵字画出控件 `id`，方便与 JSON 里的 `label` 对应。
+///
+/// 设计：零额外依赖，只用 `image` 的 `put_pixel` 手绘；文字用极简点阵，
+/// 不引入字体渲染。需要「图上直接出文字标签」可后续接 `imageproc`。
+pub fn annotate(img: &RgbImage, widgets: &[Widget]) -> RgbImage {
+    let mut out = img.clone();
+    let (w, h) = out.dimensions();
+
+    for wd in widgets {
+        let (x, y, rw, rh) = wd.rect;
+        // 按 id 取一个稳定且区分度高的色（HSV 等距取色再转 RGB）。
+        let color = hsv_to_rgb((wd.id as f32 * 47.0) % 360.0, 0.7, 1.0);
+
+        // 1. 矩形边框（四条 1px 边，越界部分截断到图内）。
+        let x0 = x.min(w.saturating_sub(1));
+        let y0 = y.min(h.saturating_sub(1));
+        let x1 = (x + rw).min(w).saturating_sub(1);
+        let y1 = (y + rh).min(h).saturating_sub(1);
+        for xx in x0..=x1 {
+            put(&mut out, xx, y0, color);
+            put(&mut out, xx, y1, color);
+        }
+        for yy in y0..=y1 {
+            put(&mut out, x0, yy, color);
+            put(&mut out, x1, yy, color);
+        }
+
+        // 2. 中心十字（点击目标）。
+        let cx = x + rw / 2;
+        let cy = y + rh / 2;
+        for d in 0..8u32 {
+            put(
+                &mut out,
+                cx.saturating_sub(d).min(w.saturating_sub(1)),
+                cy,
+                [255, 255, 255],
+            );
+            put(
+                &mut out,
+                (cx + d).min(w.saturating_sub(1)),
+                cy,
+                [255, 255, 255],
+            );
+            put(
+                &mut out,
+                cx,
+                cy.saturating_sub(d).min(h.saturating_sub(1)),
+                [255, 255, 255],
+            );
+            put(
+                &mut out,
+                cx,
+                (cy + d).min(h.saturating_sub(1)),
+                [255, 255, 255],
+            );
+        }
+
+        // 3. 左上角点阵 id（3×5 字，逐位画）。
+        draw_id(&mut out, wd.id, x0, y0, color);
+    }
+    out
+}
+
+/// 安全写像素（越界忽略）。
+fn put(img: &mut RgbImage, x: u32, y: u32, c: [u8; 3]) {
+    if x < img.width() && y < img.height() {
+        img.put_pixel(x, y, image::Rgb(c));
+    }
+}
+
+/// HSV（h∈[0,360), s,v∈[0,1]）→ RGB。
+fn hsv_to_rgb(h: f32, s: f32, v: f32) -> [u8; 3] {
+    let c = v * s;
+    let hp = h / 60.0;
+    let x = c * (1.0 - (hp % 2.0 - 1.0).abs());
+    let (r1, g1, b1) = match hp as i32 {
+        0 => (c, x, 0.0),
+        1 => (x, c, 0.0),
+        2 => (0.0, c, x),
+        3 => (0.0, x, c),
+        4 => (x, 0.0, c),
+        _ => (c, 0.0, x),
+    };
+    let m = v - c;
+    let to = |f: f32| (f + m).clamp(0.0, 1.0) * 255.0;
+    [to(r1) as u8, to(g1) as u8, to(b1) as u8]
+}
+
+/// 3×5 点阵数字字形（0–9），每行为 3 bit（1=亮）。
+const DIGITS: [[u8; 5]; 10] = [
+    [0b111, 0b101, 0b101, 0b101, 0b111], // 0
+    [0b010, 0b110, 0b010, 0b010, 0b111], // 1
+    [0b111, 0b001, 0b111, 0b100, 0b111], // 2
+    [0b111, 0b001, 0b111, 0b001, 0b111], // 3
+    [0b101, 0b101, 0b111, 0b001, 0b001], // 4
+    [0b111, 0b100, 0b111, 0b001, 0b111], // 5
+    [0b111, 0b100, 0b111, 0b101, 0b111], // 6
+    [0b111, 0b001, 0b001, 0b001, 0b001], // 7
+    [0b111, 0b101, 0b111, 0b101, 0b111], // 8
+    [0b111, 0b101, 0b111, 0b001, 0b111], // 9
+];
+
+/// 用点阵字把 id（十进制）画在 (ox, oy) 处，每位 3×5，位间留 1px 间隔。
+fn draw_id(img: &mut RgbImage, mut id: usize, ox: u32, oy: u32, color: [u8; 3]) {
+    // 多位数从高位到低位画；先算出位数。
+    let mut digits = Vec::new();
+    if id == 0 {
+        digits.push(0);
+    } else {
+        while id > 0 {
+            digits.push(id % 10);
+            id /= 10;
+        }
+        digits.reverse();
+    }
+    let mut cx = ox;
+    for d in digits {
+        let glyph = DIGITS[d];
+        for (row, &line) in glyph.iter().enumerate() {
+            for col in 0..3 {
+                if (line >> (2 - col)) & 1 == 1 {
+                    put(img, cx + col as u32, oy + row as u32, color);
+                }
+            }
+        }
+        cx += 4; // 3 宽 + 1 间隔
     }
 }
 
