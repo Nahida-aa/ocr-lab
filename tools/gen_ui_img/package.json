@@ -1,0 +1,9 @@
+{
+  "scripts": {
+    "run": "cargo run -p gen_ui_img",
+    "run:gui": "cargo run -p gen_ui_img -- --gui",
+    "run:capture": "cargo run -p gen_ui_img -- --capture",
+    "gen": "cargo run -p gen_ui_img",
+    "gen:all": "cargo run -p gen_ui_img"
+  }
+}

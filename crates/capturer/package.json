@@ -1,0 +1,12 @@
+{
+  "scripts": {
+    "example": "cargo run -p capturer --example pw_probe -- --out tmp/win.png",
+    "build": "cargo build -p capturer",
+    "build:cli": "cargo build -p capturer --bin capturer_cli",
+    "test": "cargo test -p capturer",
+    "test:watch": "cargo test -p capturer -- --watch",
+    "clippy": "cargo clippy -p capturer --all-targets",
+    "shot": "cargo run -p capturer --bin capturer_cli -- full --out capture.png",
+    "shot:region": "cargo run -p capturer --bin capturer_cli -- region 120 120 720 220 --out capture_region.png"
+  }
+}

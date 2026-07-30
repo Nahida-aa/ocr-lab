@@ -3,3 +3,8 @@ models/
 
 #
 target
+
+.agents/*.local.md
+
+tmp
+tests/fixtures/.capture_token

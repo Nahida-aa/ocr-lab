@@ -1,0 +1,28 @@
+[package]
+name = "gen_ui_img"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+# gpui 系列依赖的「语义版本」在 workspace.dependencies 声明，真实 git 源由
+# 根清单的 [patch.crates-io] 覆盖。子包只写 workspace = true 即可。
+gpui = { workspace = true }
+gpui_macros = { workspace = true }
+# 平台后端：必须显式开启 wayland/x11/font-kit，否则 Linux 下没有窗口后端，
+# 窗口根本不会真正呈现，on_next_frame/quit 永不触发（之前 watchdog 误报超时）。
+gpui_platform = { workspace = true, features = ["font-kit", "wayland", "x11"] }
+# gpui_wgpu 提供 Linux/Wayland 实际的 wgpu 渲染后端（gpui 在 Linux 必须用它）。
+gpui_wgpu = { workspace = true }
+gpui_util = { workspace = true }
+
+anyhow = { workspace = true }
+rust-embed = { workspace = true }
+
+# 抓图基础设施（自研，跨 compositor）。
+capturer = { path = "../../crates/capturer" }
+# 异步运行时：ashpd 随 gpui_linux 走 async-io 后端，用 async_io::block_on 驱动。
+async-io = "2"
+# 图像保存。
+image = "0.25"

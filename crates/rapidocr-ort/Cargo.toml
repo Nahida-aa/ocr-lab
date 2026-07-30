@@ -28,6 +28,7 @@ ndarray = "0.17"
 serde_json = "1"
 # 错误链。
 anyhow.workspace = true
+opencv = { workspace = true }
 
 # 二进制侧依赖
 clap = { version = "4", features = ["derive"] }

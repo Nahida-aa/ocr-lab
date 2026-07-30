@@ -1,0 +1,28 @@
+[package]
+name = "capturer"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+# xdg-desktop-portal 客户端（跨 compositor 抓图/录屏）：KDE/GNOME/wlroots 都实现
+# 了 portal 的 Screenshot 接口，写一次即可在各桌面环境通用。
+# 我们用 Screenshot（非交互、全屏）拿文件，再在 Rust 里裁切到目标区域，
+# 避免 ScreenCast + PipeWire 那条更重的链路。
+# 注意：ashpd 0.13 的 default-features 含 tokio，而 gpui_linux 依赖的 oo7 会
+# 开启 ashpd 的 async-io 特性，二者互斥。因此关闭 default，显式开 async-io
+# （与 oo7 对齐）+ screenshot。调用方用 async_io::block_on 驱动其 future。
+ashpd = { version = "0.13", default-features = false, features = ["screenshot", "screencast", "async-io"] }
+# 图像读取/裁切/保存。
+image = "0.25"
+anyhow = { workspace = true }
+# 异步运行时：ashpd 走 async-io 后端，CLI 用 async_io::block_on 驱动其 future。
+async-io = "2"
+pipewire = "0.10.0"
+# SPA 参数构建（视频格式 pod 等），pipewire crate re-export 为 pw::spa，但也直接依赖以便顶层 use。
+libspa = "0.10.0"
+# MemFd 缓冲兜底：portal 给的帧有时是 MemFd 类型（fd 需 mmap 才能读像素）。
+nix = { version = "0.29", features = ["mman"] }
+# ashpd 中 SourceType 用 enumflags2::BitFlags 表示，构造 BitFlags 时需该 trait。
+enumflags2 = "0.7"

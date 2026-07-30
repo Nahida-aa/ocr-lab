@@ -1,7 +1,8 @@
 [workspace]
+resolver = "3"
 members = [
     # "apps/*",
-    "crates/*",
+    "crates/*", "tools/gen_ui_img",
 ]
 
 # default-members：当你只敲 `cargo build` / `cargo run`（不带 -p）时，
@@ -25,7 +26,25 @@ publish = false
 [workspace.dependencies]
 anyhow = "1.0"
 rust-embed = { version = "8.11", features = ["include-exclude"] }
-opencv = "0.100.0"
+opencv = { version = "0.100.0", default-features = false, features = ["imgproc"] }
 ort = "2.0.0-rc.13"
 burn = "0.21.0"
 util = { path = "crates/util" }
+
+# gpui 相关依赖统一在 workspace 声明语义版本，真正的 git 源由下方
+# [patch.crates-io] 覆盖（cargo 要求 patch 只能写在 workspace 根）。
+gpui = { version = "0.2.2", default-features = false }
+gpui_macros = { version = "0.1.0" }
+gpui_platform = { version = "0.1.0" }
+gpui_web = { version = "0.1.0" }
+gpui_util = { version = "0.1.0" }
+gpui_wgpu = { version = "0.1.0" }
+
+# [patch.crates-io]：把 crates.io 上的 gpui 系列包整体替换为 zed 仓库对应 rev。
+# 注意 patch 必须写在 workspace 根（子包里的 patch 会被 cargo 忽略并报错）。
+[patch.crates-io]
+gpui = { git = "https://github.com/zed-industries/zed", rev = "d88f68217b370f7a66d0c4b4971db31c0dff6df7", version = "=0.2.2" }
+gpui_macros = { git = "https://github.com/zed-industries/zed", rev = "d88f68217b370f7a66d0c4b4971db31c0dff6df7", version = "=0.1.0" }
+gpui_platform = { git = "https://github.com/zed-industries/zed", rev = "d88f68217b370f7a66d0c4b4971db31c0dff6df7", version = "=0.1.0" }
+gpui_wgpu = { git = "https://github.com/zed-industries/zed", rev = "d88f68217b370f7a66d0c4b4971db31c0dff6df7", version = "=0.1.0" }
+gpui_util = { git = "https://github.com/zed-industries/zed", rev = "d88f68217b370f7a66d0c4b4971db31c0dff6df7", version = "=0.1.0" }
