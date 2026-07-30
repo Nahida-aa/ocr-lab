@@ -1,0 +1,26 @@
+[package]
+name = "ocr-layout"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+name = "ocr_layout"
+path = "src/lib.rs"
+
+[dependencies]
+# 纯颜色连通域原语（控件边界主信号）。
+color-analysis = { path = "../color-analysis" }
+# 文字识别（控件标签锚点，辅助信号）。
+rapidocr-ort = { path = "../rapidocr-ort" }
+# 图像读取与 RGB 张量构造（喂给 rapidocr 的 detect）。
+image = "0.25"
+# ndarray：构造 HWC u8 张量传给 OcrEngine::detect（版本须与 rapidocr-ort 锁定的 0.17 一致）。
+ndarray = "0.17"
+# 结果可序列化为 JSON，便于上层 / 调试消费。
+serde = { version = "1", features = ["derive"] }
+# 示例侧 JSON 输出。
+serde_json = "1"
+# 错误链。
+anyhow.workspace = true
