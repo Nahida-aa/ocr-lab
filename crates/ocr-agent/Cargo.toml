@@ -1,0 +1,23 @@
+[package]
+name = "ocr-agent"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+name = "ocr_agent"
+path = "src/lib.rs"
+
+[dependencies]
+# 布局层：把颜色区域 + 文字框合成控件候选。
+ocr-layout = { path = "../ocr-layout" }
+# 图像类型（RgbImage 作为分析/点击的输入接口）。
+image = "0.25"
+# 错误链。
+anyhow.workspace = true
+
+# 示例侧依赖（examples 可用 dev-dependencies）。
+[dev-dependencies]
+rapidocr-ort = { path = "../rapidocr-ort" }
+serde_json = "1"
