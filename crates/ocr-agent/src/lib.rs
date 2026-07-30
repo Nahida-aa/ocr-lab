@@ -92,6 +92,69 @@ fn center_of(w: &Widget) -> (u32, u32) {
     (x + ww / 2, y + hh / 2)
 }
 
+/// 从「全屏图」+「窗口流图」反推窗口在屏幕上的偏移（纯图像方法，不依赖任何
+/// 外部命令 / compositor 接口，纯 Wayland 下也能用）。
+///
+/// 原理：ScreenCast 的窗口流是「窗口自身合成」（窗口相对坐标，不受遮挡），而
+/// 同一时刻抓的全屏 Monitor 流含该窗口在屏幕上的真实位置。两图里窗口像素一致，
+/// 于是在全屏图里滑窗搜索与窗口图最相似的块，峰值位置即窗口左上角的屏幕坐标。
+///
+/// 实现：降采样（默认因子 8）转灰度后用 **整窗 SSD** 滑窗（用整窗而非内缩模板，
+/// 否则当贴块大于模板时会有多个位置 SSD 同为 0、无法唯一确定）。返回
+/// `(offset_x, offset_y)`（屏幕像素）。
+///
+/// 这是让 `ocr-agent` 自动知道偏移的关键：无需 xdotool/kdotool（纯 Wayland 下
+/// 通常不可用），也不用假设窗口居中。
+pub fn infer_window_offset(full: &RgbImage, window: &RgbImage) -> (i32, i32) {
+    const DOWN: u32 = 8;
+    let full_small = downscale_gray(full, DOWN);
+    let win_small = downscale_gray(window, DOWN);
+
+    let (fw, fh) = (full_small.width(), full_small.height());
+    let (ww, wh) = (win_small.width(), win_small.height());
+    if fw < ww || fh < wh {
+        return (0, 0);
+    }
+
+    let mut best = (0i32, 0i32);
+    let mut best_ssd = u64::MAX;
+    for y in 0..=(fh - wh) {
+        for x in 0..=(fw - ww) {
+            let mut ssd = 0u64;
+            for ty in 0..wh {
+                for tx in 0..ww {
+                    let a = full_small.get_pixel(x + tx, y + ty).0[0] as i32;
+                    let b = win_small.get_pixel(tx, ty).0[0] as i32;
+                    let d = a - b;
+                    ssd += (d * d) as u64;
+                }
+            }
+            if ssd < best_ssd {
+                best_ssd = ssd;
+                best = (x as i32, y as i32);
+            }
+        }
+    }
+    // 升采样回原图坐标（降采样块位置即窗口左上角 * DOWN）。
+    (best.0 * DOWN as i32, best.1 * DOWN as i32)
+}
+
+/// 降采样并转灰度（取原图 1/DOWN 的每 DOWNd 像素，亮度 = 0.299R+0.587G+0.114B）。
+fn downscale_gray(img: &RgbImage, down: u32) -> RgbImage {
+    let (w, h) = (img.width(), img.height());
+    let nw = (w / down).max(1);
+    let nh = (h / down).max(1);
+    let mut out = RgbImage::new(nw, nh);
+    for y in 0..nh {
+        for x in 0..nw {
+            let p = img.get_pixel(x * down, y * down).0;
+            let g = (0.299 * p[0] as f32 + 0.587 * p[1] as f32 + 0.114 * p[2] as f32) as u8;
+            out.put_pixel(x, y, image::Rgb([g, g, g]));
+        }
+    }
+    out
+}
+
 /// 按标签从控件列表中挑一个目标控件（纯函数，便于单测）。
 ///
 /// 匹配优先级（不区分大小写）：
@@ -222,5 +285,37 @@ mod tests {
         let ws = [mk(0, "", 0.05), mk(1, "Load", 0.04)];
         let hit = find_widget_by_label(&ws, "load").expect("应命中 Load");
         assert_eq!(hit.label, "Load");
+    }
+
+    #[test]
+    fn infer_offset_recovers_planted_window() {
+        use image::Rgb;
+        // 全屏 200×160，底色灰；在 (40, 48)（8 的整数倍，便于降采样精确还原）
+        // 处贴一块 80×60 的**带纹理**窗。关键是：全屏里的贴块必须是窗口块的「逐
+        // 像素拷贝」（用窗口相对坐标算纹理），否则平移后图案不严格相等，匹配会在
+        // 多个位置都接近。纯色窗也会因 SSD=0 多处重合而无法唯一确定。
+        let off_x = 40u32;
+        let off_y = 48u32;
+        let tex = |x: u32, y: u32| -> u8 { ((x * 3 + y * 7) % 200) as u8 };
+
+        let mut full = RgbImage::from_pixel(200, 160, Rgb([80, 80, 80]));
+        for wy in 0..60u32 {
+            for wx in 0..80u32 {
+                let fx = off_x + wx;
+                let fy = off_y + wy;
+                let v = tex(wx, wy);
+                full.put_pixel(fx, fy, Rgb([v, v, 230]));
+            }
+        }
+        // 窗口流 = 同一带纹理块（窗口相对坐标）。
+        let mut window = RgbImage::from_pixel(80, 60, Rgb([0, 0, 0]));
+        for wy in 0..60u32 {
+            for wx in 0..80u32 {
+                let v = tex(wx, wy);
+                window.put_pixel(wx, wy, Rgb([v, v, 230]));
+            }
+        }
+        let (ox, oy) = infer_window_offset(&full, &window);
+        assert_eq!((ox, oy), (40, 48), "应反推出窗口真实偏移");
     }
 }

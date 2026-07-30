@@ -21,3 +21,6 @@ anyhow.workspace = true
 [dev-dependencies]
 rapidocr-ort = { path = "../rapidocr-ort" }
 serde_json = "1"
+# 注意：在线抓取（capturer + ScreenCast）演示需要 capturer / async-io，会拉入
+# opencv 重依赖；本示例默认只演示「离线双图反推偏移」与 OCR 定位，故不默认引入
+# capturer。需要 live 抓取时在本地自行开启（见 examples/agent.rs 注释的 --capture 分支）。
