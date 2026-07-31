@@ -1,3 +1,7 @@
 {
-  "name": "ocr-lab"
+  "name": "ocr-lab",
+  "scripts": {
+    "doc": "cargo doc --no-deps --open",
+    "stats": "scc . --exclude-dir node_modules,dist,build,target,venv,.venv,__pycache__,.git,vendor,out,cmake-build-debug,CMakeFiles --exclude-ext lock,json,md,yaml,yml,toml,ini,conf"
+  }
 }
