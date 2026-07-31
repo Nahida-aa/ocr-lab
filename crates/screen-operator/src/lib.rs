@@ -23,7 +23,7 @@
 //!   （读「当前指针在哪」）；
 //! - [`mover`]：[`Mover`] **后端无关**的闭环移动骨架（读→差→移→确认），不认识具体后端；
 //! - [`operator`]：[`ScreenOperator`] 桌面组合层：把 `YdotoolInjector`+`KwinProbe`
-//!   拼进 `Mover`，对外只暴露直觉 API（`move_to_abs` / `click_left_at` …）。
+//!   拼进 `Mover`，对外只暴露直觉 API（`move_to` / `click_left_at` …）。
 //!
 //! **抽象边界（看 / 操作 的「操作」侧再分两层）**：
 //! - [`Injector`] / [`Probe`] 是两个**正交** trait：注入（「怎么动」）与读数（「在哪」）
@@ -41,9 +41,9 @@
 //!   （名字被 strtol 当成 0 静默失效）。本 crate 已内置 [`keycode::keycode_of`]
 //!   把 `KEY_*` 名字翻译成数字码，调用方直接写名字即可。
 //! - **本机 KWin 下 ydotool 绝对移动（`-a`）失效**：会把虚拟光标推到 (1,1) 死区。
-//!   故 [`Mover`] / [`ScreenOperator::move_to_abs`] 走相对移动闭环（相对移动可靠，
+//!   故 [`Mover`] / [`ScreenOperator::move_to`] 走相对移动闭环（相对移动可靠，
 //!   单位与 KWin `cursorPos` 同为逻辑像素）+ 每步读回确认。相对移动落点**不
-//!   稳定**（不可描述为固定倍率，大指令会过冲甚至撞墙），所以 `move_to_abs` 必须靠
+//!   稳定**（不可描述为固定倍率，大指令会过冲甚至撞墙），所以 `move_to` 必须靠
 //!   「移动 → 读 → 确认」逐步收敛，而非预设倍率。
 
 mod foregrounder;

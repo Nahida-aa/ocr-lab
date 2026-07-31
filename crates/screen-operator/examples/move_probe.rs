@@ -76,7 +76,7 @@ fn main() -> Result<()> {
         .with_foregrounder(fg)
         .with_step_cap(step_cap)
         .with_tolerance(tolerance);
-    op.move_to_abs(a_pos).context("移动失败")?;
+    op.move_to(a_pos).context("移动失败")?;
 
     // 收尾读一次确认落点（重新构造，fg 已移入 ScreenOperator）。
     if let Ok(p_pos) = KdeForegrounder::new("testing_08").cursor_pos() {

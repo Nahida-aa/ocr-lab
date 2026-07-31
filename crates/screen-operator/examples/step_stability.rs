@@ -1,7 +1,7 @@
 //! 原语稳定性探针：不同距离 × 多次，测 `move_once`(相对移一步,不闭环)的落点误差。
 //!
 //! 每轮：
-//!   1. `move_to_abs(START)` 闭环回到起点（稳住每轮起点，避免误差累积叠加）；
+//!   1. `move_to(START)` 闭环回到起点（稳住每轮起点，避免误差累积叠加）；
 //!   2. 读 `before = cursor_pos()`（真实起点，隔离 `move_to` 收尾 ≤2 的偏差）；
 //!   3. `move_once((dist, 0))` 在 x 方向移一步（**不闭环、不读回确认**）；
 //!   4. 读 `after = cursor_pos()`，误差 = `after - before - (dist, 0)`（纯 `move_once` 增量误差）。
@@ -97,7 +97,7 @@ fn main() -> Result<()> {
         let mut y_errs: Vec<i32> = Vec::with_capacity(rounds);
         for r in 0..rounds {
             // 1. 闭环回起点（稳住每轮起点）。
-            op.move_to_abs(START)?;
+            op.move_to(START)?;
             std::thread::sleep(std::time::Duration::from_millis(110));
             // 2. 读真实起点（隔离 move_to 收尾偏差）。
             let before = fg.cursor_pos()?;

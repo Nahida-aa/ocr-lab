@@ -56,7 +56,7 @@ ydotool mousemove -x 100 -y 100   # → KWin 读到 (1673,1160)
   **共享同一套闭环**，分别实现接口、不共享注入代码。
 
 `ScreenOperator` 是桌面组合层：把 `YdotoolInjector` + `KwinProbe` 拼进 `Mover`，
-对外只暴露 `move_to_abs(IVec2)` / `click_left_at(IVec2)` 这类直觉 API。所有入口
+对外只暴露 `move_to(IVec2)` / `click_left_at(IVec2)` 这类直觉 API。所有入口
 统一收 **KWin 逻辑坐标**（`glam::IVec2`），物理↔逻辑换算在「看→操作」边界做。
 
 ```rust
@@ -69,11 +69,11 @@ let op = ScreenOperator::new().with_foregrounder(fg);
 
 // 入口收逻辑坐标（IVec2）；内部闭环：读当前 → 算差 → 发相对一步 → 等落盘，直至
 // 偏差 ≤ 容差（不预设任何倍率，ydotool 相对移动落点不稳定，只能每步确认）。
-op.move_to_abs(IVec2::new(691, 562)).unwrap();
+op.move_to(IVec2::new(691, 562)).unwrap();
 op.click_left_at(IVec2::new(691, 562)).unwrap();  // 闭环移动 + 原地点击
 ```
 
-`move_to_abs` / `click_at` 经 `Mover` 走相对移动闭环，绕开本机失效的 ydotool 绝对移动
+`move_to` / `click_at` 经 `Mover` 走相对移动闭环，绕开本机失效的 ydotool 绝对移动
 （`mousemove -a`）。`click_left_at(pos)` = `click_at(pos, Left)` = 闭环移动 + 左键点击；
 非左键用 `click_at(pos, btn)`。
 
@@ -81,7 +81,7 @@ op.click_left_at(IVec2::new(691, 562)).unwrap();  // 闭环移动 + 原地点击
 
 `KdeForegrounder::cursor_pos()` 已实现脏读过滤（连续读两次、差距 ≤ 容差才采信），
 规避紧循环里 journalctl 偶发的陈旧行 race。它直接被 `KwinProbe` 复用，无需调用方
-再包闭包。`cursor_pos` 返回的就是逻辑坐标，与 `move_to_abs` 入口语义一致。
+再包闭包。`cursor_pos` 返回的就是逻辑坐标，与 `move_to` 入口语义一致。
 
 ## 诊断清单（移动不生效时）
 
@@ -98,7 +98,7 @@ op.click_left_at(IVec2::new(691, 562)).unwrap();  // 闭环移动 + 原地点击
 
 `Mover::move_to` 闭环每步调一次 `Injector::move_once`（即 ydotool `mousemove -- DX DY`）。
 为确定"单次相对移动到底多可靠"，用 `examples/step_stability.rs` 做了**不同距离 × 多次**
-扫描：每轮先 `move_to_abs(起点)` 闭环回起点 → 读 `before = cursor_pos()`（KWin 真实坐标）
+扫描：每轮先 `move_to(起点)` 闭环回起点 → 读 `before = cursor_pos()`（KWin 真实坐标）
 → `move_once((dist, 0))` → 读 `after = cursor_pos()` → **实际位移 = `after - before`（测量值）**
 → 误差 = 实际位移 − 指令距离（派生值）。
 
@@ -137,7 +137,7 @@ let mover = Mover::new(YdotoolInjector::new("ydotool"), KwinProbe::new(KdeForegr
     .with_step_cap(150); // 可选：调小更保守，调大更快（勿超 ~400）
 ```
 
-验证：原 `move_once(1200)` 会饱和到 1799（偏 599），但 `move_to_abs((1200,562))` 经拆步后
+验证：原 `move_once(1200)` 会饱和到 1799（偏 599），但 `move_to((1200,562))` 经拆步后
 **偏差 (0,0)**；移到右边缘 `(1799,562)` 同样 **偏差 (0,0)**，每步严格 +200。
 
 ### 闭环步数 / 容差对比实测（`move_probe` 实测）

@@ -37,7 +37,7 @@ fn main() -> anyhow::Result<()> {
     match op.as_str() {
         "move" => {
             let pos = parse_xy(op_args)?;
-            operator.move_to_abs(pos)?;
+            operator.move_to(pos)?;
             println!("已移动到 ({pos})");
         }
         "click" => {

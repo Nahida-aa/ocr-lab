@@ -5,7 +5,7 @@
 //! - [`probe::Probe`]：读「当前指针在哪」（KWin 等）
 //! - [`mover::Mover`]：**后端无关**的闭环骨架（读→差→移→确认），不认识具体后端
 //! - 本 `ScreenOperator` 是**桌面组合方便层**：把 `YdotoolInjector` + `KwinProbe`
-//!   拼进 `Mover`，对外只暴露 `move_to_abs(IVec2)` / `click_left_at(IVec2)` 这类直觉 API。
+//!   拼进 `Mover`，对外只暴露 `move_to(IVec2)` / `click_left_at(IVec2)` 这类直觉 API。
 //!   调用方无需感知底层是 ydotool 还是别的。
 
 use anyhow::{Context, Result};
@@ -80,7 +80,7 @@ impl ScreenOperator {
 
     /// 链式覆盖底层闭环的单步上限（默认 200 逻辑像素/轴）。透传给
     /// [`Mover::with_step_cap`]——调大可加快大距离移动（但别超过 ~400 实测安全线），
-    /// 调小更保守。仅影响 `move_to_abs` / `click_at` 内部的拆步粒度。
+    /// 调小更保守。仅影响 `move_to` / `click_at` 内部的拆步粒度。
     pub fn with_step_cap(mut self, cap: i32) -> Self {
         self.mover = self.mover.with_step_cap(cap);
         self
@@ -99,7 +99,7 @@ impl ScreenOperator {
     /// 把鼠标指针移动到屏幕绝对坐标 (x, y)（**绝对模式 `-a`**）。
     ///
     /// 仅作为绝对模式回退 API 暴露给外部；本机 KWin/Wayland 下绝对模式通常失效，
-    /// 移动请优先用 [`move_to_abs`]（相对闭环）。
+    /// 移动请优先用 [`move_to`]（相对闭环）。
     pub fn move_to_absolute(&self, pos: IVec2) -> Result<()> {
         // 注意：必须用 `-a -x X -y Y`，`-a` 表绝对模式。切勿写成 `mousemove -- -a X Y`，
         // 部分 ydotool 版本会 stack smashing 崩溃。
@@ -122,7 +122,7 @@ impl ScreenOperator {
     ///
     /// **坐标语义**：`pos` 为 **KWin 逻辑坐标**（与 `cursor_pos` 返回值同套，本机
     /// 1800×1125）。
-    pub fn move_to_abs(&self, pos: IVec2) -> Result<()> {
+    pub fn move_to(&self, pos: IVec2) -> Result<()> {
         self.mover.move_to(pos)
     }
 
@@ -130,7 +130,7 @@ impl ScreenOperator {
     ///
     /// 透传给 [`Mover::move_once`]（再透传到 [`Injector::move_once`]）。供外部直接调用
     /// 「移动一次」原语——例如验证 ydotool 注入本身、或实现自定义逼近。绝大多数业务
-    /// 应走 [`move_to_abs`]（闭环、每步确认落点），不要单独用本方法，单次不保证落点准。
+    /// 应走 [`move_to`]（闭环、每步确认落点），不要单独用本方法，单次不保证落点准。
     pub fn move_once(&self, delta: IVec2) -> Result<()> {
         self.mover.move_once(delta)
     }
@@ -162,7 +162,7 @@ impl ScreenOperator {
     /// 先经 `mover` 闭环移动到 `pos`，再在**当前位置**双击（`double_click_current`）。
     /// 不再依赖本机失效的绝对移动（`mousemove -a`）。
     pub fn double_click(&self, pos: IVec2, btn: MouseButton) -> Result<()> {
-        self.move_to_abs(pos)?;
+        self.move_to(pos)?;
         self.double_click_current(btn)
     }
 
@@ -185,7 +185,7 @@ impl ScreenOperator {
     /// 在屏幕绝对逻辑坐标 `pos` 处**按下** `btn` 不抬起（配合 [`ScreenOperator::release`]
     /// 实现拖拽）。先经 `mover` 闭环移动到 `pos`，再在**当前位置**按下。
     pub fn press(&self, pos: IVec2, btn: MouseButton) -> Result<()> {
-        self.move_to_abs(pos)?;
+        self.move_to(pos)?;
         self.run(&["click", &format!("0x{:02X}", btn.down_code())])
             .context("ydotool 按下失败")
     }
@@ -193,7 +193,7 @@ impl ScreenOperator {
     /// 在屏幕绝对逻辑坐标 `pos` 处**抬起** `btn`（与 [`ScreenOperator::press`] 配对）。
     /// 先经 `mover` 闭环移动到 `pos`，再在**当前位置**抬起。
     pub fn release(&self, pos: IVec2, btn: MouseButton) -> Result<()> {
-        self.move_to_abs(pos)?;
+        self.move_to(pos)?;
         self.run(&["click", &format!("0x{:02X}", btn.up_code())])
             .context("ydotool 抬起失败")
     }
@@ -202,7 +202,7 @@ impl ScreenOperator {
     pub fn drag(&self, from: IVec2, to: IVec2, btn: MouseButton) -> Result<()> {
         self.press(from, btn)?;
         // press 已闭环移动到 from；这里再闭环移动到 to 后抬起。
-        self.move_to_abs(to)?;
+        self.move_to(to)?;
         self.release(to, btn)
     }
 
