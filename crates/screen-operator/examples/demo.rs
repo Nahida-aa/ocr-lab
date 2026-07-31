@@ -37,7 +37,7 @@ fn main() -> anyhow::Result<()> {
     match op.as_str() {
         "move" => {
             let pos = parse_xy(op_args)?;
-            operator.move_to(pos)?;
+            operator.ensure_move_to(pos)?;
             println!("已移动到 ({pos})");
         }
         "click" => {
@@ -52,7 +52,7 @@ fn main() -> anyhow::Result<()> {
         }
         "double" => {
             let pos = parse_xy(op_args)?;
-            operator.double_click(pos, MouseButton::Left)?;
+            operator.double_click_at(pos, MouseButton::Left)?;
             println!("已左键双击 ({pos})");
         }
         "drag" => {

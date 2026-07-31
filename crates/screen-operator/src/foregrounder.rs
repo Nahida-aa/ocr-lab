@@ -1,7 +1,7 @@
 //! 前台器（Foregrounder）：把目标窗口切到最前 + 读 KWin 状态（窗口几何 / 光标位置）。
 //!
 //! **为什么属于 `screen-operator`（操作侧）而非 `ocr-agent`（业务侧）**：
-//! `screen-operator` 的「相对移动闭环」（`move_to` 反复「移动→读光标→确认」）
+//! `screen-operator` 的「相对移动闭环」（`ensure_move_to` 反复「移动→读光标→确认」）
 //! 必须能读当前光标逻辑坐标才能收敛；而光标读数、窗口几何都来自 KWin 的 D-Bus
 //! `Scripting` 接口——本质是「操作侧的状态查询」。把读光标能力内聚进本 crate，
 //! `ScreenOperator` 就能 `with_foregrounder(fg)` 自己跑闭环，不必再由上层注入一个
@@ -138,7 +138,7 @@ for (let i = 0; i < wins.length; i++) {{
     /// → 从 journal 读「最近 N 行里、最后一条含 `MARKER` 的行」整体返回。
     ///
     /// **为什么抓最近行而非 journal `--cursor` 边界**：在紧循环里反复调用（如
-    /// `screen_operator::move_to` 每步读光标）时，`--cursor` 边界会和连续多次
+    /// `screen_operator::ensure_move_to` 每步读光标）时，`--cursor` 边界会和连续多次
     /// loadScript+start 互相竞争，常抓到旧迭代的脏行，坐标乱跳、闭环永不收敛。抓
     /// 「最近 N 行最后一条 marker」天然取到本次（或最近一次）脚本的真实输出，与
     /// 独立 `/tmp/readcur.sh` 一致。
@@ -269,7 +269,7 @@ for (let i = 0; i < wins.length; i++) {{
     /// **脏读过滤**：`run_kwin_script` 走 journalctl 抓最近行，极偶发（脚本刚启动、
     /// 上一条旧输出尚未被冲刷时）会读到陈旧坐标。这里连续读两次、间隔 40ms，若两次
     /// 一致（或差距 ≤ 容差）则采信；不一致说明正处在 race 窗口，再读一次取最新。这样
-    /// 喂给 `screen_operator::move_to` 的读数稳定，闭环不会基于脏数据狂发移动。
+    /// 喂给 `screen_operator::ensure_move_to` 的读数稳定，闭环不会基于脏数据狂发移动。
     pub fn cursor_pos(&self) -> Result<IVec2> {
         const RETRY: usize = 3;
         const STABLE_TOL: i32 = 3; // 两次读数差距 ≤ 此值视为稳定。

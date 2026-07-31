@@ -45,18 +45,18 @@ ydotool mousemove -x 100 -y 100   # → KWin 读到 (1673,1160)
 ## 本 crate 的处理
 
 `screen-operator` 把「注入」与「读数」拆成两个正交 trait，再用一个**后端无关**的
-闭环骨架 `Mover<I: Injector, P: Probe>` 把「想到达某逻辑坐标」变成
+泛型组合层 `ScreenOperator<I: InputBackend, P: Probe>` 把「想到达某逻辑坐标」变成
 「读 → 差 → 移 → 确认」的反复逼近：
 
-- [`Injector`]：发「相对移一步 / 原地按一下」的原语。桌面实现 = `YdotoolInjector`
+- [`InputBackend`]：发「相对移一步 / 原地按一下」的原语。桌面实现 = `YdotoolBackend`
   （`mousemove -- DX DY` + `click`），移动端将来可另写 `AdbInjector`。
 - [`Probe`]：读「当前指针在哪」。桌面实现 = `KwinProbe`（包 `KdeForegrounder::cursor_pos`）。
-- [`Mover`]：闭环骨架，**不认识任何后端**，只依赖上面两个 trait。桌面 =
-  `Mover<YdotoolInjector, KwinProbe>`，移动端 = `Mover<AdbInjector, ScreenshotProbe>`，
+- [`operator`]：组合层，持有 `InputBackend`+`Probe`，内含闭环。桌面 =
+  `ScreenOperator<YdotoolBackend, KwinProbe>`、移动端 = `ScreenOperator<AdbBackend, ScreenshotProbe>`，
   **共享同一套闭环**，分别实现接口、不共享注入代码。
 
-`ScreenOperator` 是桌面组合层：把 `YdotoolInjector` + `KwinProbe` 拼进 `Mover`，
-对外只暴露 `move_to(IVec2)` / `click_left_at(IVec2)` 这类直觉 API。所有入口
+`ScreenOperator<I, P>` 直接持有 `backend: I` + `probe: P`，内含闭环，
+对外只暴露 `ensure_move_to(IVec2)` / `click_left_at(IVec2)` 这类直觉 API。所有入口
 统一收 **KWin 逻辑坐标**（`glam::IVec2`），物理↔逻辑换算在「看→操作」边界做。
 
 ```rust
@@ -69,11 +69,11 @@ let op = ScreenOperator::new().with_foregrounder(fg);
 
 // 入口收逻辑坐标（IVec2）；内部闭环：读当前 → 算差 → 发相对一步 → 等落盘，直至
 // 偏差 ≤ 容差（不预设任何倍率，ydotool 相对移动落点不稳定，只能每步确认）。
-op.move_to(IVec2::new(691, 562)).unwrap();
+op.ensure_move_to(IVec2::new(691, 562)).unwrap();
 op.click_left_at(IVec2::new(691, 562)).unwrap();  // 闭环移动 + 原地点击
 ```
 
-`move_to` / `click_at` 经 `Mover` 走相对移动闭环，绕开本机失效的 ydotool 绝对移动
+`ensure_move_to` / `click_at` 走相对移动闭环，绕开本机失效的 ydotool 绝对移动
 （`mousemove -a`）。`click_left_at(pos)` = `click_at(pos, Left)` = 闭环移动 + 左键点击；
 非左键用 `click_at(pos, btn)`。
 
@@ -81,12 +81,12 @@ op.click_left_at(IVec2::new(691, 562)).unwrap();  // 闭环移动 + 原地点击
 
 `KdeForegrounder::cursor_pos()` 已实现脏读过滤（连续读两次、差距 ≤ 容差才采信），
 规避紧循环里 journalctl 偶发的陈旧行 race。它直接被 `KwinProbe` 复用，无需调用方
-再包闭包。`cursor_pos` 返回的就是逻辑坐标，与 `move_to` 入口语义一致。
+再包闭包。`cursor_pos` 返回的就是逻辑坐标，与 `ensure_move_to` 入口语义一致。
 
 ## 诊断清单（移动不生效时）
 
 1. `ydotoold` 在跑？`systemctl --user status ydotool.service`。
-2. 是绝对移动失效还是整条链失效？先测**原地点击**（`--click-current` / `click_current`）
+2. 是绝对移动失效还是整条链失效？先测**原地点击**（`--click-current` / `click`）
    是否生效——生效说明 ydotool 注入 OK，问题在移动。
 3. 移动不收敛 → 确认 `ScreenOperator` 已用 `with_foregrounder(fg)` 组装，且 `fg` 的
    `cursor_pos` 能返回有效坐标（KWin `cursorPos` 对真实鼠标准、对 ydotool 绝对移动
@@ -94,12 +94,12 @@ op.click_left_at(IVec2::new(691, 562)).unwrap();  // 闭环移动 + 原地点击
 4. 相对移动后仍偏 → 检查物理↔逻辑换算：目标应是逻辑坐标（KWin 逻辑宽 1800、高 1125，
    本机 scale = 系统 160% = 1.6）；若上游给的是物理像素需 ÷ scale。
 
-## 相对移动单次可靠区实测（`move_once` 原语）
+## 相对移动单次可靠区实测（`move_rel` 原语）
 
-`Mover::move_to` 闭环每步调一次 `Injector::move_once`（即 ydotool `mousemove -- DX DY`）。
+`ScreenOperator::ensure_move_to` 闭环每步调一次 `InputBackend::move_rel`（即 ydotool `mousemove -- DX DY`）。
 为确定"单次相对移动到底多可靠"，用 `examples/step_stability.rs` 做了**不同距离 × 多次**
-扫描：每轮先 `move_to(起点)` 闭环回起点 → 读 `before = cursor_pos()`（KWin 真实坐标）
-→ `move_once((dist, 0))` → 读 `after = cursor_pos()` → **实际位移 = `after - before`（测量值）**
+扫描：每轮先 `ensure_move_to(起点)` 闭环回起点 → 读 `before = cursor_pos()`（KWin 真实坐标）
+→ `move_rel((dist, 0))` → 读 `after = cursor_pos()` → **实际位移 = `after - before`（测量值）**
 → 误差 = 实际位移 − 指令距离（派生值）。
 
 > 注意：**实际位移是测量出来的（`before`/`after` 都是 KWin 读数相减），误差才是算出来的。**
@@ -125,19 +125,19 @@ op.click_left_at(IVec2::new(691, 562)).unwrap();  // 闭环移动 + 原地点击
 即：**ydotool `mousemove` 单次相对增量安全上限 ≈ 400 逻辑像素**；超过即进入过冲区，
 ≥950 直接被 clamp 到屏幕边缘 1799。不存在"绕回"——是单向饱和/clamp。
 
-### 缓解：`Mover` 单步上限 `step_cap`
+### 缓解：`ScreenOperator` 单步上限 `step_cap`
 
-因单次大距离不可靠，`Mover::move_to` **不会一次性发整段 `delta`**，而是把每步增量各轴
+因单次大距离不可靠，`ScreenOperator::ensure_move_to` **不会一次性发整段 `delta`**，而是把每步增量各轴
 `clamp(-step_cap, step_cap)`，`step_cap` 默认 **200**（远在 400 安全线以下，留 2× 余量），
-大距离自然拆成多步逐个 `move_once` + 读回逼近。可用 builder 链式覆盖：
+大距离自然拆成多步逐个 `move_rel` + 读回逼近。可用 builder 链式覆盖：
 
 ```rust
-use screen_operator::{ScreenOperator, Mover, YdotoolInjector, KwinProbe, KdeForegrounder};
-let mover = Mover::new(YdotoolInjector::new("ydotool"), KwinProbe::new(KdeForegrounder::new("app")))
+use screen_operator::{ScreenOperator, YdotoolBackend, KwinProbe, KdeForegrounder};
+let op = ScreenOperator::with_bin("ydotool").with_foregrounder(KdeForegrounder::new("app"))
     .with_step_cap(150); // 可选：调小更保守，调大更快（勿超 ~400）
 ```
 
-验证：原 `move_once(1200)` 会饱和到 1799（偏 599），但 `move_to((1200,562))` 经拆步后
+验证：原 `move_rel(1200)` 会饱和到 1799（偏 599），但 `ensure_move_to((1200,562))` 经拆步后
 **偏差 (0,0)**；移到右边缘 `(1799,562)` 同样 **偏差 (0,0)**，每步严格 +200。
 
 ### 闭环步数 / 容差对比实测（`move_probe` 实测）
@@ -214,7 +214,7 @@ Accel profiles:          flat *adaptive custom   ← * 在 adaptive 上 = 当前
 
 ### 900→1041：adaptive 下的实测
 
-闭环把光标移到 `(0, 562)`（偏差 0,0），再单步 `move_once((900, 0))`，读前后 `cursor_pos`：
+闭环把光标移到 `(0, 562)`（偏差 0,0），再单步 `move_rel((900, 0))`，读前后 `cursor_pos`：
 
 ```
 [move_probe] 结束: KWin读逻辑=([0, 562]), 偏差=([0, 0])
@@ -278,7 +278,7 @@ libinput 是 C 库，Rust 可用 `input` crate（libinput 绑定，0.10.0）直�
 - **同上下文 set 成功**：set 后在我们自己的 libinput 上下文里 `config_accel_profile()` 读回
   变 `Flat`。
 
-**但对外无效**（决定性实测）：set 后立刻从**另一个进程**经 ydotool 发 `move_once((900,0))`、
+**但对外无效**（决定性实测）：set 后立刻从**另一个进程**经 ydotool 发 `move_rel((900,0))`、
 用 KWin `cursor_pos` 读落点：
 
 ```
@@ -328,7 +328,7 @@ pointerAccelerationProfileFlat = true   ✓
 # 外部 libinput 同步变为 flat *adaptive
 ```
 
-**落点实测（决定性）**：设 flat 后，归零到 (0,562) 再单步 `move_once((900,0))`：
+**落点实测（决定性）**：设 flat 后，归零到 (0,562) 再单步 `move_rel((900,0))`：
 
 ```
 [move_probe] 结束: KWin读逻辑=([0, 562]), 偏差=([0, 0])
@@ -363,7 +363,7 @@ pointerAccelerationProfileFlat = true   ✓
 
 - 关不掉加速度 → 移动前"读→关(flat)→移动→恢复"在当前环境**无法落地**（Sway 侧用
   `swaymsg` 可落地，KWin/Xwayland 不行）。**已放弃该 guard 的 KWin 实现**。
-- 现有 `Mover` 闭环（读→差→移→确认，默认 `step_cap=200`）**每步读回确认，会自动吸收
+- 现有 `ScreenOperator` 闭环（读→差→移→确认，默认 `step_cap=200`）**每步读回确认，会自动吸收
   加速度带来的倍率偏差**（某步偏了，下一步差值补偿），所以最终仍能收敛到目标，只是
   每步实际位移 ≠ 指令增量、迭代次数比"flat 理想"略多。实测大距离仍能精确归零，故
   **加速度不破坏正确性，只影响每步效率**。

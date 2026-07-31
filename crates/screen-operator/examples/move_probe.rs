@@ -31,7 +31,7 @@ fn main() -> Result<()> {
 
     let args: Vec<String> = std::env::args().collect();
 
-    // 可选 --step-cap N：覆盖 Mover 单步上限（默认 200）。仅用于对比/调试。
+    // 可选 --step-cap N：覆盖 ScreenOperator 单步上限（默认 200）。仅用于对比/调试。
     let step_cap = args
         .iter()
         .position(|a| a == "--step-cap")
@@ -39,7 +39,7 @@ fn main() -> Result<()> {
         .and_then(|s| s.parse::<i32>().ok())
         .unwrap_or(200);
 
-    // 可选 --tolerance N：覆盖 Mover 到达容差（默认 2）。仅用于对比/调试。
+    // 可选 --tolerance N：覆盖 ScreenOperator 到达容差（默认 2）。仅用于对比/调试。
     let tolerance = args
         .iter()
         .position(|a| a == "--tolerance")
@@ -76,7 +76,7 @@ fn main() -> Result<()> {
         .with_foregrounder(fg)
         .with_step_cap(step_cap)
         .with_tolerance(tolerance);
-    op.move_to(a_pos).context("移动失败")?;
+    op.ensure_move_to(a_pos).context("移动失败")?;
 
     // 收尾读一次确认落点（重新构造，fg 已移入 ScreenOperator）。
     if let Ok(p_pos) = KdeForegrounder::new("testing_08").cursor_pos() {

@@ -1,10 +1,10 @@
-//! 原语稳定性探针：不同距离 × 多次，测 `move_once`(相对移一步,不闭环)的落点误差。
+//! 原语稳定性探针：不同距离 × 多次，测 `move_rel`(相对移一步,不闭环)的落点误差。
 //!
 //! 每轮：
-//!   1. `move_to(START)` 闭环回到起点（稳住每轮起点，避免误差累积叠加）；
-//!   2. 读 `before = cursor_pos()`（真实起点，隔离 `move_to` 收尾 ≤2 的偏差）；
-//!   3. `move_once((dist, 0))` 在 x 方向移一步（**不闭环、不读回确认**）；
-//!   4. 读 `after = cursor_pos()`，误差 = `after - before - (dist, 0)`（纯 `move_once` 增量误差）。
+//!   1. `ensure_move_to(START)` 闭环回到起点（稳住每轮起点，避免误差累积叠加）；
+//!   2. 读 `before = cursor_pos()`（真实起点，隔离 `ensure_move_to` 收尾 ≤2 的偏差）；
+//!   3. `move_rel((dist, 0))` 在 x 方向移一步（**不闭环、不读回确认**）；
+//!   4. 读 `after = cursor_pos()`，误差 = `after - before - (dist, 0)`（纯 `move_rel` 增量误差）。
 //! 对每个距离循环 `--rounds` 次，把每轮原始记录（距离 / 轮次 / before / after / 误差）
 //! 收集起来，按 `--format csv|json` 写到 `--out <文件>`（默认 csv 写到
 //! `crates/screen-operator/docs/step_stability.csv`），方便后续读取分析；同时 stdout
@@ -97,18 +97,18 @@ fn main() -> Result<()> {
         let mut y_errs: Vec<i32> = Vec::with_capacity(rounds);
         for r in 0..rounds {
             // 1. 闭环回起点（稳住每轮起点）。
-            op.move_to(START)?;
+            op.ensure_move_to(START)?;
             std::thread::sleep(std::time::Duration::from_millis(110));
-            // 2. 读真实起点（隔离 move_to 收尾偏差）。
+            // 2. 读真实起点（隔离 ensure_move_to 收尾偏差）。
             let before = fg.cursor_pos()?;
 
             // 3. 原语移一步（不闭环）。
-            op.move_once(IVec2::new(dist, 0))?;
+            op.move_rel(IVec2::new(dist, 0))?;
             std::thread::sleep(std::time::Duration::from_millis(110));
             // 4. 读落点。
             let after = fg.cursor_pos()?;
 
-            // 纯 move_once 增量误差。
+            // 纯 move_rel 增量误差。
             let err = after - before - IVec2::new(dist, 0);
             x_errs.push(err.x);
             y_errs.push(err.y);

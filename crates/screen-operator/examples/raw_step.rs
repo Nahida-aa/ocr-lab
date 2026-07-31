@@ -1,8 +1,8 @@
-//! 原语探针：直接调用 `ScreenOperator::move_once`（相对移一步，**不闭环**），
+//! 原语探针：直接调用 `ScreenOperator::move_rel`（相对移一步，**不闭环**），
 //! 用 KWin `cursor_pos` 读移动前后的逻辑坐标，验证「移动一次」注入原语本身是否生效。
 //!
-//! 与 `move_probe`（闭环 `move_to`）的区别：本例**故意绕过闭环**，只发一条相对
-//! 移动指令，再事后读数。用于确认 ydotool 注入通道本身 OK、以及单次 `move_once` 的
+//! 与 `move_probe`（闭环 `ensure_move_to`）的区别：本例**故意绕过闭环**，只发一条相对
+//! 移动指令，再事后读数。用于确认 ydotool 注入通道本身 OK、以及单次 `move_rel` 的
 //! 实际落点偏移（ydotool 相对移动落点不稳定，单次不一定精确等于 `delta`）。
 //!
 //! 用法：
@@ -39,8 +39,8 @@ fn main() -> Result<()> {
 
     // 直接调用「移动一次」原语（不闭环、不读回确认）。
     let op = ScreenOperator::new();
-    op.move_once(delta)
-        .context("move_once 注入失败（确认 ydotoold 在运行）")?;
+    op.move_rel(delta)
+        .context("move_rel 注入失败（确认 ydotoold 在运行）")?;
 
     // 等光标真正落盘后再读。
     std::thread::sleep(std::time::Duration::from_millis(110));

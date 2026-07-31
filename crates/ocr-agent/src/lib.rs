@@ -68,7 +68,10 @@ pub struct YdotoolExecutor {
     /// 再交给 `screen_operator`（其移动/点击入口统一收**逻辑**坐标）。
     scale: f32,
     /// 底层绝对坐标操作器（收逻辑坐标），已用 [`KdeForegrounder`] 组装好闭环读数源。
-    operator: screen_operator::ScreenOperator,
+    operator: screen_operator::ScreenOperator<
+        screen_operator::YdotoolBackend,
+        screen_operator::KwinProbe,
+    >,
 }
 
 impl YdotoolExecutor {

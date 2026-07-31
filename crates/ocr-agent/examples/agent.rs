@@ -136,7 +136,7 @@ fn main() -> anyhow::Result<()> {
     let mut click_reload = false;
     let mut debug = false;
     let mut double_current = false;
-    let mut click_current_once = false;
+    let mut click_once = false;
     let mut move_abs: Option<(i32, i32)> = None;
     let mut move_to_reload = false;
     let mut move_only = false;
@@ -168,7 +168,7 @@ fn main() -> anyhow::Result<()> {
             "--click-reload" => click_reload = true,
             "--debug" => debug = true,
             "--double-current" => double_current = true,
-            "--click-current" => click_current_once = true,
+            "--click-current" => click_once = true,
             "--move-to-reload" => move_to_reload = true,
             "--move-only" => move_only = true,
             "--move-abs" => {
@@ -432,11 +432,10 @@ fn main() -> anyhow::Result<()> {
 
     // ---- 探针：在「当前鼠标位置」原地**单击**（不移动鼠标）----
     // 比 --double-current 更细粒度，用于确认「原地注入」本身会不会导致鼠标跳行。
-    if click_current_once {
+    if click_once {
         let op = ScreenOperator::new();
         eprintln!("screen-operator 在原地点击当前鼠标位置（单击）…");
-        op.click_current(MouseButton::Left)
-            .context("原地单击失败")?;
+        op.click(MouseButton::Left).context("原地单击失败")?;
         eprintln!("已原地单击（不移动鼠标）");
         return Ok(());
     }
@@ -447,8 +446,7 @@ fn main() -> anyhow::Result<()> {
     if double_current {
         let op = ScreenOperator::new();
         eprintln!("screen-operator 在原地双击当前鼠标位置…");
-        op.double_click_current(MouseButton::Left)
-            .context("原地双击失败")?;
+        op.double_click(MouseButton::Left).context("原地双击失败")?;
         eprintln!("已原地双击（不移动鼠标）");
         return Ok(());
     }
@@ -473,7 +471,7 @@ fn main() -> anyhow::Result<()> {
             "相对移动：当前逻辑({c_pos}), 目标逻辑({t_pos}), 增量({delta})（不点击, scale={:.3}）",
             scale
         );
-        op.move_to(t_pos).context("移动鼠标失败")?;
+        op.ensure_move_to(t_pos).context("移动鼠标失败")?;
         eprintln!("已移动（请观察鼠标实际落点；可再用 KWin 读坐标核对）");
         return Ok(());
     }
@@ -631,21 +629,21 @@ fn main() -> anyhow::Result<()> {
             ry + rhh / 2,
             widgets.len()
         );
-        // ax, ay 是物理坐标，转成逻辑再交给 move_to（其入口收逻辑坐标）。
+        // ax, ay 是物理坐标，转成逻辑再交给 ensure_move_to（其入口收逻辑坐标）。
         let (lax, lay) = (
             (ax as f32 / scale).round() as i32,
             (ay as f32 / scale).round() as i32,
         );
         let la_pos = IVec2::new(lax, lay);
         let op = ScreenOperator::new().with_foregrounder(fg.clone());
-        op.move_to(la_pos).context("移动失败")?;
+        op.ensure_move_to(la_pos).context("移动失败")?;
         eprintln!("已移动（未点击）；请肉眼确认光标是否在 Reload 上");
         return Ok(());
     }
 
     // ---- 移动探针（复用闭环同款定位，但只移动不点）----
     // 与 --live 完全一致的 raise→抓帧→KWin几何算offset→窗口流OCR找 Reload 中心，
-    // 只是最后调用 move_to（移动不点击）而非 click_widget。用于隔离「闭环里移动
+    // 只是最后调用 ensure_move_to（移动不点击）而非 click_widget。用于隔离「闭环里移动
     // 是否过冲」：你肉眼确认光标是否落在 Reload 上，并比对与 --move-to-reload 的差异。
     if move_only {
         let fg = ocr_agent::KdeForegrounder::new("testing_08");
@@ -699,14 +697,14 @@ fn main() -> anyhow::Result<()> {
             ry + rhh / 2,
             widgets.len()
         );
-        // ax, ay 是物理坐标，转成逻辑再交给 move_to（其入口收逻辑坐标）。
+        // ax, ay 是物理坐标，转成逻辑再交给 ensure_move_to（其入口收逻辑坐标）。
         let (lax, lay) = (
             (ax as f32 / scale).round() as i32,
             (ay as f32 / scale).round() as i32,
         );
         let la_pos = IVec2::new(lax, lay);
         let op = ScreenOperator::new().with_foregrounder(fg.clone());
-        op.move_to(la_pos).context("移动失败")?;
+        op.ensure_move_to(la_pos).context("移动失败")?;
         let fg_read = ocr_agent::KdeForegrounder::new("testing_08");
         if let Ok(p_pos) = fg_read.cursor_pos() {
             eprintln!(

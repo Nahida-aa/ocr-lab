@@ -17,20 +17,21 @@
 //! - [`keycode`]：键名 → Linux keycode 映射表与翻译函数；
 //! - [`foregrounder`]：前台器 [`KdeForegrounder`]/[`Foregrounder`]（把窗口提到最前 +
 //!   读 KWin 状态：窗口几何 / 屏幕逻辑尺寸 / 当前光标），是 [`probe::KwinProbe`] 的读数来源；
-//! - [`injector`]：[`Injector`] 注入原语 trait + 桌面实现 [`injector::YdotoolInjector`]
-//!   （发「相对移一步 / 当前点一下」）；
+//! - [`injector`]：[`InputBackend`] 输入后端 trait（指针 + 键盘原语）+ 桌面实现
+//!   [`input_backend::YdotoolBackend`]；
 //! - [`probe`]：[`Probe`] 读数 trait + 桌面实现 [`probe::KwinProbe`]
 //!   （读「当前指针在哪」）；
-//! - [`mover`]：[`Mover`] **后端无关**的闭环移动骨架（读→差→移→确认），不认识具体后端；
-//! - [`operator`]：[`ScreenOperator`] 桌面组合层：把 `YdotoolInjector`+`KwinProbe`
-//!   拼进 `Mover`，对外只暴露直觉 API（`move_to` / `click_left_at` …）。
+//! - [`operator`]：[`ScreenOperator`] 组合层：持有 `InputBackend`+`Probe`，内含「读→差→
+//!   移→确认」闭环（[`ensure_move_to`]），对外只暴露直觉 API（`ensure_move_to` /
+//!   `click_left_at` / `key` …）。泛型 `I: InputBackend, P: Probe`，编译期确定后端。
 //!
 //! **抽象边界（看 / 操作 的「操作」侧再分两层）**：
-//! - [`Injector`] / [`Probe`] 是两个**正交** trait：注入（「怎么动」）与读数（「在哪」）
-//!   彻底解耦。桌面端 = `YdotoolInjector` + `KwinProbe`；将来移动端可另写
-//!   `AdbInjector` + `ScreenshotProbe`，**复用同一套 `Mover` 闭环骨架**，无需重写移动逻辑。
-//! - 用**泛型** `Mover<I: Injector, P: Probe>` 而非枚举：开放扩展（外部 crate 能加新后端），
-//!   且零开销（编译期单态化，无运行时分发）。
+//! - [`InputBackend`] / [`Probe`] 是两个**正交** trait：输入注入（指针+键盘「怎么动」）
+//!   与读数（「在哪」）彻底解耦。桌面端 = `YdotoolBackend` + `KwinProbe`；将来移动端可另写
+//!   `AdbBackend` + `ScreenshotProbe`，直接喂给同一套泛型 [`ScreenOperator`]，无需重写
+//!   移动/点击逻辑（闭环在组合层内，与具体后端无关）。
+//! - 用**泛型** `ScreenOperator<I: InputBackend, P: Probe>` 而非枚举：开放扩展（外部 crate
+//!   能加新后端），且零开销（编译期单态化，无运行时分发）。
 //!
 //! 已踩坑并固化在本实现里：
 //! - 绝对移动必须用 `ydotool mousemove -a -x X -y Y`，**不能**用 `mousemove -- -a X Y`
@@ -41,26 +42,24 @@
 //!   （名字被 strtol 当成 0 静默失效）。本 crate 已内置 [`keycode::keycode_of`]
 //!   把 `KEY_*` 名字翻译成数字码，调用方直接写名字即可。
 //! - **本机 KWin 下 ydotool 绝对移动（`-a`）失效**：会把虚拟光标推到 (1,1) 死区。
-//!   故 [`Mover`] / [`ScreenOperator::move_to`] 走相对移动闭环（相对移动可靠，
+//!   故 [`ScreenOperator::ensure_move_to`] 走相对移动闭环（相对移动可靠，
 //!   单位与 KWin `cursorPos` 同为逻辑像素）+ 每步读回确认。相对移动落点**不
-//!   稳定**（不可描述为固定倍率，大指令会过冲甚至撞墙），所以 `move_to` 必须靠
+//!   稳定**（不可描述为固定倍率，大指令会过冲甚至撞墙），所以 `ensure_move_to` 必须靠
 //!   「移动 → 读 → 确认」逐步收敛，而非预设倍率。
 
 mod accel;
 mod foregrounder;
-mod injector;
+mod input_backend;
 mod keycode;
 mod mouse;
-mod mover;
 mod operator;
 mod probe;
 
 pub use accel::ensure_ydotool_flat;
 pub use foregrounder::{Foregrounder, KdeForegrounder, NoopForegrounder};
-pub use injector::{Injector, YdotoolInjector};
+pub use input_backend::{InputBackend, YdotoolBackend};
 pub use keycode::{KEYCODES, keycode_of};
 pub use mouse::MouseButton;
-pub use mover::Mover;
 pub use operator::ScreenOperator;
 pub use probe::{KwinProbe, Probe};
 // 坐标类型：本 crate 所有移动/点击入口统一用 `IVec2` 表达屏幕坐标 / 增量，

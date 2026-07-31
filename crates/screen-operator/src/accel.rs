@@ -6,7 +6,7 @@
 //! - 每个输入设备在 `/org/kde/KWin/InputDevice/<sysName>` 导出所有 Q_PROPERTY，其中
 //!   `pointerAccelerationProfileFlat` 是 **readwrite**——这才是「正确的一侧」context
 //!   （外部 xinput / libinput quirk / 独立 libinput context 都动不到这里）。
-//! - 设 true 后实测 `move_once((900,0))` 实际偏移从 1041 降到 900（误差 0），加速度确为过冲源。
+//! - 设 true 后实测 `move_rel((900,0))` 实际偏移从 1041 降到 900（误差 0），加速度确为过冲源。
 //! - 该属性只作用于 ydotool 的 uinput 虚拟设备，与真实鼠标无关，**无需恢复**，常驻 flat 即可。
 //!   但 ydotoold 重启会把设备重置回 adaptive，故采用「幂等确保」而非一次性设置。
 
