@@ -188,6 +188,101 @@ let mover = Mover::new(YdotoolInjector::new("ydotool"), KwinProbe::new(KdeForegr
 
 复现：`cargo run -p screen-operator --example step_stability -- --dists 1,2,3,... --format json --out docs/step_stability.csv`
 
+## 指针加速度（`accel_profile`）实测记录
+
+> 2026-08-01 实测：纠正了此前"KWin 下读不到 / 不管 ydotool 虚拟指针加速度"的错误推断。
+> 进一步探查结论：**本环境（KDE + Xwayland）下无法把 ydotool 虚拟指针设为 flat**，加速度
+> 实际处于 `adaptive` 并作用于相对移动落点。
+
+### 能读，且 ydotool 虚拟指针就在 libinput 里
+
+`libinput list-devices` 明确枚举了 ydotool 创建的虚拟设备，并带完整加速度档位：
+
+```
+Device:                  ydotoold virtual device
+Kernel:                  /dev/input/event16
+Id:                      virtual:2333:6666
+Capabilities:            keyboard pointer
+Accel profiles:          flat *adaptive custom   ← * 在 adaptive 上 = 当前生效档
+```
+
+- **能获取**：ydotool 虚拟指针（`/dev/input/event16`，`virtual:2333:6666`）的加速度档位直接可读，
+  当前为 `adaptive`（默认）。KWin D-Bus / `kwinrc` 里**查不到**加速度接口（已确认：
+  `org.kde.KWin` 无 mouse/input/accel 节点，`kwinrc`/`kdeglobals` 无 `AccelProfile`），
+  但 libinput 层面能读到——**之前"KWin 读不到"的断言是错的**。
+- **它受加速度管理**：有 `flat *adaptive custom` 三档，与物理鼠标一致。
+
+### 900→1041：adaptive 下的实测
+
+闭环把光标移到 `(0, 562)`（偏差 0,0），再单步 `move_once((900, 0))`，读前后 `cursor_pos`：
+
+```
+[move_probe] 结束: KWin读逻辑=([0, 562]), 偏差=([0, 0])
+[raw_step]   指令增量=([900, 0]), 实际偏移=([1041, 0]), 误差=(141, 0)
+```
+
+发 900 实际走 1041（多 141，约 +15.7%）。结合源码可定位来源（见下）。
+
+### 源码实证：ydotool 不加工增量，关加速度在 Wayland 下失效
+
+读 `/home/aa/repos/auto_ls/learn_ls/ydotool`（上游 `ReimuNotMoe/ydotool`）：
+
+- `Client/tool_mousemove.c`：相对移动直接 `uinput_emit(EV_REL, REL_X, pos[0])`，
+  **把 900 原样发出，不倍率、不钳制、不分段**。
+- `Daemon/ydotoold.c` 主循环（`recv → write`）：**只转发，不改增量**。
+- `Daemon/ydotoold.c` 启动分支（~L357-373）：
+
+  ```c
+  if (getenv("DISPLAY")) {                    // 本环境 DISPLAY=:0，进入
+      if (stat("/usr/bin/xinput") == 0) {
+          execl("xinput", "--set-prop", "pointer:ydotoold virtual device",
+                "libinput Accel Profile Enabled", "0,", "1", NULL);  // 想设 flat
+      } else { printf("xinput ... not disabling ..."); }
+  }
+  ```
+
+  **本环境实测**：`DISPLAY=:0` 有、xinput 已装，但 xinput 连的是 **Xwayland**
+  （`WARNING: running xinput against an Xwayland server`），碰不到 Wayland 原生的
+  ydotool 虚拟指针 → 关加速度**无效**。重启 `ydotool.service` 后设备仍 `adaptive`，
+  佐证该分支在本环境结构性失效（非"无 DISPLAY"、非"xinput 缺失"——两者都曾误判，
+  真正原因是 Xwayland 下 xinput 管不到 Wayland 设备）。
+
+### 试图用 libinput quirk 强制 flat —— 走不通
+
+写 `/etc/libinput/99-ydotool-flat.quirks`（`MatchName=*ydotoold virtual device*` +
+`AttrAccelProfile=flat`）并重启 ydotoold，结果：
+
+```
+quirks error: Unknown key AttrAccelProfile in [ydotool virtual device]
+```
+
+**libinput 1.31.3 的 quirk 系统根本没有加速度相关键**（`Attr*` 列表无 accel profile/speed，
+系统 quirk 文件也无 accel）。加速度档位是**运行时**通过 xinput/桌面环境设的，
+quirk 层管不了 → 该文件已删除（留着会让 libinput 每次解析报错）。
+
+### 结论
+
+- **本环境（KDE/Xwayland）下没有干净通道把 ydotool 虚拟指针设成 flat**：
+  - ydotoold 自带的 xinput 关法 → Xwayland 下无效；
+  - libinput udev quirk → 无加速度键，解析失败；
+  - KWin D-Bus / kwinrc → 无接口。
+- **加速度（adaptive）确实作用于 `REL_X`**，是 900→1041 那 +141 的高置信来源（客户端与
+  daemon 都不加工增量，且官方 help 明确"disable acceleration for correct movement"）。
+- **严格实锤缺口**：因 flat 设不了，无法做"adaptive vs flat 同发 900"对照实测来 100%
+  确认 +141 全是加速度（仍可能是 adaptive + ydotool 大增量自身过冲的叠加）。但证据链
+  （源码不加工 + 加速度确实 adaptive + 官方文档承认）已很强。
+
+### 对 screen-operator 的影响与后续选项
+
+- 关不掉加速度 → 移动前"读→关(flat)→移动→恢复"在当前环境**无法落地**（Sway 侧用
+  `swaymsg` 可落地，KWin/Xwayland 不行）。**已放弃该 guard 的 KWin 实现**。
+- 现有 `Mover` 闭环（读→差→移→确认，默认 `step_cap=200`）**每步读回确认，会自动吸收
+  加速度带来的倍率偏差**（某步偏了，下一步差值补偿），所以最终仍能收敛到目标，只是
+  每步实际位移 ≠ 指令增量、迭代次数比"flat 理想"略多。实测大距离仍能精确归零，故
+  **加速度不破坏正确性，只影响每步效率**。
+- 后续可选（均未做）：① 改 ydotoold 源码用 Wayland/libinput 运行时接口关加速度；
+  ② 换 Sway 后端用 `swaymsg` 关；③ 接受 adaptive，靠闭环吸收（当前采用）。
+
 ## 参考
 
 - ydotool `mousemove` 帮助明确提示：`You need to disable mouse speed acceleration
