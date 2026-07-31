@@ -1,10 +1,13 @@
 //! capturer 的独立 CLI：不依赖 gpui，纯用 xdg-desktop-portal 抓图。
 //!
 //! 用法：
-//!   抓全屏：           capturer_cli full --out shot.png
-//!   抓指定区域：       capturer_cli region 120 120 720 220 --out card.png
-//!   从已有全屏图裁切： capturer_cli crop full.png 120 120 720 220 --out card.png
+//!   截当前全屏（Screenshot）：   capturer_cli screenshot --out shot.png
+//!   抓全屏（PortalCapturer）：   capturer_cli full --out shot.png
+//!   抓指定区域：                 capturer_cli region 120 120 720 220 --out card.png
+//!   从已有全屏图裁切：           capturer_cli crop full.png 120 120 720 220 --out card.png
 //!
+//! `screenshot` 与 `full` 都是截当前全屏（Screenshot 接口），区别只是
+//! `screenshot` 走顶层便捷函数 `capturer::capture_screenshot`。
 //! 区域坐标为屏幕像素（x y w h）。`crop` 子命令不触发任何抓图，仅对本地
 //! 图片做裁切，便于在无显示环境下验证裁切逻辑。
 
@@ -47,6 +50,7 @@ fn main() -> Result<()> {
 
     let cmd = pos.remove(0);
     match cmd.as_str() {
+        "screenshot" => cmd_screenshot(&out),
         "full" => cmd_full(&out),
         "region" => cmd_region(&pos, &out),
         "crop" => cmd_crop(&pos, &out),
@@ -58,6 +62,22 @@ fn main() -> Result<()> {
     }
 }
 
+fn cmd_screenshot(out: &std::path::Path) -> Result<()> {
+    let img = async_io::block_on(async {
+        capturer::capture_screenshot()
+            .await
+            .context("截全屏失败（可能需要在桌面环境中授权截图）")
+    })?;
+    save(&img, out)?;
+    println!(
+        "已保存全屏截图 {}x{} -> {}",
+        img.width(),
+        img.height(),
+        out.display()
+    );
+    Ok(())
+}
+
 fn cmd_full(out: &std::path::Path) -> Result<()> {
     let img = async_io::block_on(async {
         let cap = PortalCapturer::new();
@@ -66,7 +86,12 @@ fn cmd_full(out: &std::path::Path) -> Result<()> {
             .context("抓全屏失败（可能需要在桌面环境中授权截图）")
     })?;
     save(&img, out)?;
-    println!("已保存全屏 {}x{} -> {}", img.width(), img.height(), out.display());
+    println!(
+        "已保存全屏 {}x{} -> {}",
+        img.width(),
+        img.height(),
+        out.display()
+    );
     Ok(())
 }
 
@@ -100,8 +125,7 @@ fn cmd_crop(pos: &[String], out: &std::path::Path) -> Result<()> {
     let src = &pos[0];
     let rect = &pos[1..];
     let (x, y, w, h) = parse_rect(rect)?;
-    let full = capturer::load_rgba(src)
-        .with_context(|| format!("读取源图失败: {}", src))?;
+    let full = capturer::load_rgba(src).with_context(|| format!("读取源图失败: {}", src))?;
     let cropped = capturer::crop_region(&full, x, y, w, h);
     save(&cropped, out)?;
     println!(
@@ -121,7 +145,12 @@ fn parse_rect(pos: &[String]) -> Result<(u32, u32, u32, u32)> {
         s.parse::<u32>()
             .with_context(|| format!("无法解析为整数: {}", s))
     };
-    Ok((parse(&pos[0])?, parse(&pos[1])?, parse(&pos[2])?, parse(&pos[3])?))
+    Ok((
+        parse(&pos[0])?,
+        parse(&pos[1])?,
+        parse(&pos[2])?,
+        parse(&pos[3])?,
+    ))
 }
 
 fn save(img: &image::RgbaImage, out: &std::path::Path) -> Result<()> {
@@ -137,6 +166,7 @@ fn save(img: &image::RgbaImage, out: &std::path::Path) -> Result<()> {
 fn print_help() {
     eprintln!(
         "用法:\n  \
+         capturer_cli screenshot --out <path.png>\n  \
          capturer_cli full  --out <path.png>\n  \
          capturer_cli region <x> <y> <w> <h> --out <path.png>\n  \
          capturer_cli crop <src.png> <x> <y> <w> <h> --out <path.png>"

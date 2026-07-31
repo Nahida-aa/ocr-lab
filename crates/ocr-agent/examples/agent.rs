@@ -16,18 +16,27 @@
 //!   # 闭环验证：直接对比「点击前 / 点击后」两帧的计数（两帧由你在点击前后各
 //!   # 抓一次，如用 pw_probe）。delta 即本次操作带来的计数变化。
 //!   cargo run -p ocr-agent --example agent --verify-before <before.png> --verify-after <after.png>
-//!   # 真点 Reload 的完整闭环（需显示环境 + ydotool + capturer 接线）：
-//!   #   抓 before → agent --real 点 Reload → 抓 after → 上面 --verify 比 delta(应=50)
 //!
-//! 说明：PrintExecutor 不会真点，所以前后 count 不变；--real 且窗口在前台时，
-//! 点 Reload 后 count 应 +50。
+//!   # 真·自动闭环（live，纯全屏方案）：自动截全屏 → 识别 Reload 按钮屏幕绝对
+//!   # 坐标 → ydotool 点该绝对坐标 → 再截全屏 → 比 delta。不依赖 restore_token /
+//!   # 录屏窗口流；目标窗口由 KdeForegrounder 经 KWin D-Bus 自动切到最前。
+//!   # 需：ydotoold 已起（systemctl --user enable --now ydotool.service）、
+//!   #    qdbus6 可用（KDE 自带）、testing_08 进程在跑（会被自动提到最前）。
+//!   # dry-run（验证识别/定位链路，不真点）：
+//!   cargo run -p ocr-agent --example agent --live --label Reload
+//!   # 真点（点 Reload 后 count 应 +50）：
+//!   cargo run -p ocr-agent --example agent --live --real --label Reload
 //!
-//! 注：在线抓取（用 capturer 抓全屏+窗口流再反推）需引入 capturer/async-io
-//! （会拉 opencv 重依赖），本示例默认只演示「离线双图反推」，live 抓取请在
-//! 本地自行接线（参考 infer_window_offset / verify_click 的调用方式）。
+//! 说明：PrintExecutor 不会真点，所以前后 count 不变；--live --real 用
+//! YdotoolExecutor + KdeForegrounder 真点，点 Reload 后 count 应 +50。
+//!
+//! 注：capturer 的截全屏（Screenshot 接口）是 [dependencies]，自动闭环直接用，
+//! 不依赖 opencv（opencv 来自 rapidocr-ort 的 OCR 引擎，已在本机编好）。
 
 use anyhow::Context as _;
-use ocr_agent::{Agent, Executor, PrintExecutor, YdotoolExecutor, infer_window_offset};
+use ocr_agent::{
+    Agent, Executor, Foregrounder, PrintExecutor, YdotoolExecutor, infer_window_offset,
+};
 use ocr_layout::LayoutAnalyzer;
 use rapidocr_ort::ModelProfile;
 use std::path::PathBuf;
@@ -57,6 +66,9 @@ fn main() -> anyhow::Result<()> {
     let mut real = false;
     let mut verify_before: Option<String> = None;
     let mut verify_after: Option<String> = None;
+    let mut live = false;
+    let mut live_label = "Reload".to_string();
+    let mut dump = false;
 
     let mut i = 1; // 从 1 开始，跳过程序名（首参可能是 image 或 --verify-before）
     while i < args.len() {
@@ -67,9 +79,95 @@ fn main() -> anyhow::Result<()> {
             "--real" => real = true,
             "--verify-before" => verify_before = args.get(i + 1).cloned(),
             "--verify-after" => verify_after = args.get(i + 1).cloned(),
+            "--live" => live = true,
+            "--label" => live_label = args.get(i + 1).cloned().unwrap_or_else(|| "Reload".into()),
+            "--dump" => dump = true,
             _ => {}
         }
         i += 1;
+    }
+
+    // ---- 诊断：raise testing_08 → 截全屏 → OCR 列出所有控件 ----
+    // 用来确认「切前台 + 截屏」到底有没有真的抓到 testing_08（而不是被别的窗口盖住）。
+    if dump {
+        let model_dir = repo_root().join("models/rapidocr");
+        let mut analyzer =
+            LayoutAnalyzer::with_ocr(ModelProfile::V3, &model_dir, Default::default())
+                .context("构建 OCR 引擎失败（确认 models/rapidocr 权重就绪）")?;
+        // 先切前台（即使 dry-run 也切，便于诊断）。
+        let fg = ocr_agent::KdeForegrounder::new("testing_08");
+        fg.raise().context("KdeForegrounder::raise 失败")?;
+        std::thread::sleep(std::time::Duration::from_millis(400));
+        let rgba = async_io::block_on(capturer::capture_screenshot()).context("截全屏失败")?;
+        let img = ocr_agent::rgba_to_rgb(&rgba);
+        let widgets = analyzer.analyze(&img)?;
+        eprintln!("=== OCR 共识别 {} 个控件 ===", widgets.len());
+        for (idx, w) in widgets.iter().enumerate() {
+            let (x, y, ww, hh) = w.rect;
+            eprintln!(
+                "#{} label={:?} area={:.2}% rect=({},{},{},{})",
+                idx,
+                w.label,
+                w.area_ratio * 100.0,
+                x,
+                y,
+                ww,
+                hh
+            );
+        }
+        return Ok(());
+    }
+
+    // ---- 自动闭环（live，纯全屏方案）----
+    // 截全屏 → 识别按钮屏幕绝对坐标 → ydotool 点绝对坐标 → 再截全屏 → 比 delta。
+    // 不依赖 restore_token / 录屏窗口流；目标窗口由 KdeForegrounder 自动切前台。
+    if live {
+        let model_dir = repo_root().join("models/rapidocr");
+        let analyzer = LayoutAnalyzer::with_ocr(ModelProfile::V3, &model_dir, Default::default())
+            .context("构建 OCR 引擎失败（确认 models/rapidocr 权重就绪）")?;
+
+        // 执行器 + 前台器：--real 才真点 + 自动切前台，否则 dry-run（不切前台也可，
+        // 因为不真点；但为验证「看」链路仍建议前台，故 dry-run 也装 Noop 即可）。
+        let (executor, foregrounder): (Box<dyn Executor>, Box<dyn ocr_agent::Foregrounder>) =
+            if real {
+                eprintln!(
+                    "使用 YdotoolExecutor（绝对坐标点击）+ KdeForegrounder（自动切前台）真点 {}",
+                    live_label
+                );
+                (
+                    Box::new(YdotoolExecutor::new((0, 0))),
+                    Box::new(ocr_agent::KdeForegrounder::new("testing_08")),
+                )
+            } else {
+                eprintln!(
+                    "使用 PrintExecutor（dry-run，不真点）；加 --real 才会真的点 {}",
+                    live_label
+                );
+                (
+                    Box::new(PrintExecutor),
+                    Box::new(ocr_agent::NoopForegrounder),
+                )
+            };
+
+        let mut agent = Agent::with_foregrounder(analyzer, executor, foregrounder);
+
+        let result = async_io::block_on(agent.verify_click_screenshot(&live_label))?;
+
+        println!(
+            "闭环(live)：before={:?} after={:?} label={:?} delta={:?}",
+            result.before,
+            result.after,
+            result.label,
+            result.delta()
+        );
+        if result.delta() == Some(50) {
+            println!("✓ delta=50，与 testing_08 的 Reload(count+=50) 一致，自动闭环通过");
+        } else {
+            println!(
+                "（delta 非 50：识别偏差 / 点击未生效 / 该按钮语义非 +50；dry-run 下 delta 必然为 0）"
+            );
+        }
+        return Ok(());
     }
 
     // ---- 闭环验证模式：直接对比两帧计数 ----

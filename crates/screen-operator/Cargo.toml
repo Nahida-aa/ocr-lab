@@ -1,0 +1,12 @@
+[package]
+name = "screen-operator"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+# 错误链。
+anyhow = { workspace = true }
+# 编译期完美哈希表：键名 → keycode 映射（KEYCODES），零运行时开销。
+phf = { version = "0.11", features = ["macros"] }

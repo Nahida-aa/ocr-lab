@@ -5,10 +5,18 @@
 //! （spectacle / grim / gnome-screenshot / import），不如自己用 Rust 掌握这条
 //! 链路，按运行环境选择后端。
 //!
-//! 当前实装后端：`ashpd`（xdg-desktop-portal 的 Screenshot 接口）。
-//! - 跨 compositor：KDE/GNOME/wlroots 都实现了 portal 的 Screenshot，写一次通用。
-//! - 做法：`interactive=false` 抓全屏 → 在 Rust 里按已知区域裁切。绕开
-//!   ScreenCast + PipeWire 的复杂链路，且完全可控。
+//! 两类能力（对应需求里的两种语义）：
+//!
+//! 1. **截取当前全屏（Screenshot 接口）** —— [`PortalCapturer`] / [`capture_screenshot`]。
+//!    - 跨 compositor：KDE/GNOME/wlroots 都实现了 portal 的 Screenshot，写一次通用。
+//!    - 做法：`interactive=false` 让 portal 直接截一张当前全屏（合成后、受遮挡影响），
+//!      读回文件转 `RgbaImage`。**不是录屏**，就是「截一张图」。
+//!    - 用途：判断当前屏幕上有什么、自动定位某个 app 窗口、闭环验证点击结果等。
+//!    - 优点：轻量、非交互不弹窗、无需 PipeWire 建流。
+//!
+//! 2. **录屏 + 抽帧（ScreenCast 接口）** —— [`screencast::ScreenCastCapturer`]。
+//!    - 走 PipeWire 消费流，可选 Monitor（全屏）或 Window（某窗口本体，不受遮挡）。
+//!    - 用途：持续录屏、按需抽帧、抓「窗口自身合成流」（遮挡无关）以反推窗口偏移。
 //!
 //! 预留后端（TODO，按环境接入）：
 //! - wlroots（Sway/Hyprland）：`zwlr_screencopy_manager_v1`（smithay-client-toolkit）。
@@ -21,6 +29,9 @@ use image::{RgbaImage, imageops};
 /// 基于 xdg-desktop-portal **ScreenCast** + PipeWire 的后端（全屏 / 选窗口，窗口流不受遮挡）。
 pub mod screencast;
 pub use screencast::ScreenCastCapturer;
+
+/// 基于 xdg-desktop-portal **Screenshot** 的后端（截当前全屏，非录屏）。
+pub use self::PortalCapturer as ScreenshotCapturer;
 
 /// 抓图后端统一接口。
 pub trait Capturer: Sync {
@@ -60,6 +71,20 @@ pub fn crop_region(img: &RgbaImage, x: u32, y: u32, w: u32, h: u32) -> RgbaImage
 pub fn load_rgba(path: &str) -> Result<RgbaImage> {
     let dyn_img = image::open(path).with_context(|| format!("读取图片失败: {}", path))?;
     Ok(dyn_img.to_rgba8())
+}
+
+/// 截取**当前屏幕全屏**一张（xdg-desktop-portal Screenshot 接口，`interactive=false`）。
+///
+/// 这是「截一张图」而非「录屏」：portal 直接合成当前全屏返回，受遮挡影响（符合
+/// 全屏语义），无需 PipeWire 建流，也无需选择窗口。非常适合「判断屏幕上现在有什么」
+/// 「自动定位某个 app 窗口」「闭环验证点击结果」等场景。
+///
+/// 等价于 `PortalCapturer::new().capture_fullscreen().await`，但无需先构造类型。
+///
+/// 注意：首次在桌面环境里调用可能弹出一次授权对话框（是否允许截图），授权后
+/// 通常可被 session 记住，后续不再弹窗。
+pub async fn capture_screenshot() -> Result<RgbaImage> {
+    capture_via_portal().await
 }
 
 /// 基于 xdg-desktop-portal Screenshot 的后端（跨 compositor）。
@@ -103,10 +128,7 @@ async fn capture_via_portal() -> Result<RgbaImage> {
         .context("等待截图完成失败（可能需要在桌面环境中授权）")?;
 
     let uri = response.uri().to_string();
-    let path = uri
-        .strip_prefix("file://")
-        .unwrap_or(&uri)
-        .to_string();
+    let path = uri.strip_prefix("file://").unwrap_or(&uri).to_string();
     let path = if let Ok(decoded) = url_decode(&path) {
         decoded
     } else {
