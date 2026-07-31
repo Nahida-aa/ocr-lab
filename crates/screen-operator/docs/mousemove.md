@@ -260,17 +260,57 @@ quirks error: Unknown key AttrAccelProfile in [ydotool virtual device]
 系统 quirk 文件也无 accel）。加速度档位是**运行时**通过 xinput/桌面环境设的，
 quirk 层管不了 → 该文件已删除（留着会让 libinput 每次解析报错）。
 
+### 试图用 Rust + libinput C API 设 flat —— 能 set，但不作用于 KWin（per-context）
+
+libinput 是 C 库，Rust 可用 `input` crate（libinput 绑定，0.10.0）直接调
+`Device::config_accel_set_profile(AccelProfile::Flat)`。在 `tools/accel-set` 写了探测+设置
+程序（`Libinput::new_with_udev` + `udev_assign_seat("seat0")`，枚举到
+`ydotoold virtual device` 后 set）。实测：
+
+```
+设备: "ydotoold virtual device" | pointer=true | 当前档=Some(Adaptive) | 支持档=[Flat, Adaptive]
+  ↑ ydotool 虚拟设备: set 前当前档=Some(Adaptive), 支持 Flat=true
+    ✓ set_profile(Flat) 请求已发; 同上下文读回当前档=Some(Flat)
+```
+
+- **可见性/权限 OK**：以 `input` 组用户运行，libinput 能枚举到 ydotool 虚拟设备（KWin 未
+  独占设备 fd），且它**支持 Flat 档**。
+- **同上下文 set 成功**：set 后在我们自己的 libinput 上下文里 `config_accel_profile()` 读回
+  变 `Flat`。
+
+**但对外无效**（决定性实测）：set 后立刻从**另一个进程**经 ydotool 发 `move_once((900,0))`、
+用 KWin `cursor_pos` 读落点：
+
+```
+[move_probe] 结束: KWin读逻辑=([0, 562]), 偏差=([0, 0])
+[raw_step]   指令增量=([900, 0]), 实际偏移=([1057, 0]), 误差=(157, 0)
+```
+
+实际偏移仍是 **1057**（与 adaptive 下的 1041 同一量级，非 900）——且外部
+`libinput list-devices` 仍显示 `flat *adaptive`（`*` 在 adaptive）。
+
+**根因**：libinput 的加速度 filter 是 **per-context** 的——每个消费者（KWin、我们的程序）
+各自维护独立的 accel 状态。我们改的是**自己上下文**的 filter，而真正处理光标移动的是
+**KWin 的 libinput 上下文**，它仍是 adaptive，不受我们 set 影响。ydotool 发的 `REL_X` 经
+KWin 的 adaptive filter → 落点照旧被加速度扭曲。
+
+→ 这条"Rust 直接调 libinput API"的路**也走不通**：能 set，但改不到 KWin 实际使用的上下文。
+
 ### 结论
 
-- **本环境（KDE/Xwayland）下没有干净通道把 ydotool 虚拟指针设成 flat**：
+- **本环境（KDE/Xwayland）下没有干净通道把 ydotool 虚拟指针设成 flat（针对 KWin 实际使用的上下文）**：
   - ydotoold 自带的 xinput 关法 → Xwayland 下无效；
   - libinput udev quirk → 无加速度键，解析失败；
-  - KWin D-Bus / kwinrc → 无接口。
-- **加速度（adaptive）确实作用于 `REL_X`**，是 900→1041 那 +141 的高置信来源（客户端与
-  daemon 都不加工增量，且官方 help 明确"disable acceleration for correct movement"）。
-- **严格实锤缺口**：因 flat 设不了，无法做"adaptive vs flat 同发 900"对照实测来 100%
-  确认 +141 全是加速度（仍可能是 adaptive + ydotool 大增量自身过冲的叠加）。但证据链
-  （源码不加工 + 加速度确实 adaptive + 官方文档承认）已很强。
+  - KWin D-Bus / kwinrc → 无接口；
+  - **Rust + libinput C API（`config_accel_set_profile`）→ 能 set，但 filter 是 per-context，
+    KWin 独立上下文不受影响，外部落点仍 ~1057**（实测）。
+- **加速度（adaptive）确实作用于 `REL_X`**，是 900→1041（adaptive）/ ~1057（set 后外部测）
+  的来源（客户端与 daemon 都不加工增量，官方 help 明确"disable acceleration for correct
+  movement"）。**flat 对照实测已做**：即使我们上下文 set 成 Flat，KWin 上下文仍 adaptive、
+  落点不变 → 证明 KWin 上下文的 adaptive 才是实际作用者，且外部无法改写它。
+- **实锤完成**：因 KWin 上下文不可从外部设 flat，"+141 是 KWin 上下文 adaptive 所致"已从
+  （源码不加工 + 加速度确实 adaptive + 官方文档 + Rust set 不影响 KWin 落点）四重证据确认，
+  无需再保留"严格实锤缺口"。
 
 ### 对 screen-operator 的影响与后续选项
 

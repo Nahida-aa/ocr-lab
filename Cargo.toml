@@ -2,7 +2,7 @@
 resolver = "3"
 members = [
     # "apps/*",
-    "crates/*", "tools/gen_ui_img",
+    "crates/*", "tools/gen_ui_img", "tools/accel-set",
 ]
 
 # default-members：当你只敲 `cargo build` / `cargo run`（不带 -p）时，
