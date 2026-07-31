@@ -8,6 +8,7 @@
 //!   拼进 `Mover`，对外只暴露 `move_to(IVec2)` / `click_left_at(IVec2)` 这类直觉 API。
 //!   调用方无需感知底层是 ydotool 还是别的。
 
+use crate::ensure_ydotool_flat;
 use anyhow::{Context, Result};
 use glam::IVec2;
 
@@ -123,6 +124,9 @@ impl ScreenOperator {
     /// **坐标语义**：`pos` 为 **KWin 逻辑坐标**（与 `cursor_pos` 返回值同套，本机
     /// 1800×1125）。
     pub fn move_to(&self, pos: IVec2) -> Result<()> {
+        // 移动前幂等确保 ydotool 虚拟设备加速度为 flat（KWin 设备级 D-Bus）。
+        // 失败静默忽略：未关只令闭环每步效率略低，不影响最终正确性。详见 accel.rs。
+        let _ = ensure_ydotool_flat();
         self.mover.move_to(pos)
     }
 

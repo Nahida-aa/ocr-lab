@@ -296,21 +296,68 @@ KWin 的 adaptive filter → 落点照旧被加速度扭曲。
 
 → 这条"Rust 直接调 libinput API"的路**也走不通**：能 set，但改不到 KWin 实际使用的上下文。
 
+### 通过 KWin 设备级 D-Bus 设 flat —— ✅ 成功（正确通道）
+
+读 KWin 源码（`src/backends/libinput/`）发现：KWin 在 Wayland 下用自带的 libinput 后端读
+输入设备，对每个设备用 `Device` 封装并**自己维护 accel 状态**（`device.cpp:564`
+`libinput_device_config_accel_set_profile`）。关键：`device.cpp:476` 把每个设备注册到 D-Bus：
+
+```cpp
+QDBusConnection::sessionBus().registerObject(
+    QStringLiteral("/org/kde/KWin/InputDevice/") + m_sysName,
+    device, QDBusConnection::ExportAllProperties);
+```
+
+即**每个输入设备在 `/org/kde/KWin/InputDevice/<sysName>` 导出所有 Q_PROPERTY**，其中包括
+`pointerAccelerationProfileFlat`（**readwrite**）。这正作用在 **KWin 自己的 libinput 上下文**
+里——是 per-context 难题的「正确一侧」，也是前面所有外部通道失败的根因（外部动的是错的 context）。
+
+ydotool 虚拟设备对应 `/org/kde/KWin/InputDevice/event16`（sysName 即 event 号，可能随
+ydotoold 重启变化，但设备名恒为 `ydotoold virtual device`）。实测：
+
+```
+# 设前
+pointerAccelerationProfileFlat = false
+# 经 D-Bus 设为 true
+dbus-send --session --dest=org.kde.KWin --print-reply \
+  /org/kde/KWin/InputDevice/event16 \
+  org.freedesktop.DBus.Properties.Set \
+  string:org.kde.KWin.InputDevice string:pointerAccelerationProfileFlat variant:boolean:true
+# 设后读回
+pointerAccelerationProfileFlat = true   ✓
+# 外部 libinput 同步变为 flat *adaptive
+```
+
+**落点实测（决定性）**：设 flat 后，归零到 (0,562) 再单步 `move_once((900,0))`：
+
+```
+[move_probe] 结束: KWin读逻辑=([0, 562]), 偏差=([0, 0])
+[raw_step]   指令增量=([900, 0]), 实际偏移=([900, 0]), 误差=(0, 0)
+```
+
+实际偏移 **900**（误差 0），对比 adaptive 下的 1041 —— **加速度就是那 +141 的来源，且现已
+彻底消除**。这同时反向实锤：之前 adaptive 下的过冲确实来自 KWin 上下文的加速度（而非 ydotool
+大增量自身），因为 flat 后 900 精确归位、无任何过冲。
+
+> **无需恢复**：`event16` 是 ydotool 的 **uinput 虚拟设备**，与真实鼠标是 libinput 里两个独立
+> `Device`，设它的 `pointerAccelerationProfileFlat` **不影响真实鼠标手感**。让 ydotool 虚拟设备
+> 常驻 flat 是更健康的状态（ydotool 官方也试图关它的加速度，只是 Xwayland 下 xinput 没成功）。
+> 故只需「确保 flat」，不要「移动后恢复」。重启 ydotoold 会把设备重置回 adaptive，因此应采用
+> **幂等确保**（移动前读一下，不是 flat 就设 true，已是则不动），而非一次性设置。
+
 ### 结论
 
-- **本环境（KDE/Xwayland）下没有干净通道把 ydotool 虚拟指针设成 flat（针对 KWin 实际使用的上下文）**：
-  - ydotoold 自带的 xinput 关法 → Xwayland 下无效；
-  - libinput udev quirk → 无加速度键，解析失败；
-  - KWin D-Bus / kwinrc → 无接口；
-  - **Rust + libinput C API（`config_accel_set_profile`）→ 能 set，但 filter 是 per-context，
-    KWin 独立上下文不受影响，外部落点仍 ~1057**（实测）。
-- **加速度（adaptive）确实作用于 `REL_X`**，是 900→1041（adaptive）/ ~1057（set 后外部测）
-  的来源（客户端与 daemon 都不加工增量，官方 help 明确"disable acceleration for correct
-  movement"）。**flat 对照实测已做**：即使我们上下文 set 成 Flat，KWin 上下文仍 adaptive、
-  落点不变 → 证明 KWin 上下文的 adaptive 才是实际作用者，且外部无法改写它。
-- **实锤完成**：因 KWin 上下文不可从外部设 flat，"+141 是 KWin 上下文 adaptive 所致"已从
-  （源码不加工 + 加速度确实 adaptive + 官方文档 + Rust set 不影响 KWin 落点）四重证据确认，
-  无需再保留"严格实锤缺口"。
+- **KWin/Xwayland 下有关 flat 的通道，且是正确通道**：KWin 设备级 D-Bus 属性
+  `/org/kde/KWin/InputDevice/<sysName>/pointerAccelerationProfileFlat`（readwrite）。前面误判
+  「KWin 无接口」是因为查错了地方——accel 不在 `org.kde.KWin` 顶层方法，而在**每个输入设备的
+  D-Bus 对象**上（由 KWin 源码 `device.cpp:476` 的 `ExportAllProperties` 证实）。
+- **失败通道的根因统一为 per-context**：xinput（Xwayland 碰不到 Wayland 设备）、libinput quirk
+  （无 accel 键）、外部 Rust libinput（独立 context，KWin 不共享）——三者都动不到 KWin 自己的
+  context；只有 KWin D-Bus 动的是正确的 context。
+- **加速度（adaptive）确实作用于 `REL_X`**，是 900→1041 的来源（已用 flat 对照实测 900→900 反证）。
+- **对 screen-operator**：移动前通过 KWin D-Bus **幂等确保** ydotool 虚拟设备 flat（不恢复），
+  单步「指令 = 实际位移」，闭环更高效且无加速度干扰。详见 `accel.rs`（`ensure_flat`）。
+
 
 ### 对 screen-operator 的影响与后续选项
 

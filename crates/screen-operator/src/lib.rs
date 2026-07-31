@@ -46,6 +46,7 @@
 //!   稳定**（不可描述为固定倍率，大指令会过冲甚至撞墙），所以 `move_to` 必须靠
 //!   「移动 → 读 → 确认」逐步收敛，而非预设倍率。
 
+mod accel;
 mod foregrounder;
 mod injector;
 mod keycode;
@@ -54,6 +55,7 @@ mod mover;
 mod operator;
 mod probe;
 
+pub use accel::ensure_ydotool_flat;
 pub use foregrounder::{Foregrounder, KdeForegrounder, NoopForegrounder};
 pub use injector::{Injector, YdotoolInjector};
 pub use keycode::{KEYCODES, keycode_of};
