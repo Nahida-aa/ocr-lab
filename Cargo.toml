@@ -22,6 +22,23 @@ version = "0.1.0"
 edition = "2024"
 license = "Apache-2.0"
 publish = false
+# 仓库 description 的唯一源（GitHub 仓库简介 + crates.io 共用一句话）。
+description = "OCR + 屏幕自动化 agent：看/操作分离，ydotool + KWin"
+
+# GitHub 仓库元数据的唯一源（description 见上方，topics 见下）。
+# 用自定义 metadata 段，不污染 crates.io 的 keywords 语义（后者限 5 个）。
+# 同步命令见仓库根 sync-github-meta.sh：改这里一处即可刷到 GitHub。
+[workspace.metadata.github]
+topics = [
+    "ocr",
+    "screen-automation",
+    "computer-use",
+    "agent",
+    "ydotool",
+    "wayland",
+    "kwin",
+    "rust",
+]
 
 [workspace.dependencies]
 anyhow = "1.0"
