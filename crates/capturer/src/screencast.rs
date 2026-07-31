@@ -18,8 +18,8 @@
 //! B/R 通道交换正确，restore_token 可复用。
 
 use anyhow::{Context, Result};
-use ashpd::desktop::screencast::{SelectSourcesOptions, Screencast, SourceType};
 use ashpd::desktop::PersistMode;
+use ashpd::desktop::screencast::{Screencast, SelectSourcesOptions, SourceType};
 use enumflags2::BitFlags;
 use image::RgbaImage;
 use pipewire as pw;
@@ -48,11 +48,14 @@ struct FrameState {
 /// - `source`：要捕获的源类型（Monitor 全屏 / Window 窗口）。
 /// - `restore_token`：上一次选择得到的 token，传回可免对话框恢复同一选择。
 ///
-/// 返回 `(node_id, fd, 本次返回的 restore_token)`。
+/// 返回 `(node_id, fd, 本次返回的 restore_token, 窗口在屏幕上的位置)`。
+/// 其中位置 `(x, y)` 来自 portal 响应的 `Stream::position()`，是窗口左上角的
+/// 屏幕绝对坐标（compositor 坐标系，含分数缩放）。Capture 窗口流时可用它把
+/// 「窗口相对坐标」换算成「屏幕绝对坐标」去点击，无需再查 compositor。
 async fn select_stream(
     source: SourceType,
     restore_token: Option<&str>,
-) -> Result<(u32, OwnedFd, Option<String>)> {
+) -> Result<(u32, OwnedFd, Option<String>, Option<(i32, i32)>)> {
     let sc = Screencast::new()
         .await
         .context("创建 Screencast 代理失败")?;
@@ -82,18 +85,16 @@ async fn select_stream(
         .context("等待 start 响应失败（可能需要在桌面环境中授权）")?;
 
     let new_token = streams.restore_token().map(str::to_string);
-    let stream = streams
-        .streams()
-        .first()
-        .context("start 未返回任何流")?;
+    let stream = streams.streams().first().context("start 未返回任何流")?;
     let node_id = stream.pipe_wire_node_id();
+    let position = stream.position();
 
     let fd = sc
         .open_pipe_wire_remote(&session, Default::default())
         .await
         .context("open_pipe_wire_remote 失败")?;
 
-    Ok((node_id, fd, new_token))
+    Ok((node_id, fd, new_token, position))
 }
 
 /// 连上 PipeWire 的 remote fd，协商视频格式，抽一帧返回 RGBA 图。
@@ -101,7 +102,8 @@ fn extract_one_frame(node_id: u32, fd: OwnedFd) -> Result<RgbaImage> {
     pw::init();
 
     let mainloop = pw::main_loop::MainLoopRc::new(None).context("创建 PipeWire MainLoop 失败")?;
-    let context = pw::context::ContextRc::new(&mainloop, None).context("创建 PipeWire Context 失败")?;
+    let context =
+        pw::context::ContextRc::new(&mainloop, None).context("创建 PipeWire Context 失败")?;
     let core = context
         .connect_fd_rc(fd, None)
         .context("连接 PipeWire remote fd 失败")?;
@@ -208,10 +210,7 @@ fn extract_one_frame(node_id: u32, fd: OwnedFd) -> Result<RgbaImage> {
                 let info = &st.info;
                 let width = info.size().width;
                 let height = info.size().height;
-                let is_bgra = matches!(
-                    info.format(),
-                    VideoFormat::BGRA | VideoFormat::BGRx
-                );
+                let is_bgra = matches!(info.format(), VideoFormat::BGRA | VideoFormat::BGRx);
                 (width, height, is_bgra)
             };
             if width == 0 || height == 0 {
@@ -285,9 +284,18 @@ fn extract_one_frame(node_id: u32, fd: OwnedFd) -> Result<RgbaImage> {
             Choice,
             Range,
             Rectangle,
-            pw::spa::utils::Rectangle { width: 320, height: 240 },
-            pw::spa::utils::Rectangle { width: 1, height: 1 },
-            pw::spa::utils::Rectangle { width: 4096, height: 4096 }
+            pw::spa::utils::Rectangle {
+                width: 320,
+                height: 240
+            },
+            pw::spa::utils::Rectangle {
+                width: 1,
+                height: 1
+            },
+            pw::spa::utils::Rectangle {
+                width: 4096,
+                height: 4096
+            }
         )
     );
 
@@ -298,8 +306,8 @@ fn extract_one_frame(node_id: u32, fd: OwnedFd) -> Result<RgbaImage> {
     .map_err(|e| anyhow::anyhow!("序列化格式 pod 失败: {:?}", e))?
     .0
     .into_inner();
-    let mut params = [Pod::from_bytes(&serialized)
-        .ok_or_else(|| anyhow::anyhow!("解析 pod 失败"))?];
+    let mut params =
+        [Pod::from_bytes(&serialized).ok_or_else(|| anyhow::anyhow!("解析 pod 失败"))?];
 
     stream
         .connect(
@@ -321,29 +329,71 @@ fn extract_one_frame(node_id: u32, fd: OwnedFd) -> Result<RgbaImage> {
 
 /// 基于 xdg-desktop-portal **ScreenCast** + PipeWire 的后端。
 ///
-/// 支持「全屏」与「指定窗口（不受遮挡）」两类输入，且窗口选择可经
-/// `restore_token` 持久化实现「提前赋权」（免每次弹对话框）。
+/// 支持「全屏」与「指定窗口（不受遮挡）」两类输入。两类选择各用各自的
+/// `restore_token` 持久化实现「提前赋权」：**全屏 token 只用于全屏、窗口 token
+/// 只用于窗口**（二者是不同源，不能串用，否则 portal 不认、照样弹窗）。
+/// `PersistMode` 已设为 `Persistent`，故点一次授权后 token 长期有效，无需再弹。
 pub struct ScreenCastCapturer {
-    /// 窗口选择的 restore_token（来自上一次选择）。`None` 表示下一次需手动选窗。
-    restore_token: Option<String>,
+    /// 全屏（Monitor 源）选择的 restore_token。
+    token_monitor: Option<String>,
+    /// 窗口（Window 源）选择的 restore_token。
+    token_window: Option<String>,
 }
 
 impl ScreenCastCapturer {
-    /// 新建（无 restore_token，首次选择会弹对话框）。
+    /// 新建（无 token，首次两类选择都会弹对话框）。
     pub fn new() -> Self {
-        Self { restore_token: None }
-    }
-
-    /// 用已有的 restore_token 构造，下次 `capture_app` 免对话框自动恢复同一窗口。
-    pub fn with_restore_token(token: impl Into<String>) -> Self {
         Self {
-            restore_token: Some(token.into()),
+            token_monitor: None,
+            token_window: None,
         }
     }
 
-    /// 返回内部持有的 restore_token（若有）。
+    /// 用已有的窗口 token 构造（兼容旧用法），下次 `capture_app` 免对话框。
+    pub fn with_restore_token(token: impl Into<String>) -> Self {
+        Self {
+            token_monitor: None,
+            token_window: Some(token.into()),
+        }
+    }
+
+    /// 分别设置全屏 / 窗口 token（推荐：两类各自复用，不串用）。
+    pub fn with_tokens(monitor: impl Into<String>, window: impl Into<String>) -> Self {
+        Self {
+            token_monitor: Some(monitor.into()),
+            token_window: Some(window.into()),
+        }
+    }
+
+    /// 单独设置窗口 token。
+    pub fn with_window_token(token: impl Into<String>) -> Self {
+        Self {
+            token_monitor: None,
+            token_window: Some(token.into()),
+        }
+    }
+
+    /// 单独设置全屏 token。
+    pub fn with_monitor_token(token: impl Into<String>) -> Self {
+        Self {
+            token_monitor: Some(token.into()),
+            token_window: None,
+        }
+    }
+
+    /// 返回内部持有的窗口 token（若有）。
     pub fn restore_token(&self) -> Option<&str> {
-        self.restore_token.as_deref()
+        self.token_window.as_deref()
+    }
+
+    /// 返回内部持有的全屏 token（若有）。
+    pub fn restore_token_monitor(&self) -> Option<&str> {
+        self.token_monitor.as_deref()
+    }
+
+    /// 返回内部持有的窗口 token（若有）。
+    pub fn restore_token_window(&self) -> Option<&str> {
+        self.token_window.as_deref()
     }
 }
 
@@ -355,25 +405,51 @@ impl Default for ScreenCastCapturer {
 
 impl crate::Capturer for ScreenCastCapturer {
     async fn capture_fullscreen(&self) -> Result<RgbaImage> {
-        let (node_id, fd, _token) = select_stream(SourceType::Monitor, None).await?;
+        // 复用已持久化的全屏 token（若有），避免每次抓全屏都弹选屏对话框。
+        let token = self.token_monitor.as_deref();
+        let (node_id, fd, _token, _pos) = select_stream(SourceType::Monitor, token).await?;
         extract_one_frame(node_id, fd)
+    }
+}
+
+impl ScreenCastCapturer {
+    /// 同 `Capturer::capture_fullscreen`（Monitor 源，坐标即屏幕绝对坐标），但额外
+    /// 返回本次（可能新生成的）全屏 `restore_token`，便于调用方持久化实现「提前赋权」。
+    pub async fn capture_fullscreen_token(&self) -> Result<(RgbaImage, Option<String>)> {
+        let (node_id, fd, token, _pos) =
+            select_stream(SourceType::Monitor, self.token_monitor.as_deref()).await?;
+        let img = extract_one_frame(node_id, fd)?;
+        Ok((img, token))
     }
 }
 
 impl ScreenCastCapturer {
     /// 捕获指定窗口（窗口本体流，不受遮挡）。
     ///
-    /// `app_id` 在此后端里即 portal 的 restore_token：portal 不支持按 app 名字
-    /// 直接选窗，而是用首次选择得到的 token 复选。调用方应传入
-    /// `restore_token()` 返回的 token（或构造时 `with_restore_token` 设置的值）；
-    /// 传空串则回退到内部持有的 token。若都没有，会弹对话框让你选窗。
+    /// `app_id` 在此后端里即 portal 的窗口 restore_token：portal 不支持按 app 名字
+    /// 直接选窗，而是用首次选择得到的 token 复选。调用方应传入窗口 token（或构造时
+    /// `with_window_token` 设置的值）；传空串则回退到内部持有的窗口 token。若都没有，
+    /// 会弹对话框让你选窗。
     pub async fn capture_app(&self, app_id: &str) -> Result<RgbaImage> {
+        let (img, _pos, _tok) = self.capture_app_geom(app_id).await?;
+        Ok(img)
+    }
+
+    /// 同 `capture_app`，但额外返回窗口在屏幕上的位置 `(x, y)`（来自 portal 响应
+    /// 的 `Stream::position()`，compositor 坐标系）。可用它把 OCR 得到的「窗口相对
+    /// 坐标」换算成「屏幕绝对坐标」去点击。无位置信息时为 `None`（如 Monitor 源）。
+    ///
+    /// 返回的第三项是本次（可能新生成的）窗口 restore_token，便于调用方持久化。
+    pub async fn capture_app_geom(
+        &self,
+        app_id: &str,
+    ) -> Result<(RgbaImage, Option<(i32, i32)>, Option<String>)> {
         let token = if app_id.is_empty() {
-            self.restore_token.as_deref()
+            self.token_window.as_deref()
         } else {
             Some(app_id)
         };
-        let (node_id, fd, new_token) = select_stream(SourceType::Window, token).await?;
+        let (node_id, fd, new_token, pos) = select_stream(SourceType::Window, token).await?;
         // 若拿到了新的 token（首次选择），记录下来供下次复用。
         if let Some(t) = &new_token {
             eprintln!(
@@ -381,18 +457,19 @@ impl ScreenCastCapturer {
                 t
             );
         }
-        extract_one_frame(node_id, fd)
+        let img = extract_one_frame(node_id, fd)?;
+        Ok((img, pos, new_token))
     }
 
     /// 与 `capture_app` 类似，但额外把本次（可能新生成的）restore_token 一并返回，
     /// 方便调用方持久化到配置，实现「提前赋权」。
     pub async fn capture_app_token(&self, app_id: &str) -> Result<(RgbaImage, Option<String>)> {
         let token = if app_id.is_empty() {
-            self.restore_token.as_deref()
+            self.token_window.as_deref()
         } else {
             Some(app_id)
         };
-        let (node_id, fd, new_token) = select_stream(SourceType::Window, token).await?;
+        let (node_id, fd, new_token, _pos) = select_stream(SourceType::Window, token).await?;
         let img = extract_one_frame(node_id, fd)?;
         Ok((img, new_token))
     }
