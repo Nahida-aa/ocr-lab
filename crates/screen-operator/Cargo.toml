@@ -8,5 +8,13 @@ publish.workspace = true
 [dependencies]
 # 错误链。
 anyhow = { workspace = true }
+# 结构化日志/追踪（debug 级打印移动每步，由 RUST_LOG 控制开关）。
+tracing = { workspace = true }
 # 编译期完美哈希表：键名 → keycode 映射（KEYCODES），零运行时开销。
 phf = { version = "0.11", features = ["macros"] }
+glam = { workspace = true }
+
+# 示例侧依赖（examples 可用 dev-dependencies）。
+[dev-dependencies]
+# 日志/追踪：用 RUST_LOG=debug 开启 screen-operator 的移动每步调试。
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }

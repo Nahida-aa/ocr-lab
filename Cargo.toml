@@ -25,12 +25,16 @@ publish = false
 
 [workspace.dependencies]
 anyhow = "1.0"
+tracing = "0.1"
 rust-embed = { version = "8.11", features = ["include-exclude"] }
+# 通用图像转换工具（rgba→rgb 等），与业务解耦。
+image-util = { path = "crates/image_util" }
+image = "0.25"
 opencv = { version = "0.100.0", default-features = false, features = ["imgproc"] }
 ort = "2.0.0-rc.13"
 burn = "0.21.0"
 util = { path = "crates/util" }
-
+glam = "0.33.2"
 # gpui 相关依赖统一在 workspace 声明语义版本，真正的 git 源由下方
 # [patch.crates-io] 覆盖（cargo 要求 patch 只能写在 workspace 根）。
 gpui = { version = "0.2.2", default-features = false }

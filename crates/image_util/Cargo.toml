@@ -1,0 +1,12 @@
+[package]
+name = "image-util"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+# 图像类型与转换（rgba → rgb 等）。
+image = "0.25"
+# 错误链。
+anyhow = { workspace = true }

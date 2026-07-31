@@ -17,8 +17,11 @@
 //! 「看屏幕 + 模拟输入」操控，与人工操作等价。
 
 use anyhow::{Context, Result};
+use capturer::{Capturer, ScreenCastCapturer};
+use glam::IVec2;
 use image::RgbImage;
 use ocr_layout::{LayoutAnalyzer, Widget};
+use std::path::PathBuf;
 
 /// 操作执行器：把「窗口相对坐标的一次点击」落地。
 ///
@@ -59,17 +62,43 @@ impl Executor for PrintExecutor {
 /// 最上层窗口派发），与目标是否「活跃/聚焦」无关，但与「是否被遮挡」强相关。
 /// 把目标切到前台是调用方 / 前台器（`Foregrounder`）的职责。
 pub struct YdotoolExecutor {
-    /// 窗口左上角相对屏幕的偏移 (x, y)。
+    /// 窗口左上角相对屏幕的偏移 (x, y)。**物理像素**（KWin 逻辑 × scale）。
     pub window_offset: (i32, i32),
-    /// 底层绝对坐标操作器。
+    /// 物理→逻辑缩放比。本 crate 把 `窗口相对物理 + 物理 offset` 换算成逻辑坐标后
+    /// 再交给 `screen_operator`（其移动/点击入口统一收**逻辑**坐标）。
+    scale: f32,
+    /// 底层绝对坐标操作器（收逻辑坐标），已用 [`KdeForegrounder`] 组装好闭环读数源。
     operator: screen_operator::ScreenOperator,
 }
 
 impl YdotoolExecutor {
+    /// 构造（不带前台器）：偏移取给定值、scale=1.0。
+    ///
+    /// 注意：不组装 `KdeForegrounder` 时，`ScreenOperator` 的闭环移动读不到光标、
+    /// 会退化到不依赖光标的路径（本机 KWin 下不可用）。实际用前请用
+    /// [`with_foregrounder`] 把目标窗口的前台器装进去。
     pub fn new(window_offset: (i32, i32)) -> Self {
         Self {
             window_offset,
+            scale: 1.0,
             operator: screen_operator::ScreenOperator::new(),
+        }
+    }
+
+    /// 构造并组装桌面闭环：用 [`KdeForegrounder`] 提供「相对移动闭环」的读数来源
+    /// （`cursor_pos`），避开本机失效的 ydotool 绝对移动。
+    ///
+    /// - `window_offset`：窗口左上角在屏幕上的**物理**偏移（KWin 逻辑 × scale）。
+    /// - `scale`：物理→逻辑缩放比（把物理绝对目标换算成逻辑坐标交给 `ScreenOperator`）。
+    /// - `fg`：目标窗口前台器（提供 `cursor_pos` 读数 + `raise` 切前台）。
+    ///
+    /// 组装后 `click_window` 走 `ScreenOperator::click_left_at` → 内部「读当前 + 相对移
+    /// + 原地点」闭环，落点可靠。
+    pub fn with_foregrounder(window_offset: (i32, i32), scale: f32, fg: KdeForegrounder) -> Self {
+        Self {
+            window_offset,
+            scale,
+            operator: screen_operator::ScreenOperator::new().with_foregrounder(fg),
         }
     }
 }
@@ -86,155 +115,24 @@ impl YdotoolExecutor {
 /// 因为「切前台」是 compositor 相关动作（KDE 用 `kdotool`、GNOME 用 `gdbus`、
 /// wlroots 用 `hyprctl` 等），跨桌面不通用，所以做成 trait 由调用方注入；不注入
 /// 时（[`Agent::new`]）视为「调用方已自行保证目标在前台」，Agent 不做任何切换。
-pub trait Foregrounder {
-    /// 把目标窗口切到最前。失败返回错误（如找不到窗口 / compositor 不支持）。
-    fn raise(&self) -> Result<()>;
-}
-
-/// 空前台器：什么都不做。
 ///
-/// 用于「调用方已自行保证目标窗口在前台」的场景（如人工把窗口点前台后再跑
-/// 闭环），或录屏路径下明确选择「不切前台」。
-pub struct NoopForegrounder;
-
-impl Foregrounder for NoopForegrounder {
-    fn raise(&self) -> Result<()> {
-        Ok(())
-    }
-}
-
-/// KDE (Wayland/KWin) 前台器：通过 KWin 的 D-Bus `Scripting` 接口运行一段
-/// JavaScript，把标题/类名包含 `target` 的窗口 `activate()` 到最前。
-///
-/// 为什么用 D-Bus 而非 `kdotool`：`kdotool` 在部分 KDE 安装里没装；而 KWin 的
-/// `org.kde.KWin` D-Bus 服务默认就在，且 `Scripting.loadScript + start` 能直接执行
-/// 窗口管理 JS（`client.activate()` 是 KDE 窗口规则的标准能力，Wayland 下可用）。
-///
-/// 用法：`raise()` 时把内联 JS（含 target 变量）写到临时文件，调
-/// `qdbus6 org.kde.KWin /Scripting loadScript <file> <plugin> && start`，
-/// 完成后 unload 该 plugin 清理。若 KWin 未在运行 / D-Bus 不可用则报错。
-///
-/// 前置：`qdbus6` 在 PATH 中（Qt 工具链自带），且当前是 KDE 会话。
-pub struct KdeForegrounder {
-    /// 窗口标题 / 类名需包含此关键字（如 "testing_08"）。
-    pub target: String,
-}
-
-impl KdeForegrounder {
-    pub fn new(target: impl Into<String>) -> Self {
-        Self {
-            target: target.into(),
-        }
-    }
-
-    /// 生成 KWin 脚本内容：遍历窗口，匹配 target 则置为 active（提到最前）。
-    ///
-    /// 匹配策略：**标题(title)优先，应用ID(app_id)兜底**，且不受列表顺序影响——
-    /// 先在整个列表里找「标题含 target」的窗口；只有完全没找到标题命中时，才退而
-    /// 用「应用ID含 target」兜底。否则若应用ID命中的窗口排在标题命中的前面，会被
-    /// 错误地提前锁定（已踩坑：本机 gpui 的 testing_08 标题为 "testing_08"、但另
-    /// 一个 `class=testing_08 caption=""` 的窗口排在前面，导致激活到空标题那个）。
-    ///
-    /// 注意：本机 KWin（kwin_wayland，Plasma 6）脚本 API 与旧文档不同：
-    /// - 取窗口列表是 `workspace.windowList()`（函数，非 `clientList()`）；
-    /// - 激活窗口是给属性赋值 `workspace.activeWindow = c`（非 `c.activate()` /
-    ///   `activateClient()`，这些在新版本里已不是函数）；
-    /// - 取标题用的是 KWin 属性 `c.caption`、取应用ID用 `c.resourceClass` /
-    ///   `c.resourceName`（这是 KDE 协议里的固定名，下方 JS 不可改；我们自己的
-    ///   局部变量改名为 `title` / `app_id` 仅为可读性）。
-    fn script(&self) -> String {
-        format!(
-            r#"
-const target = "{}";
-const wins = workspace.windowList();
-let byTitle = null;    // 标题命中（优先，不受顺序影响）
-let byAppId = null;    // 应用ID命中（仅当无任何标题命中时兜底）
-for (let i = 0; i < wins.length; i++) {{
-    const c = wins[i];
-    const title = c.caption || "";                          // KWin 固定属性：窗口标题
-    const app_id = c.resourceClass || c.resourceName || ""; // KWin 固定属性：应用ID
-    if (title.includes(target)) {{
-        byTitle = c;   // 标题命中直接记录，后面覆盖式优先
-    }}
-    if (!byAppId && app_id.includes(target)) {{
-        byAppId = c;   // 仅在尚未记录应用ID兜底时记录
-    }}
-}}
-const win = byTitle || byAppId;   // 标题优先，应用ID兜底
-if (win) {{
-    workspace.activeWindow = win;     // 设为活动
-    win.keepAbove = true;             // 强制置顶（盖过其它普通窗口，如编辑器）
-    workspace.raiseWindow(win);       // 提到堆叠最上
-}} else {{
-    throw new Error("KdeForegrounder: 未找到匹配窗口: " + target);
-}}
-"#,
-            self.target
-        )
-    }
-}
-
-impl Foregrounder for KdeForegrounder {
-    fn raise(&self) -> Result<()> {
-        use std::io::Write;
-        // 1. 写临时脚本文件。
-        let mut path = std::env::temp_dir();
-        path.push(format!("ocr_lab_raise_{}.js", std::process::id()));
-        {
-            let mut f = std::fs::File::create(&path)
-                .with_context(|| format!("写 KWin 脚本失败: {}", path.display()))?;
-            f.write_all(self.script().as_bytes())
-                .with_context(|| "写 KWin 脚本内容失败")?;
-        }
-        let plugin = "ocr_lab_raise";
-        // 2. 先尝试 unload 旧实例（忽略失败），再 load + start。
-        let _ = std::process::Command::new("qdbus6")
-            .args(["org.kde.KWin", "/Scripting", "unloadScript", plugin])
-            .output();
-        let load = std::process::Command::new("qdbus6")
-            .args([
-                "org.kde.KWin",
-                "/Scripting",
-                "loadScript",
-                &path.to_string_lossy(),
-                plugin,
-            ])
-            .output()
-            .with_context(|| "调 qdbus6 loadScript 失败（确认 qdbus6 在 PATH 且为 KDE 会话）")?;
-        if !load.status.success() {
-            anyhow::bail!(
-                "KWin loadScript 失败: {}",
-                String::from_utf8_lossy(&load.stderr)
-            );
-        }
-        let start = std::process::Command::new("qdbus6")
-            .args(["org.kde.KWin", "/Scripting", "start"])
-            .output()
-            .with_context(|| "调 qdbus6 start 失败")?;
-        if !start.status.success() {
-            anyhow::bail!(
-                "KWin start 失败: {}",
-                String::from_utf8_lossy(&start.stderr)
-            );
-        }
-        // 3. 清理临时文件（KWin 已读入内容）。
-        let _ = std::fs::remove_file(&path);
-        // 4. 让 KWin 完成 activate()（raise + focus）后再返回，否则紧接着的
-        //    截屏仍会抓到旧的最前窗口。实际是异步重绘，这里稍作等待。
-        std::thread::sleep(std::time::Duration::from_millis(350));
-        Ok(())
-    }
-}
+/// **前台器实现已迁至 `screen_operator`**（操作侧：把窗口提到最前 + 读 KWin 光标/几何，
+/// 是 `screen_operator` 相对移动闭环的读数来源）。这里 re-export 保持业务层兼容调用，
+/// 业务代码继续写 `ocr_agent::KdeForegrounder` / `ocr_agent::Foregrounder` 即可。
+pub use screen_operator::{Foregrounder, KdeForegrounder, NoopForegrounder};
 
 impl Executor for YdotoolExecutor {
     fn click_window(&self, x: u32, y: u32) -> Result<()> {
         let (ox, oy) = self.window_offset;
-        let abs_x = ox + x as i32;
-        let abs_y = oy + y as i32;
-        // 委托给 screen-operator 完成绝对坐标点击（其内部已处理 ydotool 的绝对
-        // 移动语法与左键 0xC0 键码，避开 `-- -a` 形式的 stack smashing 坑）。
+        // 物理绝对 = 窗口相对物理 + 物理 offset；转成逻辑坐标交给 screen-operator
+        // （其 click_left_at 收逻辑坐标）。
+        let abs_x = ((ox + x as i32) as f32 / self.scale).round() as i32;
+        let abs_y = ((oy + y as i32) as f32 / self.scale).round() as i32;
+        // 委托给 screen-operator 完成绝对坐标点击（其内部已处理 ydotool 的相对移动
+        // 闭环与左键 0xC0 键码，避开 `-- -a` 形式的 stack smashing 坑）。
+        let abs_pos = IVec2::new(abs_x, abs_y);
         self.operator
-            .click_left(abs_x, abs_y)
+            .click_left_at(abs_pos)
             .context("YdotoolExecutor 点击失败")
     }
 }
@@ -293,9 +191,9 @@ pub fn infer_window_offset(full: &RgbImage, window: &RgbImage) -> (i32, i32) {
 }
 
 /// 把 capturer 抓来的 `RgbaImage` 转成 `RgbImage`（丢弃 alpha，OCR/颜色分析不需要）。
-pub fn rgba_to_rgb(img: &image::RgbaImage) -> RgbImage {
-    image::DynamicImage::ImageRgba8(img.clone()).to_rgb8()
-}
+///
+/// 实现已迁至 `image_util`（通用图像转换，与业务解耦）；这里 re-export 保持兼容。
+pub use image_util::rgba_to_rgb;
 
 /// 降采样并转灰度（取原图 1/DOWN 的每 DOWNd 像素，亮度 = 0.299R+0.587G+0.114B）。
 fn downscale_gray(img: &RgbImage, down: u32) -> RgbImage {
@@ -391,6 +289,11 @@ pub struct Agent {
     analyzer: LayoutAnalyzer,
     executor: Box<dyn Executor>,
     foregrounder: Option<Box<dyn Foregrounder>>,
+    /// 调试目录（可选）：开启后每个「看」步骤都会把标注图（窗口 OCR 标注 +
+    /// 全屏红框=app位置 + 绿十字=点击落点）存到该目录，便于人工核对识别/定位。
+    debug_dir: Option<PathBuf>,
+    /// 调试帧计数（每次保存标注图自增），用于生成唯一文件名。
+    debug_frame: u32,
 }
 
 impl Agent {
@@ -400,6 +303,8 @@ impl Agent {
             analyzer,
             executor,
             foregrounder: None,
+            debug_dir: None,
+            debug_frame: 0,
         }
     }
 
@@ -413,7 +318,100 @@ impl Agent {
             analyzer,
             executor,
             foregrounder: Some(foregrounder),
+            debug_dir: None,
+            debug_frame: 0,
         }
+    }
+
+    /// 开启调试出图：把每个「看」步骤的标注图存到 `dir`（窗口 OCR 标注 +
+    /// 全屏红框=app位置 + 绿十字=点击落点）。传 `None` 可关闭。
+    pub fn set_debug(&mut self, dir: Option<PathBuf>) {
+        self.debug_dir = dir;
+        self.debug_frame = 0;
+    }
+
+    /// 若开启了调试目录，保存一张标注图并自增帧计数；否则什么都不做。
+    fn save_debug(&mut self, name: &str, img: &RgbImage) -> Option<PathBuf> {
+        let dir = self.debug_dir.as_ref()?;
+        let _ = std::fs::create_dir_all(dir);
+        let fname = format!("live_{:03}_{}", self.debug_frame, name);
+        self.debug_frame += 1;
+        let path = dir.join(&fname);
+        match img.save(&path) {
+            Ok(_) => {
+                eprintln!("[debug] 已保存标注图 -> {}", path.display());
+                Some(path)
+            }
+            Err(e) => {
+                eprintln!("[debug] 保存标注图失败 {}: {}", path.display(), e);
+                None
+            }
+        }
+    }
+
+    /// 在调试目录里存一张「全屏 + 红框(app) + 绿十字(点击落点)」图（配合
+    /// `infer_window_offset` 反推的 offset 与 OCR 命中的控件中心）。
+    fn save_debug_fullscreen(
+        &mut self,
+        full: &RgbImage,
+        offset: (i32, i32),
+        win_size: (u32, u32),
+        hit: Option<&Widget>,
+    ) {
+        if self.debug_dir.is_none() {
+            return;
+        }
+        let mut marked = full.clone();
+        let (ox, oy) = offset;
+        let (ww, wh) = win_size;
+        let x0 = ox.max(0) as u32;
+        let y0 = oy.max(0) as u32;
+        let x1 = (x0 + ww).min(marked.width());
+        let y1 = (y0 + wh).min(marked.height());
+        // 红框：app 位置。
+        for xx in x0..x1 {
+            for yy in [y0, y1.saturating_sub(1)] {
+                if yy < marked.height() {
+                    *marked.get_pixel_mut(xx, yy) = image::Rgb([255, 0, 0]);
+                }
+            }
+        }
+        for yy in y0..y1 {
+            for xx in [x0, x1.saturating_sub(1)] {
+                if xx < marked.width() {
+                    *marked.get_pixel_mut(xx, yy) = image::Rgb([255, 0, 0]);
+                }
+            }
+        }
+        // 绿十字：点击落点（若 OCR 命中目标）。
+        if let Some(w) = hit {
+            let (rx, ry, rww, rhh) = w.rect;
+            let ax = (ox + rx as i32 + rww as i32 / 2).max(0) as u32;
+            let ay = (oy + ry as i32 + rhh as i32 / 2).max(0) as u32;
+            for d in 0..12u32 {
+                for (px, py) in [
+                    (ax.saturating_sub(d), ay),
+                    (ax + d, ay),
+                    (ax, ay.saturating_sub(d)),
+                    (ax, ay + d),
+                ] {
+                    if px < marked.width() && py < marked.height() {
+                        *marked.get_pixel_mut(px, py) = image::Rgb([0, 255, 0]);
+                    }
+                }
+            }
+            eprintln!(
+                "[debug] 目标落点 ≈ ({}, {})（绿十字，应在红框内按钮处）",
+                ax, ay
+            );
+        }
+        self.save_debug("fullscreen.png", &marked);
+    }
+
+    /// 运行中替换执行器（如先以占位执行器构造，待拿到窗口位置后再换上真正
+    /// 带 offset 的 `YdotoolExecutor`）。前台器不受影响。
+    pub fn set_executor(&mut self, executor: Box<dyn Executor>) {
+        self.executor = executor;
     }
 
     /// 把目标窗口切到最前（若装了前台器）。用于「截全屏前」和「操作（点击）前」
@@ -449,6 +447,24 @@ impl Agent {
         let widgets = self.analyzer.analyze(img)?;
         let w = find_widget_by_label(&widgets, target)
             .ok_or_else(|| anyhow::anyhow!("未找到标签匹配 '{target}' 的控件"))?;
+        Self::dispatch(self.executor.as_ref(), w)
+    }
+
+    /// 直接点击已识别好的控件 `w`（不重新 analyze 图片）。
+    ///
+    /// 用于「识别 / 显示 / 点击」必须复用**同一份** OCR 结果的场景：OCR 对同一张图
+    /// 多次 `analyze` 可能因内部状态/非确定性得到不同中心（如 Reload 中心有时 242 有时
+    /// 308），若 debug 显示用一份、点击又 analyze 一份，就会「图上绿十字在按钮上、实际
+    /// 点到的却是另一份偏移中心」——表现为移动探针命中、闭环却 delta=0。本方法让调用方
+    /// 用已经 analyze 过、且已画进 debug 图的那份 `widgets` 去点击，保证所见即所点。
+    ///
+    /// **注意：本方法不调用 `raise_target()`**。调用方若在抓帧前已 raise（如
+    /// `verify_click_stream` 开头就 raise 过），这里**不能再 raise**——本机 KWin 的
+    /// `raiseWindow`+`keepAbove` 会让窗口在点击前被重排/移动，导致「抓帧时算的 offset」
+    /// 与「点击时窗口实际位置」不一致，绿十字（按旧 offset 画）看着在按钮上、实际点击
+    /// 却落到隔壁按钮（曾表现为点 − 号、count 从 100 变 99）。窗口流遮挡无关，点击前
+    /// 无需再次 raise；若独立使用本方法且目标可能不在最前，请自行先 raise。
+    pub fn click_widget(&mut self, w: &Widget) -> Result<()> {
         Self::dispatch(self.executor.as_ref(), w)
     }
 
@@ -585,6 +601,51 @@ impl Agent {
 }
 
 impl Agent {
+    /// 闭环验证（ScreenCast **Monitor 全屏**方案）：用 portal 的 Monitor 源抓全屏
+    /// （与 `verify_click_screenshot` 等价，但走 ScreenCast 接口而非 Screenshot 接口，
+    /// 不会被「截图授权窗口自动关闭」问题困扰；restore_token 同样可持久化免弹窗）。
+    ///
+    /// 与「窗口流」方案的区别：Monitor 全屏图里 `Widget.rect` 直接就是**屏幕绝对坐标**，
+    /// 因此 `YdotoolExecutor` 的 `window_offset` 设为 `(0, 0)` 即可（相对即绝对），
+    /// 无需再查窗口位置。代价是抓取受遮挡影响——故点击前 `click_by_label` 内部会
+    /// `raise_target()` 把目标提到最前，保证抓帧时目标可见、坐标正确。
+    ///
+    /// 典型用法：
+    /// ```ignore
+    /// let cap = ScreenCastCapturer::with_restore_token(token);
+    /// let mut agent = Agent::with_foregrounder(
+    ///     analyzer, Box::new(YdotoolExecutor::new((0, 0))),
+    ///     Box::new(KdeForegrounder::new("testing_08")),
+    /// );
+    /// let r = agent.verify_click_screencast(&cap, "Reload").await?;
+    /// assert_eq!(r.delta(), Some(50));
+    /// ```
+    pub async fn verify_click_screencast(
+        &mut self,
+        cap: &ScreenCastCapturer,
+        label: &str,
+    ) -> Result<VerifyResult> {
+        // 截全屏（Monitor）前必须切前台（否则被挡目标截不到 / 坐标错位）。
+        self.raise_target()?;
+        let (before_rgba, _tok) = cap.capture_fullscreen_token().await?;
+        let img_before = rgba_to_rgb(&before_rgba);
+        let before = self.read_count(&img_before)?;
+        // 点击（click_by_label 内部再 raise 一次 + 用绝对坐标点）。
+        self.click_by_label(&img_before, label)?;
+        // 再切前台，保证点击后抓帧时目标仍可见。
+        self.raise_target()?;
+        let (after_rgba, _tok) = cap.capture_fullscreen_token().await?;
+        let img_after = rgba_to_rgb(&after_rgba);
+        let after = self.read_count(&img_after)?;
+        Ok(VerifyResult {
+            before,
+            after,
+            label: label.to_string(),
+        })
+    }
+}
+
+impl Agent {
     /// 闭环验证（自动抓帧版）：由 `capturer` 自动抓「点击前 / 点击后」两帧，
     /// 省去调用方手搓闭包，**录屏侧完全自动化**。
     ///
@@ -674,6 +735,162 @@ impl Agent {
             after,
             label: label.to_string(),
         })
+    }
+}
+
+impl Agent {
+    /// 闭环验证（ScreenCast 窗口流方案，推荐）：用 portal 的**窗口流**抓 testing_08
+    /// 自身的合成表面（不受遮挡，无需前台、无需全屏截图授权），OCR 得到的是
+    /// **窗口相对坐标**；点击时由 `YdotoolExecutor` 的 `window_offset`（= 窗口在屏幕
+    /// 上的位置，调用方从 `ScreenCastCapturer::capture_app_geom` 拿到的
+    /// `Stream::position()`）换算成绝对坐标注入。
+    ///
+    /// 这是「看 / 操作分离」的标准落地：
+    /// - **看**（识别）：窗口流，遮挡无关，连前台器都不强制需要；
+    /// - **操作**（点击）：Wayland 输入仍要求目标在点击点最上层，故 `click_by_label`
+    ///   内部会再 `raise_target()` 一次。
+    ///
+    /// 调用方职责：
+    /// 1. 用 `ScreenCastCapturer::with_restore_token(token)` 构造 `cap`（首次无 token
+    ///    时弹一次对话框选窗，拿到 token 后持久化，之后全自动不弹窗）；
+    /// 2. 先 `cap.capture_app_geom("")` 拿一次 `position` 与 `restore_token`，据此
+    ///    构造 `YdotoolExecutor::new(position)` 作为 executor（offset = 窗口屏幕位置），
+    ///    并把 token 持久化供下次复用；
+    /// 3. 再调本方法。
+    ///
+    /// 典型用法：
+    /// ```ignore
+    /// let cap = ScreenCastCapturer::with_restore_token(token);
+    /// let (_img, pos, new_token) = cap.capture_app_geom("").await?;
+    /// let exec = YdotoolExecutor::new(pos.unwrap_or((0, 0)));
+    /// let mut agent = Agent::with_foregrounder(analyzer, Box::new(exec),
+    ///     Box::new(KdeForegrounder::new("testing_08")));
+    /// let r = agent.verify_click_stream(&cap, "Reload").await?;
+    /// assert_eq!(r.delta(), Some(50));
+    /// ```
+    ///
+    /// `cap_full`：可选的全屏（Monitor 源）捕获器。若提供且本 Agent 开启了调试出图
+    /// （`set_debug`），则每帧都会额外抓一张全屏，用 `infer_window_offset` 反推窗口在
+    /// 屏幕上的位置，并把「全屏 + 红框(app) + 绿十字(点击落点)」存到调试目录，便于
+    /// 人工核对「看 + 定位」对不对。不传（`None`）则走纯窗口流（无全屏标注图）。
+    ///
+    /// `debug_offset`：debug 全屏标注用的「窗口屏幕位置」(物理像素)。若提供则用此值
+    /// （推荐由 KWin 几何×缩放比算出的稳定真值）画红框/绿十字；不提供则退回
+    /// `infer_window_offset` 图像反推（不稳定，仅供对比）。
+    pub async fn verify_click_stream(
+        &mut self,
+        cap: &ScreenCastCapturer,
+        cap_full: Option<&ScreenCastCapturer>,
+        label: &str,
+        debug_offset: Option<(i32, i32)>,
+    ) -> Result<VerifyResult> {
+        // 「看」采用**两帧策略**：连续抓两帧、间隔 1s、用**第二帧**读数与识别。
+        // 理由：第一帧可能含过渡态（点击前的重绘、画面过度效果如阴影/模糊未稳定）
+        // 或 PipeWire 旧 buffer，第二帧才是稳定画面。点击前/后都如此，保证 before/after
+        // 读的是同一类稳定帧，delta 才可比。debug 模式会把所有抽到的帧都存盘。
+        const FRAME_GAP: std::time::Duration = std::time::Duration::from_secs(1);
+
+        // 1. 看（识别）——窗口流，遮挡无关，无需前台。但仍 raise 一次无妨（双保险）。
+        self.raise_target()?;
+        // 抓两帧 before。
+        let mut before_frames: Vec<RgbImage> = Vec::new();
+        for f in 0..2 {
+            let (rgba, _pos, _tok) = cap.capture_app_geom("").await?;
+            before_frames.push(rgba_to_rgb(&rgba));
+            if f == 0 {
+                std::thread::sleep(FRAME_GAP);
+            }
+        }
+        // 用第二帧（稳定）读数与识别。**只 analyze 一次**，后续 debug 显示与点击都复用
+        // 这份 widgets，避免二次 analyze 漂移（OCR 对同图多次 analyze 可能给出不同中心，
+        // 导致图上绿十字在按钮上、实际点击却偏到另一份偏移中心）。
+        let img_before = before_frames[1].clone();
+        let before_widgets = self.analyzer.analyze(&img_before).unwrap_or_default();
+        let before = self.read_count(&img_before)?;
+
+        // debug：存所有 before 帧（原图 + 标注），并复用同一份 before_widgets 显示/定位。
+        if self.debug_dir.is_some() {
+            for (i, fr) in before_frames.iter().enumerate() {
+                self.save_debug(&format!("window_before_{}.png", i + 1), fr);
+                let ann = ocr_layout::annotate(fr, &before_widgets);
+                self.save_debug(&format!("window_before_{}_annot.png", i + 1), &ann);
+            }
+            eprintln!(
+                "[debug] before 帧2 OCR 共识别 {} 个，标签: {:?}",
+                before_widgets.len(),
+                before_widgets
+                    .iter()
+                    .map(|w| w.label.as_str())
+                    .collect::<Vec<_>>()
+            );
+            if let Some(cf) = cap_full {
+                if let Ok(full_rgba) = cf.capture_fullscreen().await {
+                    let full = rgba_to_rgb(&full_rgba);
+                    let off =
+                        debug_offset.unwrap_or_else(|| infer_window_offset(&full, &img_before));
+                    let hit = find_widget_by_label(&before_widgets, label);
+                    eprintln!(
+                        "[debug] 窗口屏幕位置 offset=(x={}, y={})（{}）",
+                        off.0,
+                        off.1,
+                        if debug_offset.is_some() {
+                            "KWin真值"
+                        } else {
+                            "图像反推"
+                        }
+                    );
+                    self.save_debug_fullscreen(
+                        &full,
+                        off,
+                        (img_before.width(), img_before.height()),
+                        hit,
+                    );
+                }
+            }
+        }
+
+        // 2. 操作——用**同一份** before_widgets 找目标并点击（所见即所点）。
+        let hit = find_widget_by_label(&before_widgets, label)
+            .ok_or_else(|| anyhow::anyhow!("未找到标签匹配 '{label}' 的控件"))?;
+        self.click_widget(hit)?;
+
+        // 3. 点后**不再 raise**：窗口流遮挡无关，且点击前已 raise 过一次，窗口仍在最前。
+        //    直接抓两帧 after（同样间隔 1s、用第二帧），避开点击后的过渡态 / 旧 buffer。
+        let mut after_frames: Vec<RgbImage> = Vec::new();
+        for f in 0..2 {
+            let (rgba, _pos, _tok) = cap.capture_app_geom("").await?;
+            after_frames.push(rgba_to_rgb(&rgba));
+            if f == 0 {
+                std::thread::sleep(FRAME_GAP);
+            }
+        }
+        if self.debug_dir.is_some() {
+            for (i, fr) in after_frames.iter().enumerate() {
+                self.save_debug(&format!("window_after_{}.png", i + 1), fr);
+                let ws = self.analyze_for_debug(fr);
+                eprintln!(
+                    "[debug] after 帧{} OCR 共识别 {} 个，标签: {:?}",
+                    i + 1,
+                    ws.len(),
+                    ws.iter().map(|w| w.label.as_str()).collect::<Vec<_>>()
+                );
+                let ann = ocr_layout::annotate(fr, &ws);
+                self.save_debug(&format!("window_after_{}_annot.png", i + 1), &ann);
+            }
+        }
+        let img_after = after_frames[1].clone();
+        let after = self.read_count(&img_after)?;
+
+        Ok(VerifyResult {
+            before,
+            after,
+            label: label.to_string(),
+        })
+    }
+
+    /// 调试辅助：仅做 OCR 识别，不点击（避免在调试模式下重复分析或副作用）。
+    fn analyze_for_debug(&mut self, img: &RgbImage) -> Vec<Widget> {
+        self.analyzer.analyze(img).unwrap_or_default()
     }
 }
 

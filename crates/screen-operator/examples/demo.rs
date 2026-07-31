@@ -11,6 +11,7 @@
 //! 前置：ydotool 已安装且 `ydotoold` 在运行
 //! （`systemctl --user enable --now ydotool.service`）。
 
+use glam::IVec2;
 use screen_operator::{MouseButton, ScreenOperator};
 
 fn main() -> anyhow::Result<()> {
@@ -35,31 +36,31 @@ fn main() -> anyhow::Result<()> {
 
     match op.as_str() {
         "move" => {
-            let (x, y) = parse_xy(op_args)?;
-            operator.move_to(x, y)?;
-            println!("已移动到 ({x}, {y})");
+            let pos = parse_xy(op_args)?;
+            operator.move_to_abs(pos)?;
+            println!("已移动到 ({pos})");
         }
         "click" => {
-            let (x, y) = parse_xy(op_args)?;
-            operator.click_left(x, y)?;
-            println!("已左键单击 ({x}, {y})");
+            let pos = parse_xy(op_args)?;
+            operator.click_left_at(pos)?;
+            println!("已左键单击 ({pos})");
         }
         "right" => {
-            let (x, y) = parse_xy(op_args)?;
-            operator.click(x, y, MouseButton::Right)?;
-            println!("已右键单击 ({x}, {y})");
+            let pos = parse_xy(op_args)?;
+            operator.click_at(pos, MouseButton::Right)?;
+            println!("已右键单击 ({pos})");
         }
         "double" => {
-            let (x, y) = parse_xy(op_args)?;
-            operator.double_click(x, y, MouseButton::Left)?;
-            println!("已左键双击 ({x}, {y})");
+            let pos = parse_xy(op_args)?;
+            operator.double_click(pos, MouseButton::Left)?;
+            println!("已左键双击 ({pos})");
         }
         "drag" => {
             if op_args.len() < 4 {
                 anyhow::bail!("drag 需要 4 个参数: x1 y1 x2 y2");
             }
-            let from = (op_args[0].parse()?, op_args[1].parse()?);
-            let to = (op_args[2].parse()?, op_args[3].parse()?);
+            let from = IVec2::new(op_args[0].parse()?, op_args[1].parse()?);
+            let to = IVec2::new(op_args[2].parse()?, op_args[3].parse()?);
             operator.drag(from, to, MouseButton::Left)?;
             println!("已从 {:?} 拖拽到 {:?}", from, to);
         }
@@ -88,9 +89,10 @@ fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-fn parse_xy(args: &[String]) -> anyhow::Result<(i32, i32)> {
+fn parse_xy(args: &[String]) -> anyhow::Result<IVec2> {
     if args.len() < 2 {
         anyhow::bail!("需要 2 个坐标参数: x y");
     }
-    Ok((args[0].parse()?, args[1].parse()?))
+    let xy = IVec2::new(args[0].parse()?, args[1].parse()?);
+    Ok(xy)
 }
