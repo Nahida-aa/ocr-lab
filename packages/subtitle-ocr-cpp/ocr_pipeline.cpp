@@ -59,6 +59,17 @@ constexpr float BOX_THRESH = 0.5f;
 constexpr float UNCLIP_RATIO = 1.6f;
 constexpr int MAX_CANDIDATES = 1000;
 
+/// 读取 OCR_BOX_THRESH 环境变量覆盖检测框阈值（默认 0.5，与 PP-OCR 官方一致）。
+/// 用于与 rust 实现（BOX_THRESH=0.6）做对照实验：设 OCR_BOX_THRESH=0.6 即可让
+/// cpp 与 rust 用同一阈值，隔离阈值差异对 spurious/CER 的影响。
+static float boxThreshFromEnv() {
+    if (const char* v = std::getenv("OCR_BOX_THRESH")) {
+        float f = (float)std::atof(v);
+        if (f > 0.0f && f < 1.0f) return f;
+    }
+    return BOX_THRESH;
+}
+
 struct OCRResult {
     std::string text;
     struct Segment {
@@ -628,7 +639,7 @@ static OCRResult runOcr(
     // 然后在下面的 for 循环中 + yOffset 映射回原图（跟 Node.js 一致）
     std::cerr << "[OCR] dbPostprocess " << outH << "x" << outW << " (orig " << detPrep.origH << "x" << detPrep.origW << ")..." << std::endl;
     auto boxesPts = dbPostprocess(heatmapData, outH, outW, detPrep.origH, detPrep.origW,
-                                  DET_THRESH, BOX_THRESH, UNCLIP_RATIO, MAX_CANDIDATES);
+                                  DET_THRESH, boxThreshFromEnv(), UNCLIP_RATIO, MAX_CANDIDATES);
 
     // NMS-like overlapping box filter — 非 Python 步骤，但能减少 FP。
     // 用 --no-nms 参数关闭以与 Python 行为完全一致。

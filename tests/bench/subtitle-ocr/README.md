@@ -83,42 +83,66 @@ sha256  344316821096379954e84a9bc1a437814ab4c5640b44fdb81792545480b76908
 ### rust 实现与 cpp 的残余差异归因（实测结论）
 
 三套实现共享同一份 rapidocr 权重，单帧识别质量高度一致。逐帧对比 rust 与 cpp
-（fps=2 / text-score 0.45 / subtitle-only，同机同视频）的实测：
+（fps=2 / text-score 0.45 / subtitle-only，同机同视频）的实测——**注意当前提交的
+rust 代码完全确定（连跑 3 次逐位一致），不是 run 间抖动**：
 
-| 指标 | cpp | rust（现状） |
+| 指标 | cpp | rust（当前提交） |
 | --- | --- | --- |
-| CER(norm) | 0.36% | 0.54% |
+| CER(norm) | 0.36% | 0.72% |
 | CER(paired) | 0.36% | **0.18%（优于 cpp）** |
-| spurious | 0 | 2 |
-| zero-dur | 4 | 1 |
-| start Δ | +221ms | +221ms（相同，印证测试采样） |
+| spurious | 0 | 4 |
+| missed | 0 | 0 |
+| split / merged | 0 / 0 | 1 / 0 |
+| zero-dur | 4 | 6 |
+| IoU(mean) | 0.67 | 0.66 |
+| start Δ | +221ms | +228ms（同，印证测试采样） |
 
-已逐项排查并尝试对齐、均以证据否定/回退的点：
+> 历史记录过 0.54% / 2 spurious，但那是一次早期测量，当前代码无法复现（连跑 3
+> 次都是 0.72% / 4 spurious）。以当前可复现数字为准。
+
+#### 4 个 spurious 已定位到具体帧（bench 抽帧法：`select='not(mod(n,15))'`）
+
+用 bench 的抽帧方式复现，rust 在 4 帧各检出**一个孤立字符**，cpp 在同一帧检出空框
+或什么都不检：
+
+| 帧 | rust 检出 | conf | cpp 检出 |
+| --- | --- | --- | --- |
+| frame_00225 | `V` | 0.58 | 空框 `('',0)` |
+| frame_00251 | `3` | 0.45 | 空框 |
+| frame_00262 | `E` | 0.67 | 空框 |
+| frame_00300 | `9` | 0.76 | 空框 |
+
+frame_00225 的 rust 框是 `[894,613]-[913,640]`（约 19×26px 小框，字幕区 y 613-640）。
+这些是 rust det 用**轴对齐包围盒 + 简化 unclip** 让一个小文本状轮廓成框，cpp 用
+`minAreaRect` + 标准 unclip 则压掉了（box_score 低、或框未形成）。`--no-nms` 下
+依然存在，与 NMS 无关。
+
+#### 已逐项排查并尝试对齐、均以证据否定/回退的点
 
 1. **抽帧策略 / start bias**：属测试驱动层（见上「谁是被测对象」），非实现差异。
-2. **det 缩放尺寸约定**（`det_target_size`）：旧实现把图压到 384×736，与 cpp
-   的 736×1312 不符。已对齐到 cpp 的 `round(dim*ratio/32)*32`（`ratio=736/short`
-   或 1.0）——但实测**未消除** spurious，仅让输入尺寸一致。保留该项对齐。
-3. **det 框打分**（`box_score_fast`）：rust 旧的自写旋转矩形采样已替换为官方
-   `rapidocr_onnxruntime/ch_ppocr_v3_det/utils.py` 的 `box_score_fast`（即
-   PaddleOCR 社区公认实现，cpp 注释亦确认同源）——实测**未消除** spurious。保留。
-4. **det 缩放插值核**：cpp 用 opencv `cv::resize(INTER_LINEAR)`，rust 原用
-   `image` crate 的 `Triangle`。曾切换 rust 到 opencv 双线性以严格一致——
-   **实测反而更差**（CER(norm) 0.54%→0.89%、spurious 2→5）。**已回退**到 `Triangle`。
-5. **det 后处理几何**：曾移植 cpp 的 `min_area_rect`（旋转卡壳）+ `offsetPolygon`
-   （顶点法线外扩）到 rust，逐位复刻 cpp 的 `minAreaRect → box_score → unclip →
-   再 minAreaRect` 管线——**实测反而更差**（CER(paired) 0.18%→0.36%、CER(norm)
-   0.54%→3.22%、zero-dur 1→7、RTF 0.82→0.94）。自写旋转矩形与 cv::minAreaRect
-   的 width/height/angle 归一化约定不一致，导致框角点偏离、识别退化。**已回退**
-   到轴对齐包围盒 + 矩形 unclip。
+2. **det 缩放尺寸约定**（`det_target_size`）：已对齐到 cpp 的
+   `round(dim*ratio/32)*32`（`ratio=736/short` 或 1.0）——实测**未消除** spurious。
+3. **det 框打分**（`box_score_fast`）：已替换为官方
+   `rapidocr_onnxruntime/ch_ppocr_v3_det/utils.py` 的 `box_score_fast`——实测
+   **未消除** spurious。
+4. **det 缩放插值核**：cpp 用 opencv `cv::resize(INTER_LINEAR)`，rust 用
+   `image` 的 `Triangle`。曾切换 rust 到 opencv 双线性——**反而更差**（0.72%→0.89%、
+   spurious 4→5）。**已回退**到 `Triangle`。
+5. **BOX_THRESH**：cpp=0.5、rust=0.6。曾给 cpp 加 `OCR_BOX_THRESH` 环境变量设成
+   0.6 与 rust 对齐——cpp 结果**完全不变**（仍是 0 spurious / 0.36%），证明阈值差异
+   不是 spurious 来源。cpp 侧该环境变量可保留（默认仍 0.5）。
+6. **det 后处理几何**：曾移植 cpp 的 `min_area_rect`（旋转卡壳）+ `offsetPolygon`
+   到 rust——**反而更差**（CER(paired) 0.18%→0.36%、CER(norm) 0.72%→3.22%、
+   zero-dur 6→7）。自写旋转矩形与 cv::minAreaRect 的 width/height/angle 归一化约定
+   不一致。**已回退**到轴对齐包围盒 + 矩形 unclip。
 
-**结论**：rust 与 cpp 的残余差异（2 个 spurious、少量 zero-dur）经多轮逐项对齐
-（缩放尺寸、box_score、缩放核、后处理几何）均未能收敛——每次让 rust 更贴近 cpp
-的改动要么无变化、要么反而变差。rust 的 `CER(paired)=0.18%` 已稳定优于 cpp 的
-0.36%，识别质量不是问题；残余差异属于临界框（spurious）在 run 间 2↔4 抖动的
-噪声，不值得继续调 det 核心。若要真正逐位对齐 cpp 几何，需复刻 OpenCV 的
-`cv::minAreaRect` 归一化约定（`[-90,0)` 角、width≥height 交换），而非简化的旋转
-卡壳——但收益未知，且当前 rust 在关键指标上已优于 cpp。
+**结论**：rust 与 cpp 的残余差异是 **4 个确定性 spurious（孤立 V/3/E/9）+ 6 个
+zero-dur**，根源是 det 后处理的**几何差异**（轴对齐包围盒 vs `minAreaRect`）——rust
+的简化几何会让个别小文本状轮廓成框、并被 rec 读成孤立字符，cpp 的几何则压掉。
+这不是识别质量问题：rust 的 `CER(paired)=0.18%` 稳定优于 cpp 的 0.36%，漏检 0。
+若要消除这 4 个 spurious，需让 rust 的 det 几何与 cpp 完全一致——但之前用
+`packages/geometry` 的 `min_area_rect` 接入时因归一化约定差异反而全面退化，故维持
+轴对齐现状。这个 tradeoff（4 个 spurious vs 更优的 paired CER）当前判断为可接受。
 
 ## 性能注意事项
 
