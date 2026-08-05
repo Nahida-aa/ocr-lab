@@ -29,17 +29,17 @@ pub const REC_NORM: ([f32; 3], [f32; 3]) = ([0.5, 0.5, 0.5], [0.5, 0.5, 0.5]);
 ///
 /// 返回 `(chw_tensor, resized_h, resized_w)`，其中 tensor 为 `[1,3,H,W]`。
 pub fn preprocess_det(img: &Array3<u8>) -> (Array4<f32>, usize, usize) {
-    let (h, w, _) = img.dim();
+    let (h, w, c) = img.dim();
     let (nh, nw) = det_target_size(h, w);
-    // det 用 image crate 的 Triangle 双线性缩放。曾尝试换成 opencv INTER_LINEAR
-    // （与 cpp 的 cv::resize 严格一致）以对齐热力图，但实测让 rust 的聚合指标
-    // 反而偏离 cpp（CER(norm) 0.54%→0.89%、spurious 2→5）——因为 rust 的 det
-    // 后处理几何（轮廓轴对齐包围盒而非 minAreaRect + 不同 unclip）与 cpp 不同，
-    // 仅靠对齐缩放核无法收敛，故回退到 Triangle。真正的残余差异在几何，不在核。
-    let resized = resize_bilinear(img, nh, nw);
+    // det 用 geometry::imgproc 的纯 Rust SIMD 双线性缩放（half-pixel，对齐 cpp 的
+    // cv::resize INTER_LINEAR）。曾用 image crate 的 Triangle 核；现改为 bilinear 对齐
+    // cpp，需重测基准（见 bench README）。
+    let flat: &[u8] = img.as_slice().unwrap();
+    let resized = geometry::imgproc::resize_bilinear_hwc(flat, w, h, c, nw, nh);
     let mean = [0.485_f32, 0.456, 0.406];
     let std = [0.229_f32, 0.224, 0.225];
-    let chw = normalize_chw(&resized, &mean, &std);
+    let chw_flat = geometry::imgproc::normalize_chw(&resized, nh, nw, c, &mean, &std);
+    let chw = Array4::from_shape_vec((1, c, nh, nw), chw_flat).expect("CHW 张量形状");
     (chw, nh, nw)
 }
 

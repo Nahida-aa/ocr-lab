@@ -115,23 +115,35 @@ INTER_LINEAR）又调显式 `warp_perspective`（INTER_CUBIC）**，同一次透
 
 | 步骤 | 耗时 | 说明 |
 | --- | --- | --- |
-| `pre_det`（缩放 + 归一化） | **~128ms** | ⚠️ 见下方「优化点」 |
+| `pre_det`（缩放 + 归一化） | **~44ms** | imgproc SIMD（原 128ms，见「优化点」） |
 | det 推理 | ~387ms | 大头，onnxruntime |
 | db_postprocess | ~8ms | findContours + 几何 |
 | crop（warp） | ~1.6ms | cv::warpPerspective |
 | cls 推理 | ~2.2ms | |
 | preprocess_rec | ~0.8ms | |
 | rec 推理 | ~16ms | |
-| **合计** | **~547ms** | |
+| **合计** | **~520ms** | |
 
 > 注：以上含模型加载（CLI 每次启动加载一次）。全量基准里模型只加载一次、启动开销
 > 摊薄，单帧推理纯看 det 387ms + 其余 ~30ms ≈ 420ms。
 
-**优化点（`pre_det` 128ms）**：`preprocess_det` 用 `image` crate 的 Triangle resize
-+ 手动逐像素 `normalize_chw`，**无 SIMD**；cpp 用 OpenCV SIMD `cv::resize`（<5ms）。
-这是 rust 里唯一明显慢于 cpp 的步骤。改用 OpenCV 绑定 resize 可降 ~120ms/帧，但会
-改变 det 缩放核（此前 Triangle vs bilinear 对 spurious 有细微影响，见 bench README），
-需权衡。
+**优化点（`pre_det` 128ms）**：细分实测 `pre_det` ≈ 128ms，其中 **resize 71ms**、
+**normalize 14ms**（余下为 det 输入张量构造等）。已用 `geometry::imgproc`（纯 Rust
+SIMD，`wide` crate）实现 bilinear resize + normalize 后：
+
+| 步骤 | 旧（image Triangle） | 新（imgproc SIMD bilinear） |
+| --- | --- | --- |
+| resize | 71ms | **34.8ms** |
+| normalize | 14ms | **8.5ms** |
+| **pre_det 合计** | **128ms** | **43.8ms**（-66%） |
+
+同时把 det 缩放核从 Triangle 改为 bilinear（对齐 cpp 的 `cv::resize` INTER_LINEAR，
+half-pixel 坐标）。**全量基准确认 spurious/CER 完全不变**（CER 0.36%、spurious 0、
+missed 0、segs 75）——因为其他环节都已对齐 cpp，bilinear 是正确选择。
+
+resize 仍 ~35ms 未到 cpp 的 <5ms，因为 SIMD 里 8 像素的 gather（4 角点采样）仍是
+标量索引（`wide` 无 gather 指令）。进一步优化需手写行缓存 + 更紧的 SIMD，或接受
+当前 -66% 的收益。归一化（8.5ms）已用 SIMD。
 
 ## 三、依赖与分层
 

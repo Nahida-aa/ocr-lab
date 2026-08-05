@@ -16,6 +16,11 @@
 //! width/height/angle 约定），可直接作为 det 几何层的基础。若要替换 det.rs
 //! 现有轴对齐包围盒，需同步改写 `db_postprocess` 并验证基准指标（之前的尝试
 //! 因几何约定混用而回归，见 `rapidocr-ort/src/det.rs` 顶部注释）。
+//!
+//! 另含 `imgproc` 模块：纯 Rust SIMD 图像像素算子（双线性缩放 / 归一化），
+//! 替代 OpenCV 绑定的像素级处理，进一步摆脱 opencv 依赖。
+
+pub mod imgproc;
 
 use glam::Vec2;
 

@@ -13,3 +13,6 @@ path = "src/lib.rs"
 # 二维向量 / 几何运算（凸包、最小外接矩形、多边形偏移等）。
 # 纯 Rust、SIMD 友好的 glam，替代/降低对 opencv 绑定在几何层面的依赖。
 glam = { workspace = true }
+# 便携 SIMD（stable，不用 nightly）：用于 imgproc 模块的逐像素算子（双线性
+# resize / 归一化），替代 opencv 的 SIMD resize，进一步摆脱 opencv 依赖。
+wide = "1.6"
