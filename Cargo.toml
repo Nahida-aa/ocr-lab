@@ -2,7 +2,7 @@
 resolver = "3"
 members = [
     "packages/rapidocr-ort", "tools/gen_ui_img", "tools/accel-set", "packages/subtitle-ocr",
-    "packages/geometry",
+    "packages/geometry", "packages/subtitle-finder",
     # 基准测试驱动（独立 cargo 包，见 tests/bench/subtitle-ocr）。
     # 不属于常规构建目标，故不放进 default-members。
     "tests/bench/subtitle-ocr",
@@ -59,6 +59,8 @@ glam = "0.33.2"
 # 纯 Rust 高性能线性代数（faer）。作为通用底座，替代/降低对 opencv 在矩阵运算
 # （如透视变换 getPerspectiveTransform）上的依赖。SIMD/多线程优化。
 faer = "0.24.4"
+# 视频解码（subtitle-finder 逐帧 30fps 用）。
+ffmpeg-next = "9.0.0"
 # PP-OCR det/rec/cls 引擎（onnxruntime 推理 + DB 后处理）。
 # 跨包共享，统一走 workspace，改 path/版本只动这一处。
 rapidocr-ort = { path = "packages/rapidocr-ort" }

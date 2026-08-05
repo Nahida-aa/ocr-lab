@@ -1,0 +1,26 @@
+[package]
+name = "subtitle-finder"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description.workspace = true
+
+[lib]
+name = "subtitle_finder"
+path = "src/lib.rs"
+
+[dependencies]
+# 几何 / SIMD 像素算子（交集、投影等）。
+geometry = { workspace = true }
+# 图像读取（RGB HWC u8）。
+image = "0.25"
+# 张量 / 序列化 / 错误链。
+ndarray = "0.17"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow.workspace = true
+# 连通域（文字块检测），替代手写 CMyClosedFigure。
+opencv = { workspace = true }
+# 视频逐帧解码（30fps）。
+ffmpeg-next = { workspace = true }
