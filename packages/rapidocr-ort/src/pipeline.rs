@@ -54,32 +54,6 @@ fn get_perspective_transform(src: &[Point2f; 4], dst: &[Point2f; 4]) -> [[f64; 3
     ]
 }
 
-/// 求 3×3 齐次矩阵的逆（用于透视变换的反向映射）。返回行优先 [[f64;3];3]。
-fn invert_h3(m: &[[f64; 3]; 3]) -> [[f64; 3]; 3] {
-    let (a, b, c) = (m[0][0], m[0][1], m[0][2]);
-    let (d, e, f) = (m[1][0], m[1][1], m[1][2]);
-    let (g, h, i) = (m[2][0], m[2][1], m[2][2]);
-    let det = a * (e * i - f * h) - b * (d * i - f * g) + c * (d * h - e * g);
-    let inv = 1.0 / det;
-    [
-        [
-            (e * i - f * h) * inv,
-            (c * h - b * i) * inv,
-            (b * f - c * e) * inv,
-        ],
-        [
-            (f * g - d * i) * inv,
-            (a * i - c * g) * inv,
-            (c * d - a * f) * inv,
-        ],
-        [
-            (d * h - e * g) * inv,
-            (b * g - a * h) * inv,
-            (a * e - b * d) * inv,
-        ],
-    ]
-}
-
 /// 透视变换裁剪（对应 cpp 的 `warpPerspective(INTER_CUBIC, BORDER_REPLICATE)`）。
 ///
 /// 把四边形 `polygon`（tl-tr-br-bl）矫正成 `dst_w×dst_h` 的水平矩形。直接用
@@ -150,6 +124,7 @@ fn warp_perspective(img: &Array3<u8>, polygon: &[Point2f; 4], dst_w: usize, dst_
 }
 
 /// OpenCV `interpolateCubic`（A = -0.75）的 4 个三次卷积系数，`x∈[0,1)` 为分数位。
+#[cfg(test)]
 fn cubic_coeffs(x: f64) -> [f64; 4] {
     const A: f64 = -0.75;
     let x1 = x + 1.0;

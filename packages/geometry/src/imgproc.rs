@@ -16,9 +16,12 @@ use wide::f32x8;
 /// `sy = (oy+0.5)*sh/dh - 0.5`，`sx = (ox+0.5)*sw/dw - 0.5`，四邻加权（越界 clamp
 /// 到边缘，等价 BORDER_REPLICATE）。
 ///
-/// 实现分两段：
-/// - 先按行/列预计算好所有 (sy,y0,y1,wy) 与 (sx,x0,x1,wx)，避免每像素重算；
-/// - 主体用 `f32x8` 一次处理 8 个输出像素，SIMD 加速权重计算与加权求和。
+/// 实现分三段（OpenCV 的可分离双线性）：
+/// - 预计算行/列映射；
+/// - **水平插值**：对每条被引用的源行，把该行水平插值成 `dw` 宽的 f32 中间行，
+///   用行缓存避免重复（多个输出行共享同一 y0/y1 时只算一次）；
+/// - **垂直插值**：两行中间结果按 wy 混合（纯 SIMD，连续 load）。
+/// 这样每输出像素只需 1 次取值（水平插值阶段），垂直阶段连续 SIMD。
 pub fn resize_bilinear_hwc(
     src: &[u8],
     sw: usize,
@@ -30,7 +33,7 @@ pub fn resize_bilinear_hwc(
     assert_eq!(src.len(), sw * sh * c);
     let mut dst = vec![0u8; dw * dh * c];
 
-    // 预计算行映射。
+    // 预计算行映射（垂直）。
     let sy_scale = sh as f32 / dh as f32;
     let sx_scale = sw as f32 / dw as f32;
     let mut rows = vec![(0usize, 0usize, 0.0f32); dh];
@@ -41,6 +44,7 @@ pub fn resize_bilinear_hwc(
         let y1 = (y0 + 1).min(sh - 1);
         rows[oy] = (y0, y1, sy - y0 as f32);
     }
+    // 预计算列映射（水平）：每输出列 ox 的 (x0, x1, wx)。
     let mut cols = vec![(0usize, 0usize, 0.0f32); dw];
     for ox in 0..dw {
         let sx = (ox as f32 + 0.5) * sx_scale - 0.5;
@@ -50,68 +54,83 @@ pub fn resize_bilinear_hwc(
         cols[ox] = (x0, x1, sx - x0 as f32);
     }
 
-    // 逐通道，SIMD 一次 8 个输出像素。
+    // 水平插值：把源行 y 的通道 ch 水平插值成 f32[dw]。
+    // SIMD：对连续的输出列，源行内 load 是连续的（同 channel，stride c），
+    // 用 f32x8 一次算 8 列（取 x0/x1 位置的值仍标量 gather，但每源行只算一次）。
+    fn interp_row(src: &[u8], sw: usize, c: usize, y: usize, ch: usize, cols: &[(usize, usize, f32)]) -> Vec<f32> {
+        let dw = cols.len();
+        let row_base = y * sw;
+        let mut row = vec![0.0f32; dw];
+        // SIMD 主体：一次 8 列。gather 用标量收集 x0/x1 的 8 个值。
+        let mut ox = 0usize;
+        while ox + 8 <= dw {
+            let mut a0 = [0.0f32; 8];
+            let mut a1 = [0.0f32; 8];
+            let mut wx = [0.0f32; 8];
+            for k in 0..8 {
+                let (x0, x1, w) = cols[ox + k];
+                a0[k] = src[(row_base + x0) * c + ch] as f32;
+                a1[k] = src[(row_base + x1) * c + ch] as f32;
+                wx[k] = w;
+            }
+            let a0v = f32x8::from(a0);
+            let a1v = f32x8::from(a1);
+            let wxv = f32x8::from(wx);
+            let out = a0v.mul_add(-wxv, a0v) + a1v * wxv; // a0*(1-wx)+a1*wx
+            let out: [f32; 8] = out.into();
+            for k in 0..8 {
+                row[ox + k] = out[k];
+            }
+            ox += 8;
+        }
+        // 尾部标量。
+        while ox < dw {
+            let (x0, x1, w) = cols[ox];
+            let a0 = src[(row_base + x0) * c + ch] as f32;
+            let a1 = src[(row_base + x1) * c + ch] as f32;
+            row[ox] = a0 * (1.0 - w) + a1 * w;
+            ox += 1;
+        }
+        row
+    }
+
+    // 行缓存：源行 y -> 水平插值结果（f32[dw]）。不同 ch 复用同一个缓存数组。
+    // 注意：每通道 ch 需要独立缓存（值不同），这里在 ch 循环内重建。
     for ch in 0..c {
-        let src_off = |y: usize, x: usize| (y * sw + x) * c + ch;
-        // HWC 输出像素 (oy,ox) 的通道 ch 在 dst[(oy*dw+ox)*c + ch]。
-        let dst_off = |oy: usize, ox: usize| (oy * dw + ox) * c + ch;
+        // 缓存：row_cache[y] 存放源行 y 的水平插值（若 None 则未算）。
+        let mut row_cache: Vec<Option<Vec<f32>>> = vec![None; sh];
         for oy in 0..dh {
             let (y0, y1, wy) = rows[oy];
-            // 每 8 个输出像素一向量。
+            if row_cache[y0].is_none() {
+                row_cache[y0] = Some(interp_row(src, sw, c, y0, ch, &cols));
+            }
+            if row_cache[y1].is_none() {
+                row_cache[y1] = Some(interp_row(src, sw, c, y1, ch, &cols));
+            }
+            let r0 = row_cache[y0].as_ref().unwrap();
+            let r1 = row_cache[y1].as_ref().unwrap();
+            let wyv = f32x8::splat(wy);
+            let one = f32x8::splat(1.0);
+            // 垂直混合，SIMD 连续。
             let mut ox = 0usize;
             while ox + 8 <= dw {
-                // 取 8 个输出像素的列权重。
-                let mut sx0 = [0usize; 8];
-                let mut sx1 = [0usize; 8];
-                let mut wx = [0.0f32; 8];
-                for k in 0..8 {
-                    let (a, b, w) = cols[ox + k];
-                    sx0[k] = a;
-                    sx1[k] = b;
-                    wx[k] = w;
-                }
-                // 采集 4 个角点的 8 像素。
-                let a = f32x8::from(collected(src, src_off, y0, &sx0));
-                let b = f32x8::from(collected(src, src_off, y0, &sx1));
-                let cc = f32x8::from(collected(src, src_off, y1, &sx0));
-                let d = f32x8::from(collected(src, src_off, y1, &sx1));
-                let wx8 = f32x8::from(wx);
-                let wy8 = f32x8::splat(wy);
-                // 双线性：top = a*(1-wx)+b*wx；bot = cc*(1-wx)+d*wx；out = top*(1-wy)+bot*wy
-                let top = a.mul_add(-wx8, a) + b * wx8; // a*(1-wx)+b*wx
-                let bot = cc.mul_add(-wx8, cc) + d * wx8;
-                let out = top.mul_add(-wy8, top) + bot * wy8;
+                let a = f32x8::from([r0[ox], r0[ox + 1], r0[ox + 2], r0[ox + 3], r0[ox + 4], r0[ox + 5], r0[ox + 6], r0[ox + 7]]);
+                let b = f32x8::from([r1[ox], r1[ox + 1], r1[ox + 2], r1[ox + 3], r1[ox + 4], r1[ox + 5], r1[ox + 6], r1[ox + 7]]);
+                let out = a.mul_add(one - wyv, b * wyv); // a*(1-wy)+b*wy
                 let out: [f32; 8] = out.into();
                 for k in 0..8 {
-                    dst[dst_off(oy, ox + k)] = out[k].round().clamp(0.0, 255.0) as u8;
+                    dst[(oy * dw + ox + k) * c + ch] = out[k].round().clamp(0.0, 255.0) as u8;
                 }
                 ox += 8;
             }
-            // 尾部不足 8 个的标量处理。
             while ox < dw {
-                let (x0, x1, wx) = cols[ox];
-                let a = src[src_off(y0, x0)] as f32;
-                let b = src[src_off(y0, x1)] as f32;
-                let cc = src[src_off(y1, x0)] as f32;
-                let d = src[src_off(y1, x1)] as f32;
-                let top = a * (1.0 - wx) + b * wx;
-                let bot = cc * (1.0 - wx) + d * wx;
-                let val = top * (1.0 - wy) + bot * wy;
-                dst[dst_off(oy, ox)] = val.round().clamp(0.0, 255.0) as u8;
+                let val = r0[ox] * (1.0 - wy) + r1[ox] * wy;
+                dst[(oy * dw + ox) * c + ch] = val.round().clamp(0.0, 255.0) as u8;
                 ox += 1;
             }
         }
     }
     dst
-}
-
-/// 按索引从 src 采集 8 个像素值（SIMD gather 的标量替代）。
-fn collected(src: &[u8], off: impl Fn(usize, usize) -> usize, y: usize, xs: &[usize; 8]) -> [f32; 8] {
-    let mut r = [0.0f32; 8];
-    for k in 0..8 {
-        r[k] = src[off(y, xs[k])] as f32;
-    }
-    r
 }
 
 /// HWC u8 → CHW f32 归一化 `(x/255 - mean)/std`。SIMD 加速。
@@ -215,5 +234,23 @@ mod tests {
         ];
         let out = resize_bilinear_hwc(&src, 2, 2, 2, 2, 2);
         assert_eq!(out, src, "same-size resize 应保持每个通道值");
+    }
+
+    #[test]
+    fn resize_vertical_downscale() {
+        // 2x3 单通道 → 2x1，验证垂直缩放。
+        //   src: y0=[10,20], y1=[30,40], y2=[50,60]（2 宽 3 高）
+        let src2 = [10u8, 20, 30, 40, 50, 60];
+        let out2 = resize_bilinear_hwc(&src2, 2, 3, 1, 2, 1);
+        // oy=0: sy=(0.5)*3/1-0.5=1.0 → y0=1,y1=min(2,2)=2,wy=0 → 源行1 = [30,40]
+        assert_eq!(out2, [30, 40], "垂直 half-pixel 应取到中间行");
+    }
+
+    #[test]
+    fn resize_horizontal_interpolate() {
+        // 3x1 灰度 → 1x1：sx=(0.5)*3-0.5=1.0 → 源 x=1 → 30
+        let src = [10u8, 20, 30];
+        let out = resize_bilinear_hwc(&src, 3, 1, 1, 1, 1);
+        assert_eq!(out, [20], "half-pixel sx=1.0 应取源像素 x=1");
     }
 }
