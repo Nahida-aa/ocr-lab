@@ -86,13 +86,20 @@ fn resolve_path(repo_root: &Path, p: &str) -> PathBuf {
     }
 }
 
-/// 读图为 RGB HWC u8 的 `Array3`。
+/// 读图为 BGR HWC u8 的 `Array3`。
+///
+/// 用 BGR 而非 RGB：PP-OCR/rapidocr 模型按 `cv2.imread`（BGR）训练（cpp 同款）。
+/// 用 RGB 会让彩色字幕（如本视频的 '啊'）出现漏检/误识，故这里统一转 BGR 对齐。
 fn load_rgb(path: &Path) -> Result<Array3<u8>> {
     let img = image::open(path)
         .with_context(|| format!("读取图片失败: {}", path.display()))?
         .to_rgb8();
     let (w, h) = (img.width() as usize, img.height() as usize);
-    let data = img.into_raw();
+    let mut data = img.into_raw();
+    // RGB→BGR：image crate 给 RGB，模型要 BGR。
+    for px in data.chunks_mut(3) {
+        px.swap(0, 2);
+    }
     Array3::from_shape_vec((h, w, 3), data).context("图像数据重塑失败（维度不匹配）")
 }
 
