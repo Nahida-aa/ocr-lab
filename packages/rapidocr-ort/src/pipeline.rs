@@ -120,19 +120,11 @@ fn warp_perspective(img: &Array3<u8>, polygon: &[Point2f; 4], dst_w: usize, dst_
     let src_1d = opencv::core::Mat::from_slice(&src_data).expect("src mat");
     let src_mat = src_1d.reshape(3, h as i32).expect("src reshape");
 
+    // 显式 flags：INTER_CUBIC + BORDER_REPLICATE，borderValue 0（对齐 cpp）。
     let mut dst_mat = opencv::core::Mat::default();
-    imgproc::warp_perspective_def(
-        &src_mat,
-        &mut dst_mat,
-        &m,
-        opencv::core::Size::new(dst_w as i32, dst_h as i32),
-    )
-    .expect("warpPerspective");
-    // 用显式 flags：INTER_CUBIC + BORDER_REPLICATE，borderValue 0。
-    let mut dst_mat2 = opencv::core::Mat::default();
     imgproc::warp_perspective(
         &src_mat,
-        &mut dst_mat2,
+        &mut dst_mat,
         &m,
         opencv::core::Size::new(dst_w as i32, dst_h as i32),
         opencv::imgproc::INTER_CUBIC,
@@ -144,8 +136,8 @@ fn warp_perspective(img: &Array3<u8>, polygon: &[Point2f; 4], dst_w: usize, dst_
 
     // 读回 Array3。
     let mut out = Array3::<u8>::zeros((dst_h, dst_w, c));
-    let data = dst_mat2.data_bytes().expect("dst data");
-    let stride = dst_mat2.step1(0).expect("dst step") as usize;
+    let data = dst_mat.data_bytes().expect("dst data");
+    let stride = dst_mat.step1(0).expect("dst step") as usize;
     for y in 0..dst_h {
         for x in 0..dst_w {
             for k in 0..c {
