@@ -1,0 +1,15 @@
+[package]
+name = "geometry"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+name = "geometry"
+path = "src/lib.rs"
+
+[dependencies]
+# 二维向量 / 几何运算（凸包、最小外接矩形、多边形偏移等）。
+# 纯 Rust、SIMD 友好的 glam，替代/降低对 opencv 绑定在几何层面的依赖。
+glam = { workspace = true }

@@ -6,4 +6,22 @@ license.workspace = true
 publish.workspace = true
 description.workspace = true
 
+# 既是库（供上层复用 OcrEngine + 字幕合并/计时）也是二进制（对标 cpp 的 CLI）。
+[lib]
+name = "subtitle_ocr"
+path = "src/lib.rs"
+
+[[bin]]
+name = "subtitle-ocr"
+path = "src/main.rs"
+
 [dependencies]
+# OCR 引擎（det/rec/cls 推理 + 模型加载 + 字典），本包只做字幕专属逻辑。
+rapidocr-ort = { workspace = true }
+# 错误链 / 图像读取（RGB HWC u8）/ 张量 / 序列化 / CLI。
+anyhow.workspace = true
+image = "0.25"
+ndarray = "0.17"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+clap = { version = "4", features = ["derive"] }

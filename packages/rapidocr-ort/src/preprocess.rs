@@ -31,6 +31,11 @@ pub const REC_NORM: ([f32; 3], [f32; 3]) = ([0.5, 0.5, 0.5], [0.5, 0.5, 0.5]);
 pub fn preprocess_det(img: &Array3<u8>) -> (Array4<f32>, usize, usize) {
     let (h, w, _) = img.dim();
     let (nh, nw) = det_target_size(h, w);
+    // det 用 image crate 的 Triangle 双线性缩放。曾尝试换成 opencv INTER_LINEAR
+    // （与 cpp 的 cv::resize 严格一致）以对齐热力图，但实测让 rust 的聚合指标
+    // 反而偏离 cpp（CER(norm) 0.54%→0.89%、spurious 2→5）——因为 rust 的 det
+    // 后处理几何（轮廓轴对齐包围盒而非 minAreaRect + 不同 unclip）与 cpp 不同，
+    // 仅靠对齐缩放核无法收敛，故回退到 Triangle。真正的残余差异在几何，不在核。
     let resized = resize_bilinear(img, nh, nw);
     let mean = [0.485_f32, 0.456, 0.406];
     let std = [0.229_f32, 0.224, 0.225];
@@ -38,20 +43,29 @@ pub fn preprocess_det(img: &Array3<u8>) -> (Array4<f32>, usize, usize) {
     (chw, nh, nw)
 }
 
-/// 计算 det 目标尺寸：短边 = DET_LIMIT_SIDE，按比例缩放长边，向下取整到 32。
+/// 计算 det 目标尺寸：对齐 cpp / PP-OCR 官方 Python 的缩放约定。
+///
+/// cpp（`preprocessDet`，`limit_type='min'`）：
+///   if min(h, w) < DET_LIMIT_SIDE: ratio = DET_LIMIT_SIDE / min(h, w)
+///   else:                           ratio = 1.0  // 短边已 ≥736 则不缩放
+///   newH/newW = round(dim * ratio / 32) * 32，且 ≥ 32。
+///
+/// 注意：ratio 基于**短边**算、对整个图统一缩放（不是只把短边固定为 736
+/// 再单独算长边）。这与旧实现（永远 736*ratio + 向下取整）不同。两版 det 输入
+/// 尺寸现在一致，使差异纯粹来自实现本身（缩放插值核、后处理几何等）。
 pub fn det_target_size(h: usize, w: usize) -> (usize, usize) {
-    let (nh, nw) = if h <= w {
-        (
-            DET_LIMIT_SIDE,
-            (DET_LIMIT_SIDE as f32 * w as f32 / h as f32) as usize,
-        )
+    let short = h.min(w);
+    let ratio = if short < DET_LIMIT_SIDE {
+        DET_LIMIT_SIDE as f32 / short as f32
     } else {
-        (
-            (DET_LIMIT_SIDE as f32 * h as f32 / w as f32) as usize,
-            DET_LIMIT_SIDE,
-        )
+        1.0_f32
     };
-    (((nh / 32) * 32).max(32), ((nw / 32) * 32).max(32))
+    // 对齐 cpp 顺序：先按 ratio 截断缩放（int 截断），再 round(dim/32)*32。
+    let nh = ((h as f32 * ratio) as usize / 32) as f32;
+    let nw = ((w as f32 * ratio) as usize / 32) as f32;
+    let nh = (nh.round() * 32.0) as usize;
+    let nw = (nw.round() * 32.0) as usize;
+    (nh.max(32), nw.max(32))
 }
 
 /// 识别预处理：crop 已经裁出文字块，这里把它 resize 到 `[REC_H, img_w]`，

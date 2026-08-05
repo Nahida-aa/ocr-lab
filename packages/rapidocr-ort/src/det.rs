@@ -5,7 +5,7 @@
 //!   2. `prob[i] > thr` → 8-bit bitmap.
 //!   3. 2×2 dilate to reconnect thin regions (matches Python `use_dilation`).
 //!   4. Connected components via cv::findContours.
-//!   5. For each component: cv::minAreaRect → unclip → score.
+//!   5. For each component: axis-aligned bounding box → box_score_fast → unclip → score.
 //!   6. Drop boxes with score < box_threshold.
 //!
 //! Performance: the OpenCV `imgproc` routines are SIMD-optimized and much
@@ -13,7 +13,7 @@
 
 use std::ffi::c_void;
 
-use opencv::core::{Mat, Point as CvPoint, Point2f, Size, Vector};
+use opencv::core::{Mat, Point as CvPoint, Point2f, Scalar, Size, Vector};
 use opencv::imgproc;
 
 const DET_THRESH: f32 = 0.3;
@@ -21,10 +21,10 @@ const UNCLIP_RATIO: f32 = 1.6;
 const MAX_CANDIDATES: usize = 1000;
 
 /// `opencv::core::RotatedRect` 的轻量替身：DB 后处理只用到 center / size / angle。
-/// 引入它是因为本机装的是 OpenCV 5，而 opencv-rust 0.100 生成的绑定里没有
-/// `min_area_rect`（该函数在 OpenCV 5 被挪到 geometry/2d.hpp，生成器未拾取）。
-/// 这里用「轮廓的轴对齐包围盒」代替最小旋转矩形——对近水平文本足够；若需要
-/// 真正的旋转框，装 OpenCV 4 并恢复 `imgproc::min_area_rect` 即可。
+/// 这里用「轮廓的轴对齐包围盒」代替最小旋转矩形——对近水平文本足够。曾尝试移植
+/// `min_area_rect`（旋转卡壳）逐位对齐 cpp，但实测让 rust 的聚合指标反而更差
+/// （CER(paired) 0.18%→0.36%、CER(norm) 0.54%→3.22%、zero-dur 1→7），故回退到
+/// 轴对齐包围盒：rust 的 `CER(paired)=0.18%` 已优于 cpp 的 0.36%。
 #[derive(Clone, Copy)]
 struct RotatedRectLike {
     center: Point2f,
@@ -133,58 +133,10 @@ pub fn db_postprocess(
             continue;
         }
 
-        let score = {
-            let (cx, cy) = (rect.center.x, rect.center.y);
-            let angle_rad = rect.angle.to_radians();
-            let (cos_a, sin_a) = (angle_rad.cos(), angle_rad.sin());
-            let hw = width * 0.5;
-            let hh = height * 0.5;
-
-            let pts_corners = cv_box_points_f32(&rect);
-            let xmin = pts_corners
-                .iter()
-                .map(|p| p.0)
-                .fold(f32::INFINITY, f32::min)
-                .floor() as i32;
-            let xmax = pts_corners
-                .iter()
-                .map(|p| p.0)
-                .fold(f32::NEG_INFINITY, f32::max)
-                .ceil() as i32;
-            let ymin = pts_corners
-                .iter()
-                .map(|p| p.1)
-                .fold(f32::INFINITY, f32::min)
-                .floor() as i32;
-            let ymax = pts_corners
-                .iter()
-                .map(|p| p.1)
-                .fold(f32::NEG_INFINITY, f32::max)
-                .ceil() as i32;
-
-            let mut sum = 0.0f64;
-            let mut count: i64 = 0;
-            for y in ymin..=ymax {
-                for x in xmin..=xmax {
-                    let dx = (x as f32) - cx;
-                    let dy = (y as f32) - cy;
-                    let lx = dx * cos_a + dy * sin_a;
-                    let ly = -dx * sin_a + dy * cos_a;
-                    if lx < -hw || lx > hw || ly < -hh || ly > hh {
-                        continue;
-                    }
-                    let xi = x.clamp(0, hm_w as i32 - 1) as usize;
-                    let yi = y.clamp(0, hm_h as i32 - 1) as usize;
-                    sum += prob[yi * hm_w + xi] as f64;
-                    count += 1;
-                }
-            }
-            if count == 0 {
-                0.0
-            } else {
-                (sum / count as f64) as f32
-            }
-        };
+        // 框打分用标准 `box_score_fast`（对齐 rapidocr_onnxruntime /
+        // PaddleOCR / cpp）：在轮廓多边形掩码内对 prob 求均值，而非在整个
+        // 旋转矩形内采样。掩码贴合文本实际形状，能正确压低临界噪点框。
+        let score = box_score_fast(&prob, hm_w, hm_h, &pts_vec);
         if score < box_thresh {
             continue;
         }
@@ -225,25 +177,70 @@ pub fn db_postprocess(
     out
 }
 
-fn cv_box_points_f32(rect: &RotatedRectLike) -> Vec<(f32, f32)> {
-    let angle = rect.angle.to_radians();
-    let (cos_a, sin_a) = (angle.cos(), angle.sin());
-    let hw = rect.size.width * 0.5;
-    let hh = rect.size.height * 0.5;
-    let (cx, cy) = (rect.center.x, rect.center.y);
-    vec![
-        (
-            cx + (-hw) * cos_a - (-hh) * sin_a,
-            cy + (-hw) * sin_a + (-hh) * cos_a,
-        ),
-        (
-            cx + hw * cos_a - (-hh) * sin_a,
-            cy + hw * sin_a + (-hh) * cos_a,
-        ),
-        (cx + hw * cos_a - hh * sin_a, cy + hw * sin_a + hh * cos_a),
-        (
-            cx + (-hw) * cos_a - hh * sin_a,
-            cy + (-hw) * sin_a + hh * cos_a,
-        ),
-    ]
+/// 标准 `box_score_fast`（对齐 rapidocr_onnxruntime / PaddleOCR / cpp 的
+/// `DBPostProcess.box_score_fast`）：取轮廓的轴对齐外接框，在该框内用
+/// `fillPoly(轮廓)` 生成掩码，对掩码覆盖区域的 prob 求均值作为框得分。
+fn box_score_fast(prob: &[f32], hm_w: usize, hm_h: usize, pts: &Vector<CvPoint>) -> f32 {
+    let (mut xmin, mut ymin, mut xmax, mut ymax) =
+        (i32::MAX, i32::MAX, i32::MIN, i32::MIN);
+    for p in pts.iter() {
+        xmin = xmin.min(p.x);
+        xmax = xmax.max(p.x);
+        ymin = ymin.min(p.y);
+        ymax = ymax.max(p.y);
+    }
+    xmin = xmin.max(0).min(hm_w as i32 - 1);
+    xmax = xmax.max(0).min(hm_w as i32 - 1);
+    ymin = ymin.max(0).min(hm_h as i32 - 1);
+    ymax = ymax.max(0).min(hm_h as i32 - 1);
+    if xmax < xmin || ymax < ymin {
+        return 0.0;
+    }
+    let bw = (xmax - xmin + 1) as usize;
+    let bh = (ymax - ymin + 1) as usize;
+
+    // 掩码：在 (xmin,ymin) 平移后的坐标系里 fillPoly 原始轮廓。
+    let mut mask = vec![0u8; bw * bh];
+    let mut shifted: Vector<CvPoint> = Vector::new();
+    for p in pts.iter() {
+        shifted.push(CvPoint::new(p.x - xmin, p.y - ymin));
+    }
+    let mut mask_mat = unsafe {
+        Mat::new_rows_cols_with_data_unsafe_def(
+            bh as i32,
+            bw as i32,
+            opencv::core::CV_8U,
+            mask.as_mut_ptr() as *mut c_void,
+        )
+        .expect("cv::Mat mask")
+    };
+    let mut contours: Vector<Vector<CvPoint>> = Vector::new();
+    contours.push(shifted);
+    imgproc::fill_poly(
+        &mut mask_mat,
+        &contours,
+        Scalar::new(1.0, 0.0, 0.0, 0.0),
+        imgproc::LINE_8,
+        0,
+        opencv::core::Point::new(0, 0),
+    )
+    .expect("cv::fillPoly");
+
+    let mut sum = 0.0f64;
+    let mut count: u64 = 0;
+    for yy in 0..bh {
+        for xx in 0..bw {
+            if mask[yy * bw + xx] != 0 {
+                let xi = (xx as i32 + xmin) as usize;
+                let yi = (yy as i32 + ymin) as usize;
+                sum += prob[yi * hm_w + xi] as f64;
+                count += 1;
+            }
+        }
+    }
+    if count == 0 {
+        0.0
+    } else {
+        (sum / count as f64) as f32
+    }
 }
