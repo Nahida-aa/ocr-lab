@@ -100,6 +100,39 @@ INTER_LINEAR）又调显式 `warp_perspective`（INTER_CUBIC）**，同一次透
 **全量 RTF 对比必须在空载（loadavg <1）下跑**，否则负载会污染数据（本仓库 README
 明确警告过）。
 
+### 分步计时（release，frame_299 单框，实测）
+
+**模型加载**（每次进程启动一次）：
+
+| 步骤 | 耗时 |
+| --- | --- |
+| det 模型加载 | ~123ms |
+| rec 模型加载 | ~67ms |
+| cls 模型加载 | ~34ms |
+| vocab 加载 | ~0.4ms |
+
+**单帧推理**：
+
+| 步骤 | 耗时 | 说明 |
+| --- | --- | --- |
+| `pre_det`（缩放 + 归一化） | **~128ms** | ⚠️ 见下方「优化点」 |
+| det 推理 | ~387ms | 大头，onnxruntime |
+| db_postprocess | ~8ms | findContours + 几何 |
+| crop（warp） | ~1.6ms | cv::warpPerspective |
+| cls 推理 | ~2.2ms | |
+| preprocess_rec | ~0.8ms | |
+| rec 推理 | ~16ms | |
+| **合计** | **~547ms** | |
+
+> 注：以上含模型加载（CLI 每次启动加载一次）。全量基准里模型只加载一次、启动开销
+> 摊薄，单帧推理纯看 det 387ms + 其余 ~30ms ≈ 420ms。
+
+**优化点（`pre_det` 128ms）**：`preprocess_det` 用 `image` crate 的 Triangle resize
++ 手动逐像素 `normalize_chw`，**无 SIMD**；cpp 用 OpenCV SIMD `cv::resize`（<5ms）。
+这是 rust 里唯一明显慢于 cpp 的步骤。改用 OpenCV 绑定 resize 可降 ~120ms/帧，但会
+改变 det 缩放核（此前 Triangle vs bilinear 对 spurious 有细微影响，见 bench README），
+需权衡。
+
 ## 三、依赖与分层
 
 | 依赖 | 用途 |
