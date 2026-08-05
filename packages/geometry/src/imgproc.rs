@@ -30,6 +30,160 @@ pub fn resize_bilinear_hwc(
     dw: usize,
     dh: usize,
 ) -> Vec<u8> {
+    // AVX2 可用时走 gather 快路径，否则回退到 wide 标量版。
+    #[cfg(target_arch = "x86_64")]
+    {
+        if std::is_x86_feature_detected!("avx2") {
+            return unsafe { resize_bilinear_hwc_avx2(src, sw, sh, c, dw, dh) };
+        }
+    }
+    resize_bilinear_hwc_fallback(src, sw, sh, c, dw, dh)
+}
+
+/// AVX2 gather 快路径：水平插值的 8 列取值用 `_mm256_i32gather_ps`（8 个任意
+/// 位置的 f32 gather），比 wide 版（逐像素标量取）快数倍。
+///
+/// 安全点：先把源行通道转成连续的 `f32[sw]`（每次被引用行算一次、行缓存复用），
+/// 再对 f32 行做 gather（`scale=4`，index=x0/x1∈[0,sw-1]），无越界读。
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2")]
+unsafe fn resize_bilinear_hwc_avx2(
+    src: &[u8],
+    sw: usize,
+    sh: usize,
+    c: usize,
+    dw: usize,
+    dh: usize,
+) -> Vec<u8> {
+    use std::arch::x86_64::*;
+
+    let mut dst = vec![0u8; dw * dh * c];
+
+    // 预计算行映射（垂直）。
+    let sy_scale = sh as f32 / dh as f32;
+    let sx_scale = sw as f32 / dw as f32;
+    let mut rows = vec![(0usize, 0usize, 0.0f32); dh];
+    for oy in 0..dh {
+        let sy = ((oy as f32 + 0.5) * sy_scale - 0.5).clamp(0.0, (sh - 1) as f32);
+        let y0 = sy.floor() as usize;
+        let y1 = (y0 + 1).min(sh - 1);
+        rows[oy] = (y0, y1, sy - y0 as f32);
+    }
+    // 预计算列映射（水平）：每输出列 ox 的 (x0, x1, wx)，存为预打包数组便于 gather。
+    let mut x0s = vec![0usize; dw];
+    let mut x1s = vec![0usize; dw];
+    let mut wxs = vec![0.0f32; dw];
+    for ox in 0..dw {
+        let sx = ((ox as f32 + 0.5) * sx_scale - 0.5).clamp(0.0, (sw - 1) as f32);
+        let x0 = sx.floor() as usize;
+        let x1 = (x0 + 1).min(sw - 1);
+        x0s[ox] = x0;
+        x1s[ox] = x1;
+        wxs[ox] = sx - x0 as f32;
+    }
+
+    // 源行通道转 f32 连续数组（u8 -> f32）。
+    let to_f32_row = |y: usize, ch: usize| -> Vec<f32> {
+        let mut r = vec![0.0f32; sw];
+        let base = y * sw * c + ch;
+        for x in 0..sw {
+            r[x] = src[base + x * c] as f32;
+        }
+        r
+    };
+
+    // 水平插值：对 f32 源行 r（长度 sw），按列映射 gather 成 f32[dw]。
+    let interp = |r: &[f32], ch_row: &mut Vec<f32>| {
+        ch_row.resize(dw, 0.0);
+        let base = r.as_ptr();
+        let mut ox = 0usize;
+        unsafe {
+            while ox + 8 <= dw {
+                // 构造 gather 索引（i32 = x0 像素位置，scale=4 → 字节偏移 ×4）。
+                let i0 = _mm256_set_epi32(
+                    x0s[ox + 7] as i32, x0s[ox + 6] as i32, x0s[ox + 5] as i32, x0s[ox + 4] as i32,
+                    x0s[ox + 3] as i32, x0s[ox + 2] as i32, x0s[ox + 1] as i32, x0s[ox + 0] as i32,
+                );
+                let i1 = _mm256_set_epi32(
+                    x1s[ox + 7] as i32, x1s[ox + 6] as i32, x1s[ox + 5] as i32, x1s[ox + 4] as i32,
+                    x1s[ox + 3] as i32, x1s[ox + 2] as i32, x1s[ox + 1] as i32, x1s[ox + 0] as i32,
+                );
+                let v0 = _mm256_i32gather_ps(base, i0, 4); // f32 gather，scale=4
+                let v1 = _mm256_i32gather_ps(base, i1, 4);
+                let wx = _mm256_loadu_ps(wxs[ox..ox + 8].as_ptr());
+                let one = _mm256_set1_ps(1.0);
+                let wx1 = _mm256_sub_ps(one, wx);
+                let out = _mm256_add_ps(_mm256_mul_ps(wx1, v0), _mm256_mul_ps(wx, v1));
+                _mm256_storeu_ps(ch_row[ox..ox + 8].as_mut_ptr(), out);
+                ox += 8;
+            }
+        }
+        while ox < dw {
+            let a0 = r[x0s[ox]];
+            let a1 = r[x1s[ox]];
+            let w = wxs[ox];
+            ch_row[ox] = a0 * (1.0 - w) + a1 * w;
+            ox += 1;
+        }
+    };
+
+    for ch in 0..c {
+        // 行缓存：源行 y -> 水平插值 f32[dw]。
+        let mut row_cache: Vec<Option<Vec<f32>>> = (0..sh).map(|_| None).collect();
+        for oy in 0..dh {
+            let (y0, y1, wy) = rows[oy];
+            // 先填缓存（可变借用），再取不可变借用，避免借用冲突。
+            if row_cache[y0].is_none() {
+                let fr = to_f32_row(y0, ch);
+                let mut out = Vec::with_capacity(dw);
+                interp(&fr, &mut out);
+                row_cache[y0] = Some(out);
+            }
+            if row_cache[y1].is_none() {
+                let fr = to_f32_row(y1, ch);
+                let mut out = Vec::with_capacity(dw);
+                interp(&fr, &mut out);
+                row_cache[y1] = Some(out);
+            }
+            let r0 = row_cache[y0].as_ref().unwrap();
+            let r1 = row_cache[y1].as_ref().unwrap();
+            unsafe {
+                let wyv = _mm256_set1_ps(wy);
+                let one = _mm256_set1_ps(1.0);
+                let wy1 = _mm256_sub_ps(one, wyv);
+                let mut ox = 0usize;
+                while ox + 8 <= dw {
+                    let a = _mm256_loadu_ps(r0[ox..ox + 8].as_ptr());
+                    let b = _mm256_loadu_ps(r1[ox..ox + 8].as_ptr());
+                    let out = _mm256_add_ps(_mm256_mul_ps(wy1, a), _mm256_mul_ps(wyv, b));
+                    let mut arr = [0.0f32; 8];
+                    _mm256_storeu_ps(arr.as_mut_ptr(), out);
+                    for k in 0..8 {
+                        dst[(oy * dw + ox + k) * c + ch] = arr[k].round().clamp(0.0, 255.0) as u8;
+                    }
+                    ox += 8;
+                }
+            }
+            let mut ox = (dw / 8) * 8;
+            while ox < dw {
+                let val = r0[ox] * (1.0 - wy) + r1[ox] * wy;
+                dst[(oy * dw + ox) * c + ch] = val.round().clamp(0.0, 255.0) as u8;
+                ox += 1;
+            }
+        }
+    }
+    dst
+}
+
+/// 回退实现（wide crate，逐像素标量 gather）。
+fn resize_bilinear_hwc_fallback(
+    src: &[u8],
+    sw: usize,
+    sh: usize,
+    c: usize,
+    dw: usize,
+    dh: usize,
+) -> Vec<u8> {
     assert_eq!(src.len(), sw * sh * c);
     let mut dst = vec![0u8; dw * dh * c];
 

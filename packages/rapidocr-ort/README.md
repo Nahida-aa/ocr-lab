@@ -131,19 +131,21 @@ INTER_LINEAR）又调显式 `warp_perspective`（INTER_CUBIC）**，同一次透
 **normalize 14ms**（余下为 det 输入张量构造等）。已用 `geometry::imgproc`（纯 Rust
 SIMD，`wide` crate）实现 bilinear resize + normalize 后：
 
-| 步骤 | 旧（image Triangle） | 新（imgproc SIMD bilinear） |
-| --- | --- | --- |
-| resize | 71ms | **34.8ms** |
-| normalize | 14ms | **8.5ms** |
-| **pre_det 合计** | **128ms** | **43.8ms**（-66%） |
+| 步骤 | 旧（image Triangle） | wide 标量 | **AVX2 gather** |
+| --- | --- | --- | --- |
+| resize | 71ms | 40ms | **15.2ms** |
+| normalize | 14ms | 8.5ms | ~12ms |
+| **pre_det 合计** | **128ms** | ~50ms | **~28ms**（-78%） |
 
 同时把 det 缩放核从 Triangle 改为 bilinear（对齐 cpp 的 `cv::resize` INTER_LINEAR，
 half-pixel 坐标）。**全量基准确认 spurious/CER 完全不变**（CER 0.36%、spurious 0、
 missed 0、segs 75）——因为其他环节都已对齐 cpp，bilinear 是正确选择。
 
-resize 仍 ~35ms 未到 cpp 的 <5ms，因为 SIMD 里 8 像素的 gather（4 角点采样）仍是
-标量索引（`wide` 无 gather 指令）。进一步优化需手写行缓存 + 更紧的 SIMD，或接受
-当前 -66% 的收益。归一化（8.5ms）已用 SIMD。
+resize 最终用 **AVX2 gather**（`std::arch` 的 `_mm256_i32gather_ps`，一次 gather 8 个
+任意位置的 f32），配合可分离水平+垂直插值与行缓存。`imgproc` 的
+`resize_bilinear_hwc` 在运行时 `is_x86_feature_detected!("avx2")` 分派，AVX2 可用走
+快路径，否则回退 wide 标量版。resize 15.2ms 已接近 cpp 的 OpenCV SIMD resize
+（<5ms，仍有 3× 差距，因额外 f32 转换与 gather 开销）。
 
 ## 三、依赖与分层
 
