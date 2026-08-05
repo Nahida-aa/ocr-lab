@@ -107,6 +107,9 @@ pub struct OcrEngine {
     det_out_name: String,
     rec_out_name: String,
     cls_out_name: String,
+    /// 是否用 cpp 同款的透视矫正裁剪（warpPerspective）替代轴对齐包围盒。
+    /// 默认 false（轴对齐），对近水平文本足够；true 时与 cpp 的 rec 输入一致。
+    use_warp_crop: bool,
 }
 
 impl OcrEngine {
@@ -135,7 +138,14 @@ impl OcrEngine {
             det_out_name,
             rec_out_name,
             cls_out_name,
+            use_warp_crop: false,
         })
+    }
+
+    /// 切换是否用透视矫正裁剪（对齐 cpp 的 warpPerspective）。返回 self 便于链式调用。
+    pub fn with_warp_crop(mut self, on: bool) -> Self {
+        self.use_warp_crop = on;
+        self
     }
 
     pub fn profile(&self) -> ModelProfile {
@@ -167,7 +177,11 @@ impl OcrEngine {
         // ---- 2. 逐个文本框裁剪 + 识别 ----
         let mut results = Vec::with_capacity(boxes.len());
         for b in boxes {
-            let crop = pipeline::crop_for_rec(img, &b.polygon);
+            let crop = if self.use_warp_crop {
+                pipeline::crop_for_rec_warp(img, &b.polygon)
+            } else {
+                pipeline::crop_for_rec(img, &b.polygon)
+            };
             let (text, score) = pipeline::recognize(
                 &crop,
                 &mut self.rec,

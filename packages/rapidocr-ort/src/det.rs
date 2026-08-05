@@ -1,64 +1,33 @@
 //! DB (Differentiable Binarization) post-processing.
 //!
-//! Pipeline (matches the C++ implementation):
+//! Pipeline (bit-for-bit mirrors `subtitle-ocr-cpp/ocr_pipeline.cpp` + `geometry.h`):
 //!   1. Apply sigmoid (if values are logits) → probability map.
 //!   2. `prob[i] > thr` → 8-bit bitmap.
 //!   3. 2×2 dilate to reconnect thin regions (matches Python `use_dilation`).
 //!   4. Connected components via cv::findContours.
-//!   5. For each component: axis-aligned bounding box → box_score_fast → unclip → score.
-//!   6. Drop boxes with score < box_threshold.
+//!   5. For each contour: `minAreaRect` → `boxPoints` (tl-tr-br-bl) → side<3 早退
+//!      → `box_score_fast`（minAreaRect 4 角点掩码内对 prob 取均值）→ unclip
+//!      （顶点法线外扩 `offsetPolygon`）→ 再 `minAreaRect` → side<5 早退 → 缩放。
+//!   6. 把热力图坐标按 scale 缩回 ROI 坐标（调用方再加 yOffset 回原图）。
+//!   7. 丢弃 score < box_threshold 的框，按 score 降序截断。
 //!
-//! Performance: the OpenCV `imgproc` routines are SIMD-optimized and much
-//! faster than our hand-written connected_components + convex_hull.
+//! 几何用 `packages/geometry`（glam），其 `min_area_rect` / `box_points` 已验证与
+//! 真实 cv::minAreaRect + RotatedRect::points 逐位一致（见 geometry 的对照测试）。
+//!
+//! ⚠️ 注意：det 几何对齐 minAreaRect 会让 det 框变旋转；此时 rec 裁剪**必须**同时
+//! 用 `crop_for_rec_warp`（透视矫正），否则轴对齐裁剪会带进背景导致 rec 严重退化
+//! （之前实测 CER(paired) 0.18%→0.36%、CER(norm)→5.72%）。两者耦合，需一起用。
 
 use std::ffi::c_void;
 
+use geometry::{box_points, min_area_rect, offset_polygon, polygon_area, polygon_length};
+use glam::Vec2;
 use opencv::core::{Mat, Point as CvPoint, Point2f, Scalar, Size, Vector};
 use opencv::imgproc;
 
 const DET_THRESH: f32 = 0.3;
 const UNCLIP_RATIO: f32 = 1.6;
 const MAX_CANDIDATES: usize = 1000;
-
-/// `opencv::core::RotatedRect` 的轻量替身：DB 后处理只用到 center / size / angle。
-/// 这里用「轮廓的轴对齐包围盒」代替最小旋转矩形——对近水平文本足够。曾尝试移植
-/// `min_area_rect`（旋转卡壳）逐位对齐 cpp，但实测让 rust 的聚合指标反而更差
-/// （CER(paired) 0.18%→0.36%、CER(norm) 0.54%→3.22%、zero-dur 1→7），故回退到
-/// 轴对齐包围盒：rust 的 `CER(paired)=0.18%` 已优于 cpp 的 0.36%。
-#[derive(Clone, Copy)]
-struct RotatedRectLike {
-    center: Point2f,
-    size: Size2f,
-    angle: f32,
-}
-
-#[derive(Clone, Copy)]
-struct Size2f {
-    width: f32,
-    height: f32,
-}
-
-/// 由轮廓点算轴对齐包围盒（代替 `min_area_rect`）。
-fn axis_aligned_rect(pts: &opencv::core::Vector<opencv::core::Point>) -> RotatedRectLike {
-    let mut minx = f32::INFINITY;
-    let mut miny = f32::INFINITY;
-    let mut maxx = f32::NEG_INFINITY;
-    let mut maxy = f32::NEG_INFINITY;
-    for p in pts.iter() {
-        minx = minx.min(p.x as f32);
-        miny = miny.min(p.y as f32);
-        maxx = maxx.max(p.x as f32);
-        maxy = maxy.max(p.y as f32);
-    }
-    RotatedRectLike {
-        center: Point2f::new((minx + maxx) / 2.0, (miny + maxy) / 2.0),
-        size: Size2f {
-            width: maxx - minx,
-            height: maxy - miny,
-        },
-        angle: 0.0,
-    }
-}
 
 /// 单个检测结果：四点多边形（窗口/文本框的四个顶点）与检测得分。
 ///
@@ -124,49 +93,58 @@ pub fn db_postprocess(
         if pts_vec.len() < 3 {
             continue;
         }
+        // 轮廓点（热力图坐标）转 glam::Vec2。
+        let contour: Vec<Vec2> = pts_vec.iter().map(|p| Vec2::new(p.x as f32, p.y as f32)).collect();
 
-        let rect = axis_aligned_rect(&pts_vec);
-        let width = rect.size.width;
-        let height = rect.size.height;
-        let short = width.min(height);
-        if short < 3.0 {
+        // ---- get_mini_boxes(contour) ----
+        // minAreaRect → box_points（内部已排成 tl-tr-br-bl）→ 边长 < 3 早退。
+        let rect = min_area_rect(&contour);
+        let ordered = box_points(&rect);
+        let side_a = ordered[0].distance(ordered[1]);
+        let side_b = ordered[1].distance(ordered[2]);
+        if side_a.min(side_b) < 3.0 {
             continue;
         }
 
-        // 框打分用标准 `box_score_fast`（对齐 rapidocr_onnxruntime /
-        // PaddleOCR / cpp）：在轮廓多边形掩码内对 prob 求均值，而非在整个
-        // 旋转矩形内采样。掩码贴合文本实际形状，能正确压低临界噪点框。
-        let score = box_score_fast(&prob, hm_w, hm_h, &pts_vec);
+        // ---- box_score_fast(prob, ordered) ----
+        // 用 minAreaRect 的 4 点框（非原始轮廓）在掩码内对 prob 取均值，对齐 cpp。
+        let score = box_score_fast(&prob, hm_w, hm_h, &ordered);
         if score < box_thresh {
             continue;
         }
 
-        let dist = (width * height * UNCLIP_RATIO) / (2.0 * (width + height));
+        // ---- unclip(ordered, distance) ----
+        // distance = polygon_area * unclip_ratio / perimeter，min 3.0，顶点法线外扩。
+        let area = polygon_area(&ordered);
+        let len = polygon_length(&ordered);
+        let dist = if len > 0.0 { area * UNCLIP_RATIO / len } else { 0.0 };
         let dist = dist.max(3.0);
-        let unclip_w = width + 2.0 * dist;
-        let unclip_h = height + 2.0 * dist;
-        let sx = orig_w as f32 / hm_w as f32;
-        let sy = orig_h as f32 / hm_h as f32;
-        let a = rect.angle.to_radians();
-        let (cos_a, sin_a) = (a.cos(), a.sin());
-        let hw2 = unclip_w * 0.5;
-        let hh2 = unclip_h * 0.5;
-        let (bcx, bcy) = (rect.center.x, rect.center.y);
-        let local = [(-hw2, -hh2), (hw2, -hh2), (hw2, hh2), (-hw2, hh2)];
+        let expanded = offset_polygon(&ordered, dist);
+        if expanded.len() < 4 {
+            continue;
+        }
+
+        // ---- get_mini_boxes(expanded) ----
+        // 再 minAreaRect → box_points → 边长 < 5 早退。
+        let final_rect = min_area_rect(&expanded);
+        let final4 = box_points(&final_rect);
+        let fside1 = final4[0].distance(final4[1]);
+        let fside2 = final4[1].distance(final4[2]);
+        if fside1.min(fside2) < 5.0 {
+            continue;
+        }
+
+        // ---- scale to ROI size ----
+        let scale_w = orig_w as f32 / hm_w as f32;
+        let scale_h = orig_h as f32 / hm_h as f32;
         let mut pts = [Point2f::new(0.0, 0.0); 4];
-        for i in 0..4 {
-            let (lx, ly) = local[i];
-            let rx = lx * cos_a - ly * sin_a + bcx;
-            let ry = lx * sin_a + ly * cos_a + bcy;
+        for (i, p) in final4.iter().enumerate() {
             pts[i] = Point2f::new(
-                (rx * sx).clamp(0.0, (orig_w - 1) as f32),
-                (ry * sy).clamp(0.0, (orig_h - 1) as f32),
+                (p.x * scale_w).round().clamp(0.0, (orig_w - 1) as f32),
+                (p.y * scale_h).round().clamp(0.0, (orig_h - 1) as f32),
             );
         }
-        out.push(DetBox {
-            polygon: pts,
-            score,
-        });
+        out.push(DetBox { polygon: pts, score });
     }
     out.sort_by(|a, b| {
         b.score
@@ -178,16 +156,17 @@ pub fn db_postprocess(
 }
 
 /// 标准 `box_score_fast`（对齐 rapidocr_onnxruntime / PaddleOCR / cpp 的
-/// `DBPostProcess.box_score_fast`）：取轮廓的轴对齐外接框，在该框内用
-/// `fillPoly(轮廓)` 生成掩码，对掩码覆盖区域的 prob 求均值作为框得分。
-fn box_score_fast(prob: &[f32], hm_w: usize, hm_h: usize, pts: &Vector<CvPoint>) -> f32 {
+/// `DBPostProcess.box_score_fast`）：取多边形的轴对齐外接框，在该框内用
+/// `fillPoly(多边形)` 生成掩码，对掩码覆盖区域的 prob 求均值作为框得分。
+/// `pts` 是 minAreaRect 的 4 点框（tl-tr-br-bl），对齐 cpp。
+fn box_score_fast(prob: &[f32], hm_w: usize, hm_h: usize, pts: &[Vec2; 4]) -> f32 {
     let (mut xmin, mut ymin, mut xmax, mut ymax) =
         (i32::MAX, i32::MAX, i32::MIN, i32::MIN);
     for p in pts.iter() {
-        xmin = xmin.min(p.x);
-        xmax = xmax.max(p.x);
-        ymin = ymin.min(p.y);
-        ymax = ymax.max(p.y);
+        xmin = xmin.min(p.x.floor() as i32);
+        xmax = xmax.max(p.x.ceil() as i32);
+        ymin = ymin.min(p.y.floor() as i32);
+        ymax = ymax.max(p.y.ceil() as i32);
     }
     xmin = xmin.max(0).min(hm_w as i32 - 1);
     xmax = xmax.max(0).min(hm_w as i32 - 1);
@@ -199,11 +178,14 @@ fn box_score_fast(prob: &[f32], hm_w: usize, hm_h: usize, pts: &Vector<CvPoint>)
     let bw = (xmax - xmin + 1) as usize;
     let bh = (ymax - ymin + 1) as usize;
 
-    // 掩码：在 (xmin,ymin) 平移后的坐标系里 fillPoly 原始轮廓。
+    // 掩码：在 (xmin,ymin) 平移后的坐标系里 fillPoly 四点框（cpp 用 round 到 int）。
     let mut mask = vec![0u8; bw * bh];
     let mut shifted: Vector<CvPoint> = Vector::new();
     for p in pts.iter() {
-        shifted.push(CvPoint::new(p.x - xmin, p.y - ymin));
+        shifted.push(CvPoint::new(
+            (p.x - xmin as f32).round() as i32,
+            (p.y - ymin as f32).round() as i32,
+        ));
     }
     let mut mask_mat = unsafe {
         Mat::new_rows_cols_with_data_unsafe_def(

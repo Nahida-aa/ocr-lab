@@ -47,6 +47,11 @@ struct Cli {
     #[arg(long)]
     full_frame: bool,
 
+    /// 用 cpp 同款的透视矫正裁剪（warpPerspective）替代轴对齐包围盒。
+    /// 与 det 几何 minAreaRect 耦合使用（实验对齐 cpp 用）。
+    #[arg(long)]
+    warp_crop: bool,
+
     /// 推理线程数（预留；当前 OcrEngine 固定 4，与 cpp 默认一致）
     #[arg(long)]
     threads: Option<usize>,
@@ -156,6 +161,7 @@ fn main() -> Result<()> {
         subtitle_only: cli.subtitle_only,
         use_nms: !cli.no_nms,
         text_score: cli.text_score.unwrap_or(0.5),
+        use_warp_crop: cli.warp_crop,
     };
 
     let mut ocr = SubtitleOcr::from_profile(cli.model, &model_dir, opts)

@@ -35,6 +35,9 @@ pub struct OcrOptions {
     pub use_nms: bool,
     /// 识别置信度下限（cpp `text_score`，默认 0.5）。
     pub text_score: f32,
+    /// 是否用 cpp 同款的透视矫正裁剪（warpPerspective）替代轴对齐包围盒。
+    /// 配合 det 几何 minAreaRect 一起用（两者耦合）；默认 false。
+    pub use_warp_crop: bool,
 }
 
 impl Default for OcrOptions {
@@ -44,6 +47,7 @@ impl Default for OcrOptions {
             subtitle_only: false,
             use_nms: true,
             text_score: 0.5,
+            use_warp_crop: false,
         }
     }
 }
@@ -129,7 +133,8 @@ impl SubtitleOcr {
         model_dir: &std::path::Path,
         opts: OcrOptions,
     ) -> Result<Self> {
-        let engine = OcrEngine::from_profile(profile, model_dir)?;
+        let engine = OcrEngine::from_profile(profile, model_dir)?
+            .with_warp_crop(opts.use_warp_crop);
         Ok(Self { engine, opts })
     }
 

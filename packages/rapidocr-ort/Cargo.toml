@@ -29,6 +29,12 @@ serde_json = "1"
 # 错误链。
 anyhow.workspace = true
 opencv = { workspace = true }
+# det 后处理几何（minAreaRect / offsetPolygon 等），与 cpp 的 cv::minAreaRect 逐位对齐。
+geometry = { workspace = true }
+# geometry 的多边形点类型用 glam::Vec2，这里需要同版本才能对接。
+glam = { workspace = true }
+# 纯 Rust 线性代数（透视变换 getPerspectiveTransform），替代 opencv 的矩阵求解。
+faer = { workspace = true }
 
 # 二进制侧依赖
 clap = { version = "4", features = ["derive"] }

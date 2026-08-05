@@ -275,6 +275,7 @@ fn ocr_dir_rust(
     text_score: Option<f64>,
     subtitle_only: bool,
     _threads: Option<usize>,
+    warp_crop: bool,
 ) -> Vec<CppFrame> {
     let bin = rust_bin();
     let mut args: Vec<String> = vec!["--dir".to_string(), frame_dir.to_str().unwrap().to_string()];
@@ -284,6 +285,9 @@ fn ocr_dir_rust(
     }
     if subtitle_only {
         args.push("--subtitle-only".to_string());
+    }
+    if warp_crop {
+        args.push("--warp-crop".to_string());
     }
     let out = Command::new(&bin).args(&args).output();
     parse_rust_json(out, "dir")
@@ -587,6 +591,7 @@ fn run_benchmark_rust(
     subtitle_only: bool,
     use_dir: bool,
     threads: Option<usize>,
+    warp_crop: bool,
 ) {
     let vpath = video_path();
     let out_dir = tmp_dir().join(format!("frames-{}", label));
@@ -606,7 +611,7 @@ fn run_benchmark_rust(
     let mut total_rec = 0.0f64;
 
     if use_dir {
-        let results = ocr_dir_rust(&out_dir, Some(text_score), subtitle_only, threads);
+        let results = ocr_dir_rust(&out_dir, Some(text_score), subtitle_only, threads, warp_crop);
         for (i, r) in results.into_iter().enumerate() {
             let timestamp = (((i as f64) * (step as f64)) / src_fps * 1000.0).round() as u64;
             frame_results.push(FrameResult {
@@ -906,6 +911,8 @@ fn main() {
     let mut use_dir = false;
     // None = 不传 --threads，由 cpp 侧默认值决定
     let mut threads: Option<usize> = None;
+    // rust 侧用 --warp-crop 对齐 cpp 的透视矫正裁剪（实验）。
+    let mut warp_crop = false;
 
     let mut i = 1;
     while i < args.len() {
@@ -948,6 +955,10 @@ fn main() {
                 }
                 i += 2;
             }
+            "--warp-crop" => {
+                warp_crop = true;
+                i += 1;
+            }
             _ => i += 1,
         }
     }
@@ -979,7 +990,7 @@ fn main() {
             eprintln!("[py] 基准尚未实现（未装 rapidocr_onnxruntime）");
             std::process::exit(1);
         }
-        "rust" => run_benchmark_rust(&label, fps, text_score, subtitle_only, use_dir, threads),
+        "rust" => run_benchmark_rust(&label, fps, text_score, subtitle_only, use_dir, threads, warp_crop),
         other => {
             eprintln!("未知实现: {}", other);
             std::process::exit(2);

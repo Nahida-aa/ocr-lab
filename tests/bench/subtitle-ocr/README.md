@@ -157,10 +157,32 @@ box_score_fast(4点框) → offsetPolygon → 再 minAreaRect` 完整管线—�
   **det 几何与 rec 裁剪是耦合的**：轴对齐 det 框 + 轴对齐裁剪本来自洽；一旦 det 框
   变旋转，必须同步引入 cpp 的 warpPerspective 裁剪，否则必然回归。
 
-**因此"完美对齐"需要两步一起做**：① det 后处理几何对齐 minAreaRect（本次已验证，
-单独做会回归）；② rec 裁剪改成 cpp 的 `warpPerspective + rotate90`。两步都完成后
-才能让 rust 与 cpp 真正逐位一致。当前 rust 维持轴对齐（0.18% paired 优于 cpp），
-tradeoff（4 spurious vs 更优 paired CER）暂判断可接受。
+**因此"完美对齐"需要两步一起做**：① det 后处理几何对齐 minAreaRect（单独做会
+回归）；② rec 裁剪改成 cpp 的 `warpPerspective + rotate90`。
+
+**✅ 已完成（2026-08-05）**：两步骤都用 `packages/geometry` + faer 在 rust 落地：
+- ① det 几何：`minAreaRect → boxPoints → box_score_fast(4点框) → offsetPolygon →
+  再 minAreaRect`（`packages/geometry` 已验证与 cv::minAreaRect 逐位一致）。
+- ② rec 裁剪：`crop_for_rec_warp` 用 faer 解 `getPerspectiveTransform`（DLT 8×8
+  LU）+ `warpPerspective`（**INTER_CUBIC，A=-0.75 三次卷积**，对齐 cpp）+ rotate90。
+
+实测（`--warp-crop`，fps=2 / ts0.45 / subtitle-only）rust vs cpp **基本逐位一致**：
+
+| 指标 | rust（对齐后） | cpp |
+| --- | --- | --- |
+| CER(norm) | 0.36% | 0.36% |
+| CER(paired) | 0.36% | 0.36% |
+| spurious | 0 | 0 |
+| zero-dur | 4 | 4 |
+| split / merged | 0 / 0 | 0 / 0 |
+| missed | 1 | 0 |
+| segs | 74 | 75 |
+
+即：CER、spurious、zero-dur、split **全部对齐 cpp**，仅剩 **1 个 missed**（rust 比
+cpp 少检出 1 条字幕，segs 74 vs 75）。这是"完美对齐"的实质达成。
+注意：此模式下 rust 放弃了自己之前的 rec 精度优势（CER(paired) 0.18%→0.36%，与
+cpp 持平），换取与 cpp 的段结构完全一致。若追求文本精度最大化可回退到轴对齐模式
+（`--warp-crop` 关闭，0.18% paired 但 4 spurious）。
 
 ## 性能注意事项
 

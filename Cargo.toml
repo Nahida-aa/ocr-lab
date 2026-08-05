@@ -56,9 +56,15 @@ ort = "2.0.0-rc.13"
 burn = "0.21.0"
 util = { path = "packages/util" }
 glam = "0.33.2"
+# 纯 Rust 高性能线性代数（faer）。作为通用底座，替代/降低对 opencv 在矩阵运算
+# （如透视变换 getPerspectiveTransform）上的依赖。SIMD/多线程优化。
+faer = "0.24.4"
 # PP-OCR det/rec/cls 引擎（onnxruntime 推理 + DB 后处理）。
 # 跨包共享，统一走 workspace，改 path/版本只动这一处。
 rapidocr-ort = { path = "packages/rapidocr-ort" }
+# 纯 Rust 二维多边形几何（凸包 / 旋转卡尺最小外接矩形 / 框角点 / 多边形偏移）。
+# 供 rapidocr-ort 的 det 后处理复刻 cpp 的 minAreaRect + unclip 几何。
+geometry = { path = "packages/geometry" }
 # 屏幕抓取（ScreenCast 窗口流 / 全屏）。已随仓库结构迁移到 packages/ 下，
 # 跨包共享，统一走 workspace。
 capturer = { path = "packages/capturer" }
