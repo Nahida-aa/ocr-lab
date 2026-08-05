@@ -184,6 +184,20 @@ cpp 少检出 1 条字幕，segs 74 vs 75）。这是"完美对齐"的实质达�
 cpp 持平），换取与 cpp 的段结构完全一致。若追求文本精度最大化可回退到轴对齐模式
 （`--warp-crop` 关闭，0.18% paired 但 4 spurious）。
 
+#### 唯一 missed 的根因（'啊'，frame_00257）
+
+GT 在 127700-128500ms 有 '啊'，rust warp-on 漏掉。定位：
+- frame_00257 的 '啊' 框 `[624,647]-[657,683]`（近方形 33×36，单字）。
+- `axis-off`（轴对齐裁剪）rec 读出 '啊' conf 0.64 ✓；`warp-on` 同一个框 rec 读出
+  **'gsd' conf 0.177**（垃圾）→ 被 text_score 0.45 过滤 → missed。
+- cpp 同帧读出 '啊'。
+
+即：这是 **rec 裁剪在 warpPerspective 下的亚像素差异**——'啊' 是小字符，我的
+`warpPerspective`（INTER_CUBIC 逆映射采样）与 OpenCV 的 warpPerspective 在亚像素
+采样上有细微差别，足以把该字符的 rec 结果从 '啊' 翻转成 'gsd'。det 几何已对齐，
+纯属 rec 采样精度的边界情况。要消除需让 warp 的逆映射/插值与 OpenCV 逐位一致
+（含亚像素坐标约定），对单个字符成本高、收益低，当前判断可接受。
+
 ## 性能注意事项
 
 ⚠️ **ORT 线程数不是越大越好。** det 输入小、rec 是逐行小图，算子粒度细，
