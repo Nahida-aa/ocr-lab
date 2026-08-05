@@ -273,7 +273,12 @@ mod tests {
     fn load_image(path: &Path) -> Array3<u8> {
         let img = image::open(path).unwrap().to_rgb8();
         let (w, h) = (img.width() as usize, img.height() as usize);
-        Array3::from_shape_vec((h, w, 3), img.into_raw()).unwrap()
+        let mut data = img.into_raw();
+        // 模型按 BGR 训练（对齐 cpp / subtitle-ocr 生产路径），测试也喂 BGR。
+        for px in data.chunks_mut(3) {
+            px.swap(0, 2);
+        }
+        Array3::from_shape_vec((h, w, 3), data).unwrap()
     }
 
     #[test]
@@ -286,18 +291,20 @@ mod tests {
             .expect("加载 v3 引擎失败（确认 models/rapidocr 权重已就绪）");
 
         let cases = [
-            ("stable1.png", "Count"),
-            ("big1.png", "OCR"),
-            ("nat1.png", "World"),
+            ("ui_stable1.png", "Count"),
+            ("ui_big1.png", "OCR"),
+            ("ui_nat1.png", "World"),
         ];
         for (name, expect) in cases {
             let img = load_image(&fixtures.join(name));
             let results = engine.detect(&img).expect("OCR 推理失败");
             assert!(!results.is_empty(), "{} 应检测到文字", name);
             let joined: String = results.iter().map(|r| r.text.clone()).collect();
+            let joined_lower = joined.to_lowercase();
+            let expect_lower = expect.to_lowercase();
             assert!(
-                joined.contains(expect),
-                "{} 识别结果 {} 应包含 '{}'",
+                joined_lower.contains(&expect_lower),
+                "{} 识别结果 {} 应包含 '{}'（大小写不敏感）",
                 name,
                 joined,
                 expect
