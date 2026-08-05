@@ -1,0 +1,15 @@
+[package]
+name = "bench-subtitle-ocr"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "subtitle-ocr 三实现（cpp/py/rust）的准确性与速度基准测试驱动"
+
+[dependencies]
+serde_json = "1"
+
+[lib]
+name = "bench_subtitle_ocr"
+path = "src/lib.rs"
+

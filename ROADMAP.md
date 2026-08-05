@@ -2,27 +2,31 @@
 
 ## 目标
 
-构建一个**通用的实时屏幕分析与操作回灌**工具链：对任意 GUI（包括自绘框架如
-gpui）的截图做文字/图标/状态识别，再把识别结果映射成可执行的点击/输入操作，
-形成「看屏幕 → 理解 → 操作」的闭环。不针对某一框架训练专用 OCR，而是用通用
-视觉能力。
+单仓库聚合**三个强相关的独立目标**（非包含关系，各自有独立交付物与验收）：
+
+1. **字幕识别**（目标 1）：从视频帧抽取字幕文字。
+   - 实现变体：`packages/subtitle-ocr-cpp`（C++/ORT 直连，已实现）、
+     `packages/subtitle-ocr-py`（Python/rapidocr，已实现）、
+     `packages/subtitle-ocr`（Rust，待实现）。
+   - 横比基准：`tests/bench/subtitle-ocr`（`bin/test.rs` 正确性 + `bin/bench.rs` 性能占位）。
+   - 参考素材：`tests/bench/subtitle-ocr/ref/`（video_source.mp4 + ocr_manual.json 人工标注）。
+2. **GUI 自动操作**（目标 2）：「看屏幕 → 理解 → 操作」闭环。
+   - 组合：`crates/capturer`（抓图）+ `crates/rapidocr-ort`（文字识别）+ `crates/screen-operator`（点击/输入回灌）。
+3. **GUI 自动化测试**（目标 3）：可复现 fixture + 识别/操作验证。
+   - `tools/gen_ui_img`（gpui 真实渲染 → capturer 抓图）→ `tests/fixtures/ui_*.png`。
+
+三者共享底层 OCR 引擎与抓图/注入设施（故同仓），但**目标 1 的基准只服务字幕识别，
+不可误用作目标 2/3 的验收**。
 
 ```
- 截图 (waydroid / adb / X11)
-        │
-        ▼
-  rapidocr-ort  ── 文字层（PP-OCR v3/v6，已有）
-  + opencv       ── 图标/状态/布局层（待做）
-  + (可选 yolo)  ── 控件检测（待做）
-        │
-        ▼
-  结构化结果 (text + bbox + center)
-        │
-        ▼
-  ui_probe  ── 断言/回灌：比对预期文字、点击 center、输入文本（待做）
-        │
-        ▼
-  gpui_learn apps（08_testing 等）自动化验证
+                        ┌─────────────────────────────────────────┐
+                        │  共用底层：rapidocr-ort / capturer / 注入  │
+                        └─────────────────────────────────────────┘
+            ┌──────────────────────┬──────────────────────┬──────────────────────┐
+            ▼                      ▼                      ▼
+     目标1: 字幕识别         目标2: GUI 自动操作      目标3: GUI 自动化测试
+     subtitle-ocr-*          capturer+rapidocr-ort    gen_ui_img → fixtures
+     + bench/subtitle-ocr    + screen-operator        + 识别/操作验证
 ```
 
 ## 当前状态
@@ -81,14 +85,21 @@ ocr-lab/
 ├── ROADMAP.md              # 本文件
 ├── models/rapidocr/        # 权重（gitignore，152M）
 ├── crates/
-│   ├── rapidocr-ort/       # 检测+识别 库 & 二进制（主交付）
+│   ├── rapidocr-ort/       # 检测+识别 库 & 二进制（目标 2/3 共用的识别引擎）
 │   ├── capturer/           # 自研跨 compositor 抓图基础设施（Capturer trait + portal 后端）
+│   ├── screen-operator/    # 操作回灌层（目标 2）
 │   ├── util/               # 资源加载（rust-embed 辅助）
 │   └── settings/           # 配置（rust-embed 资源）
+├── packages/
+│   ├── subtitle-ocr-cpp/   # 目标 1：字幕识别 C++ 实现（ocr.test.ts + test.justfile）
+│   ├── subtitle-ocr-py/    # 目标 1：字幕识别 Python 实现
+│   └── subtitle-ocr/       # 目标 1：字幕识别 Rust 实现（待实现）
 ├── tools/
 │   ├── gen_fixtures.py     # 文字图片生成器（PIL/中文，确定性单元 fixture）
-│   └── gen_ui_img/         # gpui 真实渲染 → capturer 抓图 → 存 tests/fixtures/ui_*.png
+│   └── gen_ui_img/         # gpui 真实渲染 → capturer 抓图 → 存 tests/fixtures/ui_*.png（目标 3）
 ├── tests/
-│   └── fixtures/           # 测试图（stable1/big1/nat1/zh1/mix1 …；ui_* 为 gpui 生成）
+│   ├── fixtures/           # 测试图（stable1/big1/nat1/zh1/mix1 …；ui_* 为 gpui 生成）
+│   ├── .test-frames/       # 正确性测试用的 3 帧（目标 1 跨实现测试源）
+│   └── bench/subtitle-ocr/ # 目标 1 横比基准（Cargo 包 bench-subtitle-ocr）
 └── assets/                 # 嵌入资源（settings/keymaps）
 ```

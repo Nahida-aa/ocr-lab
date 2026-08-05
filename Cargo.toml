@@ -2,18 +2,22 @@
 resolver = "3"
 members = [
     # "apps/*",
-    "crates/*", "tools/gen_ui_img", "tools/accel-set",
+    "crates/*", "packages/rapidocr-ort", "tools/gen_ui_img", "tools/accel-set", "packages/subtitle-ocr",
+    # 基准测试驱动（独立 cargo 包，见 tests/bench/subtitle-ocr）。
+    # 不属于常规构建目标，故不放进 default-members。
+    "tests/bench/subtitle-ocr",
 ]
 
 # default-members：当你只敲 `cargo build` / `cargo run`（不带 -p）时，
 # cargo 实际去构建哪些成员。这里只默认构建 apps/*（二进制例子），
-# 不碰 crates/*（库）。原因：
+# 不碰 crates/*（库）与 tests/bench 基准包。原因：
 #   - 库本身没有 main，单独 `cargo run` 无意义；
-#   - 新人clone后直接 `cargo run` 不会误触发所有内部库的编译，体验更轻。
+#   - 新人clone后直接 `cargo run` 不会误触发所有内部库的编译，体验更轻；
+#   - bench 是可选基准工具，不应拖累默认构建。
 # 想全量构建时，用 `cargo build --workspace`。
-# default-members = [
-#     "apps/*",
-# ]
+default-members = [
+    "tools/gen_ui_img", "tools/accel-set", "packages/subtitle-ocr",
+]
 
 # [workspace.package] 里写的字段会被子包用 `version.workspace = true` 继承。
 # 这样全仓库版本号、edition、license 统一改一处即可。
