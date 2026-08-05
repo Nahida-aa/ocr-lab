@@ -219,6 +219,23 @@ GT 在 127700-128500ms 有 '啊'，rust warp-on 漏掉。定位：
 CER 也降到 cpp 的 0.36%。两者都需落地，"完美对齐"才算真正完成；当前 RGB+warp 的
 0.36%/1-missed 是"段结构对齐但通道错、missed 恰好 1"的中间态。
 
+**当前状态（BGR 已提交，2026-08-06）**：① 已落地——rust 读图改 BGR（`af03310`），
+missed=0、彩色字幕安全。② 插值待修，当前 rust-BGR CER=0.54%（3 个误识
+白→百×2、发→恩），cpp=0.36%。
+
+**插值深挖（对照实验结论）**：用 C++ 探针让 cpp 对 frame_257 '啊' 框 warp，dump 输出
+逐像素对比 rust：
+
+| 实现 | 与 cpp 像素差 | maxdiff |
+| --- | --- | --- |
+| rust 连续插值（当前） | 50.8% | ±5 |
+| rust INTER_TAB_SIZE=32 量化 | 60.8% | ±9 |
+
+按 OpenCV `remapBicubic` 的 32 格量化反而更差 → 说明本机 `cv::warpPerspective`
+（INTER_CUBIC）走 HAL SIMD 路径（`WarpPerspectiveLine_Process_CV_SIMD`），src 坐标
+全精度 double 计算、仅小数部分量化，故连续版本更接近。剩余差异是 OpenCV 插值表
+`initInterTab1D` 浮点值 + HAL 定点舍入，需逐位复刻 HAL 管线才能消除。
+
 ## 性能注意事项
 
 ⚠️ **ORT 线程数不是越大越好。** det 输入小、rec 是逐行小图，算子粒度细，
