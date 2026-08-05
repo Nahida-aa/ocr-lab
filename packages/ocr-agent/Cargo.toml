@@ -21,7 +21,7 @@ anyhow.workspace = true
 # 抓图后端：xdg-desktop-portal ScreenCast/PipeWire（跨 compositor，不依赖 opencv）。
 # 用于「闭环验证」时自动重新抓帧，无需人工介入。capturer 自身不含 opencv，
 # 之前的 opencv 重编失败来自 rapidocr-ort（dev-dep），与 capturer 无关。
-capturer = { path = "../capturer" }
+capturer = { workspace = true }
 # 屏幕操作层：在屏幕绝对坐标上注入鼠标/键盘（ydotool 后端）。ocr-agent 的
 # YdotoolExecutor 内部复用它，避免把输入注入逻辑硬编码在本 crate。
 screen-operator = { path = "../screen-operator" }
@@ -29,7 +29,7 @@ glam = { workspace = true }
 
 # 示例侧依赖（examples 可用 dev-dependencies）。
 [dev-dependencies]
-rapidocr-ort = { path = "../../packages/rapidocr-ort" }
+rapidocr-ort = { workspace = true }
 serde_json = "1"
 # 驱动 capturer 的 async（ashpd 走 async-io 后端）。
 async-io = "2"

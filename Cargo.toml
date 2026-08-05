@@ -1,8 +1,7 @@
 [workspace]
 resolver = "3"
 members = [
-    # "apps/*",
-    "crates/*", "packages/rapidocr-ort", "tools/gen_ui_img", "tools/accel-set", "packages/subtitle-ocr",
+    "packages/rapidocr-ort", "tools/gen_ui_img", "tools/accel-set", "packages/subtitle-ocr",
     # 基准测试驱动（独立 cargo 包，见 tests/bench/subtitle-ocr）。
     # 不属于常规构建目标，故不放进 default-members。
     "tests/bench/subtitle-ocr",
@@ -54,8 +53,14 @@ image = "0.25"
 opencv = { version = "0.100.0", default-features = false, features = ["imgproc"] }
 ort = "2.0.0-rc.13"
 burn = "0.21.0"
-util = { path = "crates/util" }
+util = { path = "packages/util" }
 glam = "0.33.2"
+# PP-OCR det/rec/cls 引擎（onnxruntime 推理 + DB 后处理）。
+# 跨包共享，统一走 workspace，改 path/版本只动这一处。
+rapidocr-ort = { path = "packages/rapidocr-ort" }
+# 屏幕抓取（ScreenCast 窗口流 / 全屏）。已随仓库结构迁移到 packages/ 下，
+# 跨包共享，统一走 workspace。
+capturer = { path = "packages/capturer" }
 # gpui 相关依赖统一在 workspace 声明语义版本，真正的 git 源由下方
 # [patch.crates-io] 覆盖（cargo 要求 patch 只能写在 workspace 根）。
 gpui = { version = "0.2.2", default-features = false }
