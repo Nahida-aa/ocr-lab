@@ -126,8 +126,10 @@ frame_00225 的 rust 框是 `[894,613]-[913,640]`（约 19×26px 小框，字幕
    `rapidocr_onnxruntime/ch_ppocr_v3_det/utils.py` 的 `box_score_fast`——实测
    **未消除** spurious。
 4. **det 缩放插值核**：cpp 用 opencv `cv::resize(INTER_LINEAR)`，rust 用
-   `image` 的 `Triangle`。曾切换 rust 到 opencv 双线性——**反而更差**（0.72%→0.89%、
-   spurious 4→5）。**已回退**到 `Triangle`。
+   `image` 的 `Triangle`。曾切换 rust 到 opencv 双线性——聚合上**反而更差**
+   （0.72%→0.89%、spurious 4→5）。**关键的单帧隔离实验**：把 rust det 临时换成
+   与 cpp 完全一致的 bilinear，重跑 frame_225——**'V' 依然出现（conf 0.579）**。
+   证明缩放核**不是**这些 spurious 的来源，回退到 `Triangle` 是安全的。
 5. **BOX_THRESH**：cpp=0.5、rust=0.6。曾给 cpp 加 `OCR_BOX_THRESH` 环境变量设成
    0.6 与 rust 对齐——cpp 结果**完全不变**（仍是 0 spurious / 0.36%），证明阈值差异
    不是 spurious 来源。cpp 侧该环境变量可保留（默认仍 0.5）。
@@ -137,12 +139,28 @@ frame_00225 的 rust 框是 `[894,613]-[913,640]`（约 19×26px 小框，字幕
    不一致。**已回退**到轴对齐包围盒 + 矩形 unclip。
 
 **结论**：rust 与 cpp 的残余差异是 **4 个确定性 spurious（孤立 V/3/E/9）+ 6 个
-zero-dur**，根源是 det 后处理的**几何差异**（轴对齐包围盒 vs `minAreaRect`）——rust
-的简化几何会让个别小文本状轮廓成框、并被 rec 读成孤立字符，cpp 的几何则压掉。
-这不是识别质量问题：rust 的 `CER(paired)=0.18%` 稳定优于 cpp 的 0.36%，漏检 0。
-若要消除这 4 个 spurious，需让 rust 的 det 几何与 cpp 完全一致——但之前用
-`packages/geometry` 的 `min_area_rect` 接入时因归一化约定差异反而全面退化，故维持
-轴对齐现状。这个 tradeoff（4 个 spurious vs 更优的 paired CER）当前判断为可接受。
+zero-dur**。关键澄清：cpp 在 frame_225/251/262/300 的 `segments` 是**空数组**——
+cpp 的 det **根本没有成框**（不是 rec 读空）。而 rust 与 cpp 的 det 输入已确认完全
+一致（同 ROI 288×1280、同尺寸 736×3264、同缩放核），唯一剩余差异是 **det 后处理
+几何**（rust 轴对齐包围盒 vs cpp `minAreaRect`）。
+
+**决定性实验（2026-08-05）**：用已验证与真实 cv::minAreaRect 逐位一致的
+`packages/geometry` 重写 rust det 几何，复刻 cpp 的 `minAreaRect → boxPoints →
+box_score_fast(4点框) → offsetPolygon → 再 minAreaRect` 完整管线——
+- 单帧层面：frame_225/251/262 的 V/3/E **消失**（3/4 spurious 消除，证明 det 几何
+  确为 spurious 来源）；
+- **聚合层面反而严重退化**：CER(paired) 0.18%→0.36%、CER(norm) 0.72%→**5.72%**、
+  zero-dur 6→8、split 1→2。
+- 原因：rust 的 rec 裁剪 `crop_for_rec` 是**轴对齐包围盒**，而 cpp 对每个 det 框做
+  `warpPerspective`（透视矫正成水平）。新几何让 rust 也产出**旋转框**（如 frame_189
+  的 '中' 框是倾斜 ~5° 的四边形），轴对齐裁剪会带进背景/旋转 → rec 严重劣化。
+  **det 几何与 rec 裁剪是耦合的**：轴对齐 det 框 + 轴对齐裁剪本来自洽；一旦 det 框
+  变旋转，必须同步引入 cpp 的 warpPerspective 裁剪，否则必然回归。
+
+**因此"完美对齐"需要两步一起做**：① det 后处理几何对齐 minAreaRect（本次已验证，
+单独做会回归）；② rec 裁剪改成 cpp 的 `warpPerspective + rotate90`。两步都完成后
+才能让 rust 与 cpp 真正逐位一致。当前 rust 维持轴对齐（0.18% paired 优于 cpp），
+tradeoff（4 spurious vs 更优 paired CER）暂判断可接受。
 
 ## 性能注意事项
 
