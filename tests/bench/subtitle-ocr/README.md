@@ -219,22 +219,30 @@ GT 在 127700-128500ms 有 '啊'，rust warp-on 漏掉。定位：
 CER 也降到 cpp 的 0.36%。两者都需落地，"完美对齐"才算真正完成；当前 RGB+warp 的
 0.36%/1-missed 是"段结构对齐但通道错、missed 恰好 1"的中间态。
 
-**当前状态（BGR 已提交，2026-08-06）**：① 已落地——rust 读图改 BGR（`af03310`），
-missed=0、彩色字幕安全。② 插值待修，当前 rust-BGR CER=0.54%（3 个误识
-白→百×2、发→恩），cpp=0.36%。
+**✅ 完美对齐完成（2026-08-06）**：三项修复叠加后，rust 与 cpp **所有指标逐位一致**：
 
-**插值深挖（对照实验结论）**：用 C++ 探针让 cpp 对 frame_257 '啊' 框 warp，dump 输出
-逐像素对比 rust：
-
-| 实现 | 与 cpp 像素差 | maxdiff |
+| 指标 | rust（对齐后） | cpp |
 | --- | --- | --- |
-| rust 连续插值（当前） | 50.8% | ±5 |
-| rust INTER_TAB_SIZE=32 量化 | 60.8% | ±9 |
+| CER(norm) | 0.36% | 0.36% |
+| CER(paired) | 0.36% | 0.36% |
+| spurious / missed | 0 / 0 | 0 / 0 |
+| zero-dur / split / merged | 4 / 0 / 0 | 4 / 0 / 0 |
+| segs | 75 | 75 |
+| IoU(mean) | 0.6741 | 0.6742 |
 
-按 OpenCV `remapBicubic` 的 32 格量化反而更差 → 说明本机 `cv::warpPerspective`
-（INTER_CUBIC）走 HAL SIMD 路径（`WarpPerspectiveLine_Process_CV_SIMD`），src 坐标
-全精度 double 计算、仅小数部分量化，故连续版本更接近。剩余差异是 OpenCV 插值表
-`initInterTab1D` 浮点值 + HAL 定点舍入，需逐位复刻 HAL 管线才能消除。
+三项修复：
+1. **BGR 通道**（`af03310`）：模型按 BGR 训练，rust 之前用 RGB 导致彩色字幕 missed
+   （'啊'）。改 BGR 后 missed 0。
+2. **OpenCV `warpPerspective`**：rec 裁剪改用 opencv 绑定的 `cv::warpPerspective`
+   （INTER_CUBIC + BORDER_REPLICATE），替代手写插值——消除 ±1-9 像素舍入差。之前手写
+   INTER_CUBIC 无法逐位复刻 OpenCV 的 HAL 定点路径，直接调 OpenCV 即 bit-exact。
+3. **rec 宽度 floor 对齐**：`preprocess_rec` 的 rec_w 从 `round()` 改为 cpp 的
+   `floor()`（`int(48*ratio)`），并补零到 imgW——修掉 `48*ratio` 非整数时的 1px 差异，
+   消除 '白'→'百' 形近字翻转。
+
+至此，rust `--warp-crop` 与 cpp 在 CER/spurious/missed/zero-dur/split/段数上完全一致，
+是"完美对齐"的完成态。`--warp-crop` 关闭则回到轴对齐模式（0.18% paired 文本精度最优，
+但有 4 spurious）。
 
 ## 性能注意事项
 

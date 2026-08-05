@@ -76,11 +76,31 @@ pub fn det_target_size(h: usize, w: usize) -> (usize, usize) {
 pub fn preprocess_rec(img: &Array3<u8>) -> (Array4<f32>, usize) {
     let (h, w, _) = img.dim();
     let ratio = w as f32 / h as f32;
-    let rec_w = ((REC_H as f32 * ratio).round() as usize).max(1);
-    let resized = resize_bilinear(img, REC_H, rec_w);
+    // 对齐 cpp preprocessRec：imgW = int(48*ratio)（floor），resizedW = imgW（非整数时）。
+    // 旧实现用 round()，与 cpp 的 floor 在 48*ratio 非整数时差 1px，足以翻转形近字（白/百）。
+    let img_w = ((REC_H as f32 * ratio) as usize).max(1);
+    let resized_w = if (REC_H as f32 * ratio).ceil() > img_w as f32 {
+        img_w
+    } else {
+        (REC_H as f32 * ratio).ceil() as usize
+    };
+    let resized_w = resized_w.max(1);
+    let resized = resize_bilinear(img, REC_H, resized_w);
     let (mean, std) = REC_NORM;
     let chw = normalize_chw(&resized, &mean, &std);
-    (chw, rec_w)
+    // 对齐 cpp：tensor 宽 = imgW（可能 > resized_w，右侧补零）。
+    if img_w > resized_w {
+        let mut padded = Array4::<f32>::zeros((1, 3, REC_H, img_w));
+        for ci in 0..3 {
+            for y in 0..REC_H {
+                for x in 0..resized_w {
+                    padded[[0, ci, y, x]] = chw[[0, ci, y, x]];
+                }
+            }
+        }
+        return (padded, img_w);
+    }
+    (chw, img_w)
 }
 
 /// 方向分类预处理：resize 到 `[CLS_H, CLS_W]`，归一化 (x/255-0.5)/0.5。

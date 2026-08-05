@@ -6,6 +6,8 @@
 
 use ndarray::Array3;
 use opencv::core::Point2f;
+use opencv::imgproc;
+use opencv::prelude::*;
 use ort::session::Session;
 
 use crate::cls;
@@ -80,9 +82,10 @@ fn invert_h3(m: &[[f64; 3]; 3]) -> [[f64; 3]; 3] {
 
 /// 透视变换裁剪（对应 cpp 的 `warpPerspective(INTER_CUBIC, BORDER_REPLICATE)`）。
 ///
-/// 把四边形 `polygon`（tl-tr-br-bl）矫正成 `dst_w×dst_h` 的水平矩形。`polygon→矩形`
-/// 的正向 H 已求出，这里用 H⁻¹ 把每个输出像素 (u,v) 逆映射回源图坐标，双线性采样；
-/// 越界用最近边缘像素填充（近似 BORDER_REPLICATE）。
+/// 把四边形 `polygon`（tl-tr-br-bl）矫正成 `dst_w×dst_h` 的水平矩形。直接用
+/// OpenCV 的 `cv::warpPerspective`（`INTER_CUBIC` + `BORDER_REPLICATE`），与 cpp
+/// 的 rec 输入**逐位一致**（OpenCV 内部 invert M 后做定点插值，rust 手写无法逐位
+/// 复刻，故这里直接调 OpenCV 绑定）。
 fn warp_perspective(img: &Array3<u8>, polygon: &[Point2f; 4], dst_w: usize, dst_h: usize) -> Array3<u8> {
     let (h, w, c) = img.dim();
     let src = [
@@ -97,44 +100,60 @@ fn warp_perspective(img: &Array3<u8>, polygon: &[Point2f; 4], dst_w: usize, dst_
         Point2f::new((dst_w - 1) as f32, (dst_h - 1) as f32),
         Point2f::new(0.0, (dst_h - 1) as f32),
     ];
+    // 正向 H（src→dst），OpenCV warpPerspective 内部会 invert（非 WARP_INVERSE_MAP）。
     let fwd = get_perspective_transform(&src, &dst);
-    let hinv = invert_h3(&fwd);
+    let m_data: Vec<f64> = (0..3)
+        .flat_map(|r| (0..3).map(move |col| fwd[r][col]))
+        .collect();
+    let m_1d = opencv::core::Mat::from_slice(&m_data).expect("M mat");
+    let m = m_1d.reshape(1, 3).expect("M reshape");
 
-    let mut out = Array3::<u8>::zeros((dst_h, dst_w, c));
-    for v in 0..dst_h {
-        for u in 0..dst_w {
-            let uf = u as f64;
-            let vf = v as f64;
-            let denom = hinv[2][0] * uf + hinv[2][1] * vf + hinv[2][2];
-            let denom = if denom.abs() < 1e-12 { 1.0 } else { denom };
-            let sx = (hinv[0][0] * uf + hinv[0][1] * vf + hinv[0][2]) / denom;
-            let sy = (hinv[1][0] * uf + hinv[1][1] * vf + hinv[1][2]) / denom;
-            // INTER_CUBIC（A=-0.75 三次卷积）+ BORDER_REPLICATE。
-            let x0 = sx.clamp(0.0, (w as f64) - 1.0);
-            let y0 = sy.clamp(0.0, (h as f64) - 1.0);
-            let xi = x0.floor() as i64;
-            let yi = y0.floor() as i64;
-            let fx = x0 - xi as f64;
-            let fy = y0 - yi as f64;
-            let cx = cubic_coeffs(fx);
-            let cy = cubic_coeffs(fy);
+    // 源图 → OpenCV Mat（CV_8UC3, 行优先 RGB/BGR 由调用方保证）。
+    let mut src_data = Vec::with_capacity(h * w * c);
+    for y in 0..h {
+        for x in 0..w {
             for k in 0..c {
-                // 可分离三次卷积：Σ_{i,j} cy[i]*cx[j]*img[yi+i-1, xi+j-1]。
-                // 越界用边缘像素（BORDER_REPLICATE）。
-                let mut val = 0.0f64;
-                for i in 0..4 {
-                    let yy = (yi + i as i64 - 1).clamp(0, (h as i64) - 1) as usize;
-                    let mut row = 0.0f64;
-                    for j in 0..4 {
-                        let xx = (xi + j as i64 - 1).clamp(0, (w as i64) - 1) as usize;
-                        row += cx[j] * img[[yy, xx, k]] as f64;
-                    }
-                    val += cy[i] * row;
-                }
-                out[[v, u, k]] = val.round().clamp(0.0, 255.0) as u8;
+                src_data.push(img[[y, x, k]]);
             }
         }
     }
+    let src_1d = opencv::core::Mat::from_slice(&src_data).expect("src mat");
+    let src_mat = src_1d.reshape(3, h as i32).expect("src reshape");
+
+    let mut dst_mat = opencv::core::Mat::default();
+    imgproc::warp_perspective_def(
+        &src_mat,
+        &mut dst_mat,
+        &m,
+        opencv::core::Size::new(dst_w as i32, dst_h as i32),
+    )
+    .expect("warpPerspective");
+    // 用显式 flags：INTER_CUBIC + BORDER_REPLICATE，borderValue 0。
+    let mut dst_mat2 = opencv::core::Mat::default();
+    imgproc::warp_perspective(
+        &src_mat,
+        &mut dst_mat2,
+        &m,
+        opencv::core::Size::new(dst_w as i32, dst_h as i32),
+        opencv::imgproc::INTER_CUBIC,
+        opencv::core::BORDER_REPLICATE,
+        opencv::core::Scalar::new(0.0, 0.0, 0.0, 0.0),
+        opencv::core::AlgorithmHint::ALGO_HINT_ACCURATE,
+    )
+    .expect("warpPerspective cubic");
+
+    // 读回 Array3。
+    let mut out = Array3::<u8>::zeros((dst_h, dst_w, c));
+    let data = dst_mat2.data_bytes().expect("dst data");
+    let stride = dst_mat2.step1(0).expect("dst step") as usize;
+    for y in 0..dst_h {
+        for x in 0..dst_w {
+            for k in 0..c {
+                out[[y, x, k]] = data[y * stride + x * c + k];
+            }
+        }
+    }
+    let _ = (dst_mat, src_mat);
     out
 }
 
