@@ -198,6 +198,27 @@ GT 在 127700-128500ms 有 '啊'，rust warp-on 漏掉。定位：
 纯属 rec 采样精度的边界情况。要消除需让 warp 的逆映射/插值与 OpenCV 逐位一致
 （含亚像素坐标约定），对单个字符成本高、收益低，当前判断可接受。
 
+**决定性的 BGR 发现（2026-08-06）**：rust 读图用 RGB，cpp 用 BGR（`cv::imread`）。
+把 rust 整帧换 BGR 后全量重跑（warp-crop）：
+
+| 配置 | CER(norm) | CER(paired) | missed | spurious |
+| --- | --- | --- | --- | --- |
+| rust RGB | 0.36% | 0.36% | 1 | 0 |
+| rust **BGR** | 0.54% | 0.54% | **0** | 0 |
+| cpp BGR | 0.36% | 0.36% | 0 | 0 |
+
+- **BGR 让 missed 1→0**（'啊' 恢复）——证实 **PP-OCR/rapidocr 模型按 BGR 训练**
+  （PaddleOCR 用 cv2.imread=BGR，cpp 是对的），rust 用 RGB 是错的，任何彩色字幕
+  都有 missed 风险（不止这个视频）。
+- **但 BGR 让 CER 0.36%→0.54%**（变差）——同一 BGR 下 rust 仍比 cpp 差 0.18pp，
+  差异在 **warp 的 INTER_CUBIC 插值舍入**（对照实验：扣除通道顺序后 rust/cpp warp
+  输出仍有 50-60% 像素差 ±1-9，均匀分布，非坐标偏移）。
+
+**结论**：真正要修的是**两件事**——① rust 应改用 BGR（修 missed，否则彩色字幕有
+系统性风险）；② warp 插值需对齐 OpenCV 的 `initInterTab1D` 插值表，让 rust-BGR 的
+CER 也降到 cpp 的 0.36%。两者都需落地，"完美对齐"才算真正完成；当前 RGB+warp 的
+0.36%/1-missed 是"段结构对齐但通道错、missed 恰好 1"的中间态。
+
 ## 性能注意事项
 
 ⚠️ **ORT 线程数不是越大越好。** det 输入小、rec 是逐行小图，算子粒度细，
