@@ -244,21 +244,22 @@ pub(crate) fn get_intersect_images(
     let h = cache.h();
     let dl = p.dl;
 
-    // 收集 [fn, fn+DL-1] 中**有字幕**（has_text）的帧。第一帧越界 → 真·无数据（返回 None）。
-    // 只对 has_text=1 的帧做交集：空字幕帧（has_text=0）不参与，避免把交集清空导致
-    // 段提前结束（C++ 异步下同样能看到段延伸到最后一个有字幕帧）。全部无字幕 → bln=false。
+    // 收集 [fn, fn+DL-1] 中**有字幕**（has_text）的帧（只存引用切片，不整帧拷贝）。
+    // 第一帧越界 → 真·无数据（返回 None）。只对 has_text=1 的帧做交集：空字幕帧
+    // （has_text=0）不参与，避免把交集清空导致段提前结束（C++ 异步下同样能看到
+    // 段延伸到最后一个有字幕帧）。全部无字幕 → bln=false。
     let f0 = try_frame(cache, fn_ as i32)?;
-    let mut ims: Vec<Vec<u8>> = Vec::with_capacity(dl);
-    let mut imys: Vec<Vec<u16>> = Vec::with_capacity(dl);
+    let mut ims: Vec<&[u8]> = Vec::with_capacity(dl);
+    let mut imys: Vec<&[u16]> = Vec::with_capacity(dl);
     if f0.has_text {
-        ims.push(f0.im.clone());
-        imys.push(f0.y.clone());
+        ims.push(&f0.im);
+        imys.push(&f0.y);
     }
     for i in 1..dl {
         match try_frame(cache, (fn_ + i) as i32) {
             Some(f) if f.has_text => {
-                ims.push(f.im.clone());
-                imys.push(f.y.clone());
+                ims.push(&f.im);
+                imys.push(&f.y);
             }
             Some(_) => {} // 无字幕帧跳过
             None => break,
@@ -268,14 +269,13 @@ pub(crate) fn get_intersect_images(
         // 窗口内无字幕帧 → bln=false（段结束）。
         return Some((vec![0u8; w * h], vec![0u16; w * h], false));
     }
-    let im_refs: Vec<&[u8]> = ims.iter().map(|v| v.as_slice()).collect();
-    let iy_refs: Vec<&[u16]> = imys.iter().map(|v| v.as_slice()).collect();
 
-    let mut im_int = ims[0].clone();
-    intersect_images_range(&mut im_int, &im_refs, 1, im_refs.len() - 1, w, h);
+    // 用第一帧数据作为工作缓冲，就地与其余帧相交（避免重复整帧拷贝）。
+    let mut im_int = ims[0].to_vec();
+    intersect_images_range(&mut im_int, &ims, 1, ims.len() - 1, w, h);
 
-    let mut y_int = imys[0].clone();
-    intersect_y_images_range(&mut y_int, &iy_refs, 1, iy_refs.len() - 1, p);
+    let mut y_int = imys[0].to_vec();
+    intersect_y_images_range(&mut y_int, &imys, 1, imys.len() - 1, p);
 
     let bln = analyse_image_flat(&im_int, Some(&y_int), w, h, p);
     Some((im_int, y_int, bln))
