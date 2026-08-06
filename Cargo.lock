@@ -6392,6 +6392,8 @@ dependencies = [
  "opencv",
  "serde",
  "serde_json",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]

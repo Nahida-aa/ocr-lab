@@ -1,0 +1,7 @@
+# 让 release 构建针对本机 CPU 优化（开启 AVX2 等），使标量循环被 LLVM 自动向量化，
+# 并对齐 g++ -O3 -march=native 的编译方式（subtitle-finder 性能基准的对照基准）。
+#
+# 注意：-C target-cpu=native 产出的二进制不跨机器可移植（换机器需重编）。
+# 若需可移植，可改 -C target-feature=+avx2（AVX2 是大部分现代 x86-64 都有）。
+[build]
+rustflags = ["-C", "target-cpu=native"]

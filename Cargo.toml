@@ -87,3 +87,11 @@ gpui_macros = { git = "https://github.com/zed-industries/zed", rev = "d88f68217b
 gpui_platform = { git = "https://github.com/zed-industries/zed", rev = "d88f68217b370f7a66d0c4b4971db31c0dff6df7", version = "=0.1.0" }
 gpui_wgpu = { git = "https://github.com/zed-industries/zed", rev = "d88f68217b370f7a66d0c4b4971db31c0dff6df7", version = "=0.1.0" }
 gpui_util = { git = "https://github.com/zed-industries/zed", rev = "d88f68217b370f7a66d0c4b4971db31c0dff6df7", version = "=0.1.0" }
+
+# 跨 crate 内联 `#[target_feature]` 函数（如 subtitle-finder 调 geometry 的 Sobel AVX-512）。
+# 默认 release 下 `#[target_feature]` 函数跨 crate 不内联，导致调用开销；thin LTO +
+# codegen-units=1 让链接时跨 crate 内联，性能接近同 crate（实测 sobel_n 0.15→0.11ms）。
+# 注意：显著增加编译时间。
+[profile.release]
+lto = "thin"
+codegen-units = 1
