@@ -644,6 +644,8 @@ name = "bench-subtitle-ocr"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "image",
+ "ndarray",
  "rapidocr-ort",
  "serde_json",
  "subtitle-finder",

@@ -76,3 +76,10 @@
   `g_ReportFileName`/`GetFileNameWithExtension` + 链接 MyClosedFigure.o。
 - 用 ffmpeg CLI 转 BGR 作为 OpenCV 的可靠参照（默认 bt709 与 OpenCV 100% 一致）。
 - 关键结论已反复验证：用相同 BGR 喂两边才能可靠对比（cli 分支 FastSearchSubtitles 有帧同步 bug）。
+
+## ⚠️ 新发现（2026-08-06）：subtitle-finder 对长视频内存爆炸（OOM）
+- `FrameCache::decode_all` 把所有帧的 `FrameData`（bgr 2.7MB + im + ne + y ≈ 6.2MB/帧）解码到内存。
+- 170s / 30fps = 5100 帧 ≈ **30GB**，超出环境内存（27GB / cgroup 限制更低）→ 进程被 SIGTERM(143) 终止。
+- 现象：`find_keyframes` / `sf_ocr` 对 video_source.mp4 约 58s 后静默退出，连"找到 N 个关键帧"都没打印。
+- **对比意义**：传统抽帧（`extract_frames` 用 ffmpeg 流式）不全部驻留内存，可处理长视频；subtitle-finder 全量解码是资源瓶颈。这正是"sf 关键帧 vs 传统抽帧"性能对比的核心差异之一。
+- **待办**：把 decode 改成滑动窗口/流式（状态机 fn 单调递增，只需 DL 窗口 + 少量回溯），避免全量驻留，才能跑完整 170s 对比。

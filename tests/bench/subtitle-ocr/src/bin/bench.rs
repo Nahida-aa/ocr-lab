@@ -798,6 +798,176 @@ fn run_benchmark_rust(
     let _ = std::fs::remove_dir_all(&out_dir);
 }
 
+/// 用 subtitle-finder 关键帧路径做基准（对比传统抽帧）。
+///
+/// 流程：subtitle_finder::find_keyframes 提关键帧（每个关键帧 = 一个字幕段，
+/// 自带 start_ms/end_ms）→ 保存原始帧 → ocr_dir_rust 批量 OCR → 每个关键帧
+/// 直接成一个段（无需 merge_frames）→ 对 GT 算 CER / 时序对齐。
+///
+/// 结果（ocr.json + summary.json）写到 `results/<label>/`（用户约定）。
+fn run_benchmark_sf(
+    label: &str,
+    text_score: f64,
+    subtitle_only: bool,
+    threads: Option<usize>,
+    warp_crop: bool,
+) {
+    let vpath = video_path();
+    let out_dir = tmp_dir().join(format!("sf-frames-{}", label));
+    std::fs::create_dir_all(&out_dir).unwrap();
+
+    println!("\n=== SF Benchmark: {} (subtitle-finder 关键帧) ===", label);
+    println!("  extracting keyframes (subtitle-finder)...");
+    let params = subtitle_finder::params::Params::default();
+    let kfs = subtitle_finder::find_keyframes(&vpath, &params).expect("subtitle-finder 提关键帧失败");
+    println!("  {} 个关键帧（vs 抽帧传统 ~{} 帧）", kfs.len(), (kfs.len() * 80).max(10));
+
+    // 保存关键帧原始帧（BGR Array3 → PNG）。
+    for (i, kf) in kfs.iter().enumerate() {
+        let path = out_dir.join(format!("kf_{:05}.png", i));
+        save_keyframe_png(&path, &kf.frame);
+    }
+    let frame_files = list_frame_files(&out_dir);
+    println!("  saved {} 关键帧到 {}", frame_files.len(), out_dir.display());
+
+    // 批量 OCR。
+    let results = ocr_dir_rust(&out_dir, Some(text_score), subtitle_only, threads, warp_crop);
+    let mut total_ms = 0.0f64;
+    let mut total_det = 0.0f64;
+    let mut total_post = 0.0f64;
+    let mut total_rec = 0.0f64;
+    for r in &results {
+        total_ms += r.total_ms;
+        total_det += r.det_ms;
+        total_post += r.post_ms;
+        total_rec += r.rec_ms;
+    }
+
+    // 每个关键帧 = 一个字幕段（用关键帧自带时间轴）。
+    let segments: Vec<serde_json::Value> = kfs
+        .iter()
+        .enumerate()
+        .map(|(i, kf)| {
+            serde_json::json!({
+                "text": results.get(i).map(|r| r.text.clone()).unwrap_or_default(),
+                "start": kf.start_ms,
+                "end": kf.end_ms,
+                "confidence": results.get(i).map(|r| r.confidence).unwrap_or(0.0),
+            })
+        })
+        .collect();
+    let merged_text = segments
+        .iter()
+        .filter_map(|s| s.get("text").and_then(|t| t.as_str()))
+        .filter(|t| !t.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ");
+
+    let ocr_output = serde_json::json!({
+        "result": {
+            "text": merged_text,
+            "segments": segments,
+        },
+        "_engine": "subtitle-finder+ort-rust",
+        "_source": "video_hardsub",
+        "_keyframe_based": true,
+        "_textScore": text_score,
+        "_subtitleOnly": subtitle_only,
+    });
+
+    // 写结果到 results/<label>/。
+    let results_dir = repo_root()
+        .join("tests")
+        .join("bench")
+        .join("subtitle-ocr")
+        .join("results")
+        .join(label);
+    std::fs::create_dir_all(&results_dir).unwrap();
+    let ocr_path = results_dir.join("ocr.json");
+    std::fs::write(&ocr_path, serde_json::to_string_pretty(&ocr_output).unwrap()).unwrap();
+
+    let cer = eval_cer(&ocr_path, &gt_path());
+    let align = align_segments(&load_timed_segments(&gt_path()), &load_timed_segments(&ocr_path));
+    let inference_s = total_ms / 1000.0;
+    let has_timings = total_det > 0.0 || total_post > 0.0 || total_rec > 0.0;
+
+    let summary_json = serde_json::json!({
+        "label": label,
+        "engine": "subtitle-finder+ort-rust",
+        "keyframes": kfs.len(),
+        "segments": kfs.len(),
+        "cer": cer.norm,
+        "cer_raw": cer.raw,
+        "hyp_chars": cer.hyp_chars,
+        "ref_chars": cer.ref_chars,
+        "ocr_inference_s": (inference_s * 1000.0).round() / 1000.0,
+        "ocr_frames": results.len(),
+        "textScore": text_score,
+        "subtitleOnly": subtitle_only,
+        "alignment": {
+            "paired": align.pairs.len(),
+            "missed": align.missed,
+            "spurious": align.spurious,
+            "zero_duration": align.zero_duration,
+            "split": align.split,
+            "merged": align.merged,
+            "iou_mean": (align.iou_mean * 10000.0).round() / 10000.0,
+            "paired_cer": align.paired_cer,
+            "start_delta_ms": {
+                "mean": align.start_delta_mean.round(),
+                "median": align.start_delta_median.round(),
+                "p95_abs": align.start_delta_p95_abs.round(),
+            },
+            "end_delta_ms": {
+                "mean": align.end_delta_mean.round(),
+                "median": align.end_delta_median.round(),
+                "p95_abs": align.end_delta_p95_abs.round(),
+            },
+        },
+        "ocr_timings_ms": if has_timings {
+            serde_json::json!({
+                "total": total_ms.round() as u64,
+                "avgPerFrame": (total_ms / results.len().max(1) as f64).round() as u64,
+                "det": total_det.round() as u64,
+                "post": total_post.round() as u64,
+                "rec": total_rec.round() as u64,
+            })
+        } else {
+            serde_json::Value::Null
+        },
+    });
+    std::fs::write(
+        results_dir.join("summary.json"),
+        serde_json::to_string_pretty(&summary_json).unwrap(),
+    )
+    .unwrap();
+
+    println!("  关键帧 {} 个 → {} 段", kfs.len(), kfs.len());
+    println!("  segs={}", kfs.len());
+    if has_timings {
+        println!("  OCR 推理 {:.1}s, {:.1}ms/帧", inference_s, total_ms / kfs.len().max(1) as f64);
+    }
+    print_alignment(&align);
+    println!("  结果写至 {}", results_dir.display());
+
+    let _ = std::fs::remove_dir_all(&out_dir);
+}
+
+/// 把 subtitle-finder 关键帧的 BGR `Array3`（H×W×3）存为 PNG（转 RGB）。
+fn save_keyframe_png(path: &std::path::Path, frame: &ndarray::Array3<u8>) {
+    let (h, w, _) = frame.dim();
+    let mut rgb = Vec::with_capacity(h * w * 3);
+    for y in 0..h {
+        for x in 0..w {
+            rgb.push(frame[[y, x, 2]]); // R
+            rgb.push(frame[[y, x, 1]]); // G
+            rgb.push(frame[[y, x, 0]]); // B
+        }
+    }
+    let img = image::RgbImage::from_raw(w as u32, h as u32, rgb).expect("构造 RgbImage 失败");
+    img.save(path).expect("保存关键帧 PNG 失败");
+}
+
 /// 对齐 eval-ocr.ts main()：读 hyp/GT 的 result.segments，join 文本，算 raw + norm CER。
 struct CerResult {
     raw: f64,
@@ -956,6 +1126,7 @@ fn main() {
         "cpp" => "cpp",
         "py" => "python",
         "rust" => "rust",
+        "sf" => "sf",
         other => other,
     };
     let ts_label = format!("-ts{}", text_score);
@@ -979,6 +1150,11 @@ fn main() {
             std::process::exit(1);
         }
         "rust" => run_benchmark_rust(&label, fps, text_score, subtitle_only, use_dir, threads, warp_crop),
+        // subtitle-finder 关键帧路径（对比传统抽帧）：用独立 label，不用 fps。
+        "sf" => {
+            let sf_label = format!("sf-{}", text_score);
+            run_benchmark_sf(&sf_label, text_score, subtitle_only, threads, warp_crop);
+        }
         other => {
             eprintln!("未知实现: {}", other);
             std::process::exit(2);

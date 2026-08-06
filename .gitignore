@@ -20,3 +20,4 @@ tools/perf-compare/perf_compare
 tools/perf-compare/isa_compare
 
 packages/subtitle-finder/out
+tests/bench/subtitle-ocr/results
