@@ -29,6 +29,9 @@
 
 下游：`rapidocr-ort` 对关键帧图 rec，得到字幕文本（对应 RapidVideOCR）。
 
+> **对齐 C++ 的经验与结果**（段边界对齐的根因、验证方法、坑）见
+> `docs/cpp-alignment-notes.md`。
+
 ## 核心算法（复刻自 VideoSubFinder `SSAlgorithms.cpp`）
 
 ### 1. 逐帧解码（30fps）
