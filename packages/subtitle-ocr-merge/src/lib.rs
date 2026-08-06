@@ -10,67 +10,12 @@
 //! 该层与具体 OCR 引擎、视频来源完全解耦，可被多个项目复用（这也是独立于
 //! `subtitle-ocr` 单独成 crate 的原因）。
 
-use rapidocr_ort::OcrBoxResult;
 use serde::Serialize;
+use subtitle_ocr::{OcrBoxResult, OcrImgResult};
 
-/// 单图聚合结果（无时间）：把一张图里识别出的多框聚合成一条文本 + 值域 + 明细。
-///
-/// 这是「纯感知」产物——`subtitle-ocr` 只吃一张图、不知道图片来源（视频帧/截图/
-/// 扫描件），故不携带任何时间/帧信息。带时间的封装（`FrameResult`）在本层负责。
-///
-/// 定义在本 crate（而非 `subtitle-ocr`），以便依赖单向：
-/// `subtitle-ocr` → `subtitle-ocr-merge` → `rapidocr-ort`。`subtitle-ocr` 通过
-/// `pub use subtitle_ocr_merge::OcrImgResult` 把它重新导出，对外仍像「subtitle-ocr 提供」。
-#[derive(Clone, Debug)]
-pub struct OcrImgResult {
-    /// 该图识别文本（多行按出现顺序拼接，用空格分隔）。
-    pub text: String,
-    /// 该图最高置信度（取各框 `text_confidence` 最大）。
-    pub confidence: f64,
-    /// 该图所有识别区域明细（每行文本/框/score，含坐标还原）。
-    pub boxes: Vec<OcrBoxResult>,
-    /// 横向值域 `[min_x, max_x]`（像素坐标），无字幕时为 `[0,0]`。
-    pub x_range: [f32; 2],
-    /// 纵向值域 `[min_y, max_y]`（像素坐标），无字幕时为 `[0,0]`。
-    pub y_range: [f32; 2],
-}
-
-/// 把一图识别出的多框聚合成单图结果（无时间，纯感知后处理）。
-///
-/// 过滤 / 坐标还原 / NMS / 排序由上游（`subtitle-ocr` 的 `ocr_image`）完成，这里只做
-/// 「多行拼接成一条文本 + 取最高置信度 + 算几何值域」。不接收时间戳（本层不知道
-/// 图片来源/帧信息）。
-pub fn aggregate_img(lines: &[OcrBoxResult]) -> OcrImgResult {
-    let text: Vec<&str> = lines.iter().map(|l| l.text.as_str()).collect();
-    let text = text.join(" ");
-    let confidence = lines
-        .iter()
-        .map(|l| l.text_confidence as f64)
-        .fold(0.0f64, f64::max);
-    // 聚合所有行的四点坐标，取 x / y 值域（无字幕 → [0,0]）。
-    let mut x_range = [f32::INFINITY, f32::NEG_INFINITY];
-    let mut y_range = [f32::INFINITY, f32::NEG_INFINITY];
-    for l in lines {
-        for p in &l.box_ {
-            x_range[0] = x_range[0].min(p[0]);
-            x_range[1] = x_range[1].max(p[0]);
-            y_range[0] = y_range[0].min(p[1]);
-            y_range[1] = y_range[1].max(p[1]);
-        }
-    }
-    let (x_range, y_range) = if lines.is_empty() {
-        ([0.0, 0.0], [0.0, 0.0])
-    } else {
-        (x_range, y_range)
-    };
-    OcrImgResult {
-        text,
-        confidence,
-        boxes: lines.to_vec(),
-        x_range,
-        y_range,
-    }
-}
+// aggregate_img 是感知层（subtitle-ocr）的类型/函数，本层仅转发重导出，
+// 供上游「先 aggregate_img 得 OcrImgResult → 包成 FrameResult → merge_frames」统一取用。
+pub use subtitle_ocr::aggregate_img;
 
 /// 单帧结果（带时间戳）：`OcrImgResult` + 该帧的时间信息。
 ///

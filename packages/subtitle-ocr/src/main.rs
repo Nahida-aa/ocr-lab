@@ -1,9 +1,11 @@
 //! 命令行：`subtitle-ocr <image> [text_score]` 或 `subtitle-ocr --dir <dir> ...`
 //!
-//! 对标 cpp 的 `ocr_pipeline.cpp`：输出与 cpp 同形状的 JSON 数组，每个元素含
-//! `file` / `text` / `segments` / `detInferenceMs` / `postprocessMs` /
-//! `recInferenceMs` / `totalMs`。`--merge` 时额外在 `--dir` 模式输出合并后的
-//! 带时间轴字幕段（供 bench 的 `load_timed_segments` 消费）。
+//! 纯感知 OCR 工具，对标 cpp 的 `ocr_pipeline.cpp`：输出与 cpp 同形状的 JSON 数组，
+//! 每个元素含 `file` / `text` / `segments`（`text`/`confidence`/`box`）/
+//! `detInferenceMs` / `postprocessMs` / `recInferenceMs` / `totalMs`。
+//!
+//! 本 CLI 只做「逐图/批量 OCR」，不输出时间轴、不做帧合并——带时间戳的字幕段
+//! 由知道视频结构的上游（自行补 `start`/`end` 后调用 `subtitle-ocr-merge`）负责。
 
 use anyhow::{Context, Result};
 use clap::Parser;
@@ -12,7 +14,6 @@ use serde::Serialize;
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 use subtitle_ocr::{OcrOptions, SubtitleOcr};
-use subtitle_ocr_merge::{frame_timestamp_ms, merge_frames, FrameResult, MergeArgs};
 
 #[derive(Parser, Debug)]
 #[command(name = "subtitle-ocr", about = "字幕 OCR（基于 rapidocr-ort，PP-OCRv3）")]
@@ -56,14 +57,6 @@ struct Cli {
     /// 推理线程数（预留；当前 OcrEngine 固定 4，与 cpp 默认一致）
     #[arg(long)]
     threads: Option<usize>,
-
-    /// 在 --dir 模式下额外输出合并后的带时间轴字幕段（需配合 --fps）
-    #[arg(long)]
-    merge: bool,
-
-    /// 抽帧帧率（仅 --merge 用于计算时间戳，默认 2）
-    #[arg(long, default_value_t = 2.0)]
-    fps: f64,
 }
 
 /// 仓库根：二进制在 `target/debug/subtitle-ocr`，上溯两级到 workspace 根。
@@ -175,10 +168,6 @@ fn main() -> Result<()> {
     let mut ocr = SubtitleOcr::from_profile(cli.model, &model_dir, opts)
         .context("构建字幕 OCR 引擎失败（确认 models/rapidocr 权重已就绪）")?;
 
-    if cli.merge && cli.dir.is_none() {
-        anyhow::bail!("--merge 仅支持与 --dir 批量模式配合使用");
-    }
-
     // 构建帧路径列表。
     let frame_paths: Vec<PathBuf> = if let Some(dir) = &cli.dir {
         let dir = resolve_path(&repo_root, dir);
@@ -190,9 +179,8 @@ fn main() -> Result<()> {
     };
 
     let mut frame_outs: Vec<FrameOut> = Vec::with_capacity(frame_paths.len());
-    let mut timed_frames: Vec<FrameResult> = Vec::with_capacity(frame_paths.len());
 
-    for (idx, fp) in frame_paths.iter().enumerate() {
+    for fp in frame_paths.iter() {
         let rgb = load_rgb(fp)?;
         let (lines, det_ms) = ocr.ocr_image_timed(&rgb)?;
         let text: String = lines
@@ -214,16 +202,9 @@ fn main() -> Result<()> {
             rec_inference_ms: 0.0,
             total_ms: det_ms,
         });
-
-        if cli.merge {
-            let ts = frame_timestamp_ms(idx, cli.fps);
-            let img = subtitle_ocr::aggregate_img(&lines);
-            let fr = FrameResult::from((img, ts));
-            timed_frames.push(fr);
-        }
     }
 
-    // 主输出：与 cpp 同形状的 JSON 数组。
+    // 主输出：与 cpp 同形状的 JSON 数组（逐图/批量，不带时间轴）。
     let arr: Vec<Value> = frame_outs
         .iter()
         .map(|f| {
@@ -243,32 +224,7 @@ fn main() -> Result<()> {
         })
         .collect();
 
-    if cli.merge {
-        let segments = merge_frames(&timed_frames, &MergeArgs::default());
-        let merged: Vec<Value> = segments
-            .iter()
-            .map(|s| {
-                json!({
-                    "text": s.text,
-                    "start": s.start_ms,
-                    "end": s.end_ms,
-                    "confidence": s.confidence,
-                    "x_range": s.x_range,
-                    "y_range": s.y_range,
-                })
-            })
-            .collect();
-        // 把 merged 段挂在一个顶层对象里，与 frame 数组分离，避免破坏 cpp 解析。
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&json!({
-                "frames": arr,
-                "segments": merged,
-            }))?
-        );
-    } else {
-        println!("{}", serde_json::to_string_pretty(&Value::Array(arr))?);
-    }
+    println!("{}", serde_json::to_string_pretty(&Value::Array(arr))?);
 
     Ok(())
 }

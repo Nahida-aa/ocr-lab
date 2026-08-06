@@ -11,9 +11,10 @@ name = "subtitle_ocr_merge"
 path = "src/lib.rs"
 
 [dependencies]
-# 取 OcrBoxResult（单框结果），本层在其上定义 OcrImgResult / FrameResult / Segment。
-# 注意：本 crate 不反向依赖 subtitle-ocr，以保持依赖单向（subtitle-ocr → 本层 → rapidocr-ort）。
-rapidocr-ort = { workspace = true }
+# 取 OcrImgResult / aggregate_img / OcrBoxResult（单图聚合结果与单框结果）。
+# 依赖方向：本层 → subtitle-ocr（感知层），subtitle-ocr 不反向依赖本层，
+# 以保持 subtitle-ocr 作为纯感知库、不耦合合并逻辑。
+subtitle-ocr = { workspace = true }
 # Segment 需要序列化；levenshtein/merge 纯算法无外部依赖。
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
