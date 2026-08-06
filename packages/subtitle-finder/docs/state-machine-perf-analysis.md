@@ -181,6 +181,29 @@ perfbench 用合成 1280×720 BGR 字幕帧（带边缘扰动触发完整管线�
 > filter 三大头 dilate(5.8) + filter_fig(2.9) + clear_sym(2.4) ≈ 11ms。
 > dilate 难再优化；filter_fig / clear_sym 是连通域遍历，可看是否有冗余全图扫描。
 
+### 6.5 im_ff：geometry Sobel vs subtitle-finder 阶段（2026-08-07）
+
+perfbench 隔离测（release，同负载）：
+
+| | 耗时 |
+|---|---|
+| **geometry `sobel_m_edge`**（单通道，跨 crate 调用） | **0.21 ms** |
+| **subtitle-finder `im_ff` 阶段**（3×Sobel + CMOE + 阈值 + 带拼接） | **5.87 ms** |
+
+**结论：geometry 的 Sobel 很快，不是 im_ff 瓶颈。**
+- im_ff 用 3 个 `sobel_m_edge`（Y/U/V）≈ 3×0.21 = **0.63ms**，只占 5.87ms 的 ~11%。
+- 其余 **~5.2ms 是 subtitle-finder 自己的非 Sobel 工作**：`get_im_cmoe_with_thr1/thr2`
+  （CMOE 组合 + `find_and_apply_local_thresholding` + `aply_ess/aply_ecp`，均为 u16 全帧
+  标量操作）+ 带拼接/写回。
+- **geometry 是精心 SIMD 优化的部分**（sobel.rs 注释：N/H-edge 有 AVX-512，追平 g++；
+  跨 crate 因 `#[target_feature]` 内联限制慢 ~1.8×，0.21ms 已含此损耗）。
+- **im_ff 的优化空间在 subtitle-finder 自写的 CMOE/阈值逻辑**，不在 geometry。
+  如 `find_and_apply_local_thresholding`（imgops.rs:255）每次调用 `vec![0i32; 11*16*256]`
+  （56KB）分配，且是标量逐块直方图；thr1/thr2 各调一次/帧。可优化该处分配与标量循环。
+
+> geometry 内自带 `sobel_bench` 测试（`cargo test -p geometry --lib sobel_bench -- --ignored`）
+> 数字异常（34ms，比真实慢 ~160×），不可信；以 perfbench 的 0.21ms 为准。
+
 
 ## 七、结论与建议
 

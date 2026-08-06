@@ -111,6 +111,13 @@ fn main() {
     let bgr = make_bgr_frame();
     let (w, h) = (W, H);
 
+    // geometry Sobel（跨 crate 调用，subtitle-finder im_ff 用它）单通道 720p。
+    let gray = make_gray_frame();
+    bench("geometry sobel_m_edge (跨crate)", 200, || {
+        geometry::imgproc::sobel_m_edge(&gray, W, H)
+    });
+    let _ = (w, h);
+
     // 端到端每帧耗时（不含解码）。
     bench("get_transformed_image 端到端", 200, || {
         imgops::get_transformed_image(&bgr, w, h, &p, None)
@@ -168,6 +175,23 @@ fn make_edge_dense() -> Vec<u8> {
         }
     }
     im
+}
+
+/// 合成一帧 1280x720 灰度图（模拟 Y 通道）。
+fn make_gray_frame() -> Vec<u8> {
+    let mut y = vec![0u8; W * H];
+    let mut seed = 999u32;
+    for i in 0..W * H {
+        seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+        y[i] = (seed >> 24) as u8;
+    }
+    // 叠加一条垂直边缘。
+    for yy in 0..H {
+        for x in (W / 2)..W {
+            y[yy * W + x] = y[yy * W + x].wrapping_add(80);
+        }
+    }
+    y
 }
 
 /// 合成一帧 1280x720 BGR：浅灰背景 + 底部几行**带边缘变奏**的白色文字。
