@@ -463,6 +463,10 @@ fn run_state_machine(
         // 内部搜索循环：仅当未找到字幕时运行（C++ `while(found_sub == 0)`）。
         if found_sub == 0 {
             loop {
+                // 流式推进：检测内循环会连续推进 fn_start，需每次确保窗口覆盖
+                // [fn_start, fn_start+FORWARD]，否则 fn_start 涨过 FORWARD 后
+                // get_frame 越界会提前 break 'outer（长视频空字幕段会触发）。
+                cache.advance_to(fn_start + FORWARD)?;
                 // 推进 fn_start 的 ddl 步。
                 // C++ 中先并行解码 fn_start+ddl1_ofset 与 fn_start+ddl2_ofset 帧。
                 let f1 = match get_frame(&cache, fn_start + ddl1_ofset as i32) {
