@@ -133,6 +133,28 @@ A/B 对比：
 > 微基准跑法：`cargo run -p subtitle-finder --release --bin perfbench`。
 > 单函数隔离测是判断「某优化是否真有用」的可靠手段（负载机整视频 A/B 不可靠）。
 
+### 6.3 每帧变换 `get_transformed_image` 分阶段拆解（决定性定位瓶颈）
+
+perfbench 用合成 1280×720 BGR 字幕帧（带边缘扰动触发完整管线）隔离测 `get_transformed_image`，
+用 `Profiler` 累计各阶段耗时 ÷ 次数：
+
+| 阶段 | 每帧（隔离） | 占比 |
+|---|---|---|
+| **filter(连通域)** | **14.0 ms** | **60%** |
+| **im_ff(边缘,3线程)** | **5.6 ms** | 24% |
+| bgr_to_yuv | 2.4 ms | 10% |
+| color_filtration | 1.4 ms | 6% |
+| 合计 | 23.4 ms | 100% |
+
+与真实视频 profile（filter 9ms + im_ff 7ms）量级一致，确认：
+- **`filter_transformed_image`（连通域 / second_filtration）是绝对热点**，占变换 ~60%。
+  内部多次 `dilate`（`dil_iters=(12/720*h)/2=6` 次 × 0.52ms ≈ 3ms）+ `second_filtration`
+  + `filter_by_not_intersected_figures` + `clear_image_from_small_symbols` + 两次
+  `restore_still_exist_lines` + `extend_imf`，且多次 `to_vec()`/`copy_from_slice`。
+- `im_ff`（Sobel 边缘 + 阈值，3 线程）第二，24%。
+
+**优化 filter 是唯一能显著降每帧耗时的地方**（14ms → 若能砍半，每帧省 ~7ms）。
+
 ## 七、结论与建议
 
 - **状态机分配 churn 不是墙钟瓶颈**，第 2/3/4 项优化（compare 去拷贝、prev_im_ne

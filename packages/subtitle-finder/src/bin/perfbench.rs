@@ -9,6 +9,7 @@ use std::time::Instant;
 
 use subtitle_finder::compare::compare_two_subs_optimal;
 use subtitle_finder::imgops;
+use subtitle_finder::imgops::Profiler;
 use subtitle_finder::params::Params;
 
 const W: usize = 1280;
@@ -99,4 +100,70 @@ fn main() {
     );
     let _ = im_same;
     let _ = ve_same;
+
+    println!("\n=== get_transformed_image（每帧变换，1280x720 BGR）===");
+    // 合成一帧带文字的 BGR（白色文字 / 彩色背景），喂完整变换管线。
+    let bgr = make_bgr_frame();
+    let (w, h) = (W, H);
+
+    // 端到端每帧耗时（不含解码）。
+    bench("get_transformed_image 端到端", 200, || {
+        imgops::get_transformed_image(&bgr, w, h, &p, None)
+    });
+
+    // 分阶段拆解：用 Profiler 累计每阶段耗时，除以次数得每帧每阶段。
+    println!("\n  -- get_transformed_image 分阶段（Profiler 累计 / 次数）--");
+    let mut prof = Profiler::new();
+    prof.enable();
+    let iters = 200usize;
+    for _ in 0..iters {
+        imgops::get_transformed_image(&bgr, w, h, &p, Some(&mut prof));
+    }
+    println!(
+        "{:<30} {:>8.3} ms/帧",
+        "color_filtration",
+        prof.color_filtration_ms / iters as f64
+    );
+    println!(
+        "{:<30} {:>8.3} ms/帧",
+        "bgr_to_yuv",
+        prof.bgr_to_yuv_ms / iters as f64
+    );
+    println!("{:<30} {:>8.3} ms/帧", "im_ff(边缘,3线程)", prof.im_ff_ms / iters as f64);
+    println!("{:<30} {:>8.3} ms/帧", "filter(连通域)", prof.filter_ms / iters as f64);
+    println!(
+        "{:<30} {:>8.3} ms/帧",
+        "合计",
+        prof.total_ms() / iters as f64
+    );
+}
+
+/// 合成一帧 1280x720 BGR：浅灰背景 + 底部几行**带边缘变奏**的白色文字。
+/// 通道顺序 BGR。文字内每像素加少量强度扰动（模拟抗锯齿/描边），使
+/// `color_filtration` 的每 8px 段色差能超过 `scd` 触发文字带检测（否则 n==0 提前返回）。
+fn make_bgr_frame() -> Vec<u8> {
+    let mut bgr = vec![0u8; W * H * 3];
+    // 背景：浅灰 (200,200,200)。
+    for i in 0..W * H {
+        let base = i * 3;
+        bgr[base] = 200;
+        bgr[base + 1] = 200;
+        bgr[base + 2] = 200;
+    }
+    // 三行文字，带确定性强度扰动（伪随机但稳定）。
+    let rows: &[(usize, usize)] = &[(50, 80), (150, 180), (600, 630)];
+    let mut seed = 12345u32;
+    for &(r0, r1) in rows {
+        for y in r0..r1 {
+            for x in 100..1200 {
+                seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+                let wobble = (seed >> 24) as u8; // 0..255
+                let base = (y * W + x) * 3;
+                bgr[base] = 220 + wobble / 4;
+                bgr[base + 1] = 220 + wobble / 4;
+                bgr[base + 2] = 220 + wobble / 4;
+            }
+        }
+    }
+    bgr
 }
