@@ -76,7 +76,7 @@ impl ModelProfile {
 
 /// 单个文字识别结果（一个检测出的文本框区域 + 识别文本）。
 #[derive(Clone, Debug, Serialize)]
-pub struct OcrBox {
+pub struct OcrBoxResult {
     /// 识别出的文字。
     pub text: String,
     /// 文字置信度（rec 分支平均字符概率），反映「字认得准不准」。
@@ -153,7 +153,7 @@ impl OcrEngine {
     }
 
     /// 对一张 RGB 图像（height×width×3，0-255 u8）做检测 + 识别。
-    pub fn detect(&mut self, img: &Array3<u8>) -> Result<Vec<OcrBox>> {
+    pub fn detect(&mut self, img: &Array3<u8>) -> Result<Vec<OcrBoxResult>> {
         let (h, w, _) = img.dim();
 
         // ---- 1. 检测：原图缩放到输入尺寸，归一化后跑 det ----
@@ -210,7 +210,7 @@ impl OcrEngine {
                 sx += p.x;
                 sy += p.y;
             }
-            results.push(OcrBox {
+            results.push(OcrBoxResult {
                 text,
                 // 文字置信度（rec 分支平均字符概率）。
                 text_confidence: score,

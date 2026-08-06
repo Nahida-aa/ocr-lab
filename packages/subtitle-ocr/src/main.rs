@@ -149,7 +149,7 @@ struct SegOut {
     box_: Vec<[f32; 2]>,
 }
 
-fn to_seg_out(line: &subtitle_ocr::OcrBox) -> SegOut {
+fn to_seg_out(line: &subtitle_ocr::OcrBoxResult) -> SegOut {
     SegOut {
         text: line.text.clone(),
         confidence: line.text_confidence as f64,
