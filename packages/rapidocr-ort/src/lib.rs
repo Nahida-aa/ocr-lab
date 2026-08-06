@@ -74,9 +74,9 @@ impl ModelProfile {
     }
 }
 
-/// 单个文字识别结果。
+/// 单个文字识别结果（一个检测出的文本框区域 + 识别文本）。
 #[derive(Clone, Debug, Serialize)]
-pub struct OcrResult {
+pub struct OcrBox {
     /// 识别出的文字。
     pub text: String,
     /// 识别置信度（rec 分支平均字符概率），反映「字认得准不准」。
@@ -86,12 +86,12 @@ pub struct OcrResult {
     /// 四个顶点（顺时针：左上、右上、右下、左下），原图像素坐标。
     #[serde(rename = "box")]
     pub box_: [[f32; 2]; 4],
-    /// 几何中心（四点平均），便于操作回灌（点击中心点）。
-    pub center: [f32; 2],
     /// 横向值域 `[min_x, max_x]`（像素坐标），便于按列/区域过滤。
     pub x_range: [f32; 2],
     /// 纵向值域 `[min_y, max_y]`（像素坐标），便于按行/区域过滤。
     pub y_range: [f32; 2],
+    /// 几何中心（四点平均），便于操作回灌（点击中心点）。
+    pub center: [f32; 2],
 }
 
 /// OCR 引擎：持有 det / cls / rec 三个 Session 与字典。
@@ -153,7 +153,7 @@ impl OcrEngine {
     }
 
     /// 对一张 RGB 图像（height×width×3，0-255 u8）做检测 + 识别。
-    pub fn detect(&mut self, img: &Array3<u8>) -> Result<Vec<OcrResult>> {
+    pub fn detect(&mut self, img: &Array3<u8>) -> Result<Vec<OcrBox>> {
         let (h, w, _) = img.dim();
 
         // ---- 1. 检测：原图缩放到输入尺寸，归一化后跑 det ----
@@ -210,7 +210,7 @@ impl OcrEngine {
                 sx += p.x;
                 sy += p.y;
             }
-            results.push(OcrResult {
+            results.push(OcrBox {
                 text,
                 // 识别置信度（rec 分支平均字符概率）。
                 confidence: score,

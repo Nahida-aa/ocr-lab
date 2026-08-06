@@ -17,7 +17,7 @@ use anyhow::Result;
 use color_analysis::{SegmentOpts, segment_by_color};
 use image::RgbImage;
 use ndarray::Array3;
-use rapidocr_ort::{ModelProfile, OcrEngine, OcrResult};
+use rapidocr_ort::{ModelProfile, OcrBox, OcrEngine};
 use serde::Serialize;
 use std::path::Path;
 
@@ -108,7 +108,7 @@ impl LayoutAnalyzer {
         let regions = segment_by_color(img, self.opts);
 
         // 2. 文字框（若有 OCR）。
-        let texts: Vec<OcrResult> = match &mut self.ocr {
+        let texts: Vec<OcrBox> = match &mut self.ocr {
             Some(engine) => {
                 let data = img.clone().into_raw();
                 let arr = Array3::from_shape_vec((h as usize, w as usize, 3), data)

@@ -17,7 +17,7 @@
 
 use anyhow::Result;
 use ndarray::{s, Array3};
-use rapidocr_ort::{ModelProfile, OcrEngine, OcrResult};
+use rapidocr_ort::{ModelProfile, OcrEngine};
 use serde::Serialize;
 
 // ===========================================================================
@@ -52,13 +52,14 @@ impl Default for OcrOptions {
     }
 }
 
-/// 单帧里的一条识别行（`rapidocr_ort::OcrResult` 的类型别名）。
+/// 单个文字识别区域（`rapidocr_ort::OcrBox` 的 re-export）。
 ///
-/// 原本是自定义结构体，字段几乎与 `OcrResult` 相同（text/confidence/box_），
-/// 仅多了 `y_center`（= `center[1]`）。改为类型别名避免重复定义。
+/// 原先是自定义 `FrameLine` 结构体，字段几乎与 rapidocr-ort 的 `OcrResult`
+/// 相同（text/confidence/box_），仅多了 `y_center`（= `center[1]`）。后改为
+/// 类型别名，并统一命名为 `OcrBox`（表示"一个识别区域/文本框"）。
 /// ⚠️ 坐标语义：`ocr_image` 返回前会把 box/center 的 y 加回 `y_offset`，
-/// 还原成原图坐标（与旧 FrameLine 一致）。
-pub type FrameLine = rapidocr_ort::OcrResult;
+/// 还原成原图坐标。
+pub use rapidocr_ort::OcrBox;
 
 /// 单帧聚合结果（供 `merge_frames` 消费）：每帧一条文本。
 #[derive(Clone, Debug)]
@@ -138,7 +139,7 @@ impl SubtitleOcr {
     /// 对一帧 RGB 图像（H×W×3，0-255 u8）做字幕 OCR，返回排序后的识别行。
     ///
     /// 流程对齐 cpp `runOcr`：bottom_only ROI → subtitle_only y 过滤 → NMS。
-    pub fn ocr_image(&mut self, rgb: &Array3<u8>) -> Result<Vec<FrameLine>> {
+    pub fn ocr_image(&mut self, rgb: &Array3<u8>) -> Result<Vec<OcrBox>> {
         let (h, _, _) = rgb.dim();
         let h = h as i64;
 
@@ -155,10 +156,10 @@ impl SubtitleOcr {
         };
 
         // ---- 2. 引擎推理（det + rec + cls）----
-        let results: Vec<OcrResult> = self.engine.detect(&roi)?;
+        let results: Vec<OcrBox> = self.engine.detect(&roi)?;
 
         // ---- 3. 后处理：还原坐标 / y 过滤 / NMS / trim / 排序 ----
-        let mut lines: Vec<FrameLine> = results
+        let mut lines: Vec<OcrBox> = results
             .into_iter()
             .map(|mut r| {
                 // ROI 坐标还原回原图：box 每点 y 与 center.y 都加 y_offset。
@@ -208,7 +209,7 @@ impl SubtitleOcr {
     /// rapidocr-ort 的 `detect` 把 det/rec 合成一次调用，无法单独计时；
     /// 故把整段 `detect` 计为 `det_ms`，`post_ms`/`rec_ms` 记 0，三者之和即
     /// cpp 的 `totalMs` 口径（post 在 rapidocr 内部极小，近似 0）。
-    pub fn ocr_image_timed(&mut self, rgb: &Array3<u8>) -> Result<(Vec<FrameLine>, f64)> {
+    pub fn ocr_image_timed(&mut self, rgb: &Array3<u8>) -> Result<(Vec<OcrBox>, f64)> {
         let t0 = std::time::Instant::now();
         let lines = self.ocr_image(rgb)?;
         let det_ms = t0.elapsed().as_secs_f64() * 1000.0;
@@ -216,7 +217,7 @@ impl SubtitleOcr {
     }
 
     /// 把一帧的多条行聚合成 `FrameResult`（多行拼接、取最高置信度与纵向值域）。
-    pub fn aggregate_frame(&self, lines: &[FrameLine], timestamp_ms: u64) -> FrameResult {
+    pub fn aggregate_frame(&self, lines: &[OcrBox], timestamp_ms: u64) -> FrameResult {
         let text: Vec<&str> = lines.iter().map(|l| l.text.as_str()).collect();
         let text = text.join(" ");
         let confidence = lines
@@ -254,7 +255,7 @@ impl SubtitleOcr {
 // ===========================================================================
 
 /// 按面积降序，剔除被已保留大框覆盖超过 70% 的小框（IoU 口径）。
-fn nms(mut lines: Vec<FrameLine>) -> Vec<FrameLine> {
+fn nms(mut lines: Vec<OcrBox>) -> Vec<OcrBox> {
     // 计算外接框。
     struct B {
         idx: usize,
@@ -307,7 +308,7 @@ fn nms(mut lines: Vec<FrameLine>) -> Vec<FrameLine> {
             }
         }
     }
-    let mut out: Vec<FrameLine> = keep
+    let mut out: Vec<OcrBox> = keep
         .iter()
         .zip(lines.drain(..))
         .filter(|(k, _)| **k)
@@ -584,7 +585,7 @@ mod tests {
     #[test]
     fn nms_removes_contained_small_box() {
         // 大框包含小框（覆盖 >70%）→ 小框被剔除。
-        let big = FrameLine {
+        let big = OcrBox {
             text: "A".into(),
             confidence: 0.9,
             box_: [[0.0, 0.0], [100.0, 0.0], [100.0, 100.0], [0.0, 100.0]],
@@ -593,7 +594,7 @@ mod tests {
             y_range: [0.0, 100.0],
             center: [50.0, 50.0],
         };
-        let small = FrameLine {
+        let small = OcrBox {
             text: "B".into(),
             confidence: 0.8,
             box_: [[10.0, 10.0], [20.0, 10.0], [20.0, 20.0], [10.0, 20.0]],
@@ -609,7 +610,7 @@ mod tests {
 
     #[test]
     fn nms_keeps_disjoint_boxes() {
-        let a = FrameLine {
+        let a = OcrBox {
             text: "A".into(),
             confidence: 0.9,
             box_: [[0.0, 0.0], [10.0, 0.0], [10.0, 10.0], [0.0, 10.0]],
@@ -618,7 +619,7 @@ mod tests {
             y_range: [0.0, 10.0],
             center: [5.0, 5.0],
         };
-        let b = FrameLine {
+        let b = OcrBox {
             text: "B".into(),
             confidence: 0.9,
             box_: [[100.0, 100.0], [110.0, 100.0], [110.0, 110.0], [100.0, 110.0]],

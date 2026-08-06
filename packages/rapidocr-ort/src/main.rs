@@ -5,7 +5,7 @@
 use anyhow::{Context, Result};
 use clap::Parser;
 use ndarray::Array3;
-use rapidocr_ort::{ModelProfile, OcrEngine, OcrResult};
+use rapidocr_ort::{ModelProfile, OcrBox, OcrEngine};
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 
@@ -35,7 +35,7 @@ struct Output {
     /// 输入图片高度（像素）。
     height: usize,
     /// 检测结果。
-    results: Vec<OcrResult>,
+    results: Vec<OcrBox>,
 }
 
 /// 仓库根：从当前可执行文件位置（如 `target/debug/rapidocr-ort`）上溯到
