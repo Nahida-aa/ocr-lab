@@ -4,17 +4,23 @@
 //! 两个独立包的协作，输出每段字幕的起止时间 + OCR 文本。
 //!
 //! 用法（仓库根）：
-//!   cargo run -p bench-subtitle-ocr --bin sf_ocr -- <video.mp4>
+//!   cargo run -p bench-subtitle-ocr --bin sf_ocr -- <video.mp4> [--out <dir>]
+//!   cargo run -p bench-subtitle-ocr --bin sf_ocr -- --from-dir <kf_dir> [--out <dir>]
 //! 例：
 //!   cargo run -p bench-subtitle-ocr --bin sf_ocr -- /tmp/clip5s.mp4
+//!   cargo run -p bench-subtitle-ocr --bin sf_ocr -- video.mp4 --out /tmp/res
+//!   cargo run -p bench-subtitle-ocr --bin sf_ocr -- --from-dir /tmp/kf --out /tmp/res  # 只 OCR，不重新提取
 //!
 //! 说明：
 //! - subtitle-finder 的关键帧 = 每个字幕段的一张代表帧（原始 BGR，含背景）。
 //! - 用 subtitle-ocr 的 `SubtitleOcr::ocr_image` 对代表帧识别文本（bottom_only 裁底部）。
 //! - 关键帧自带 start_ms/end_ms 时间轴，直接拼成字幕行。
 //! - 模型目录默认仓库根 `models/rapidocr`。
+//! - `--from-dir <kf_dir>`：读已提取的关键帧 PNG（subtitle-finder 落盘格式
+//!   `{start}_{end}_{i}.png`），**只跑 OCR，不重新提取**（解耦提取与识别）。
+//! - `--out <dir>`：额外写 `ocr.json`（对齐 bench 的 result.segments 结构）到该目录。
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 use rapidocr_ort::ModelProfile;
@@ -23,17 +29,26 @@ use subtitle_ocr::{OcrOptions, SubtitleOcr};
 fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().collect();
     if args.len() < 2 {
-        anyhow::bail!("用法: sf_ocr <video.mp4>");
+        anyhow::bail!("用法: sf_ocr <video.mp4> [--out <dir>]  |  sf_ocr --from-dir <kf_dir> [--out <dir>]");
     }
-    let video = Path::new(&args[1]);
-    if !video.exists() {
-        anyhow::bail!("视频不存在: {}", video.display());
+    let mut video_arg = None;
+    let mut from_dir: Option<PathBuf> = None;
+    let mut out_dir: Option<PathBuf> = None;
+    let mut i = 1;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--from-dir" => {
+                i += 1;
+                from_dir = args.get(i).map(PathBuf::from);
+            }
+            "--out" => {
+                i += 1;
+                out_dir = args.get(i).map(PathBuf::from);
+            }
+            _ => video_arg = Some(args[i].clone()),
+        }
+        i += 1;
     }
-
-    // 1) subtitle-finder 提关键帧（每个关键帧 = 一个字幕段）。
-    let params = subtitle_finder::params::Params::default();
-    let kfs = subtitle_finder::find_keyframes(video, &params)?;
-    println!("找到 {} 个关键帧", kfs.len());
 
     // 2) 初始化 subtitle-ocr（模型目录仓库根 models/rapidocr）。
     let model_dir = bench_subtitle_ocr::repo_root().join("models").join("rapidocr");
@@ -42,19 +57,112 @@ fn main() -> Result<()> {
     }
     let mut ocr = SubtitleOcr::from_profile(ModelProfile::V3, &model_dir, OcrOptions::default())?;
 
-    // 3) 对每个关键帧的原始帧 OCR，结合时间轴输出字幕。
+    // 关键帧来源：--from-dir 读已提取的 PNG（只跑 OCR，不重新提取）；
+    // 否则从视频提取关键帧（每个关键帧 = 一个字幕段）。
+    let kfs: Vec<(u64, u64, ndarray::Array3<u8>)> = if let Some(dir) = from_dir.as_ref() {
+        load_keyframes_from_dir(dir)?
+    } else {
+        let video = Path::new(video_arg.as_deref().ok_or_else(|| anyhow::anyhow!("缺少视频路径，或用 --from-dir"))?);
+        if !video.exists() {
+            anyhow::bail!("视频不存在: {}", video.display());
+        }
+        let params = subtitle_finder::params::Params::default();
+        let kfs = subtitle_finder::find_keyframes(video, &params)?;
+        println!("找到 {} 个关键帧", kfs.len());
+        kfs.iter().map(|kf| (kf.start_ms, kf.end_ms, kf.frame.clone())).collect()
+    };
+    if from_dir.is_some() {
+        println!("从目录加载 {} 个关键帧（仅 OCR，不重新提取）", kfs.len());
+    }
+
+    // 3) 对每个关键帧的原始帧 OCR，结合时间轴输出字幕，并收集 segments 供写 json。
+    let mut segments = Vec::new();
     println!("---- 字幕时间轴 ----");
-    for (i, kf) in kfs.iter().enumerate() {
-        let lines = ocr.ocr_image(&kf.frame)?;
+    for (i, (start_ms, end_ms, frame)) in kfs.iter().enumerate() {
+        let lines = ocr.ocr_image(frame)?;
         let text: Vec<String> = lines
             .iter()
             .map(|l| l.text.trim().to_string())
             .filter(|t| !t.is_empty())
             .collect();
         let joined = text.join(" ");
-        let t = if joined.is_empty() { "(未识别)".to_string() } else { joined };
-        println!("[{}] {}-{}ms: {}", i, kf.start_ms, kf.end_ms, t);
+        let t = if joined.is_empty() { "(未识别)".to_string() } else { joined.clone() };
+        println!("[{}] {}-{}ms: {}", i, start_ms, end_ms, t);
+        segments.push(serde_json::json!({
+            "text": joined,
+            "start": start_ms,
+            "end": end_ms,
+            "confidence": null,
+        }));
+    }
+
+    // 4) 可选：写 ocr.json（对齐 bench 的 result.segments 结构，便于下游 eval）。
+    if let Some(dir) = out_dir {
+        std::fs::create_dir_all(&dir)?;
+        let merged: Vec<String> = segments
+            .iter()
+            .map(|s| s.get("text").and_then(|v| v.as_str()).unwrap_or("").to_string())
+            .filter(|t| !t.is_empty())
+            .collect();
+        let ocr_output = serde_json::json!({
+            "audio_info": { "duration": segments.last().map(|s| s["end"].as_u64().unwrap_or(0)).unwrap_or(0) },
+            "result": { "text": merged.join(" "), "segments": segments },
+            "_engine": "sf-keyframe",
+            "_source": "video_hardsub",
+            "_fps": 30,
+            "_timingsMs": serde_json::Value::Null,
+        });
+        let ocr_path = dir.join("ocr.json");
+        std::fs::write(&ocr_path, serde_json::to_string_pretty(&ocr_output).unwrap())?;
+        println!("OCR 结果已写入: {}", ocr_path.display());
     }
 
     Ok(())
+}
+
+/// 从关键帧 PNG 目录读取（文件名 `{start}_{end}_{i}.png`，subtitle-finder 落盘格式）。
+/// 从文件名解析时间轴，只做 OCR，不重新提取关键帧。
+fn load_keyframes_from_dir(dir: &Path) -> Result<Vec<(u64, u64, ndarray::Array3<u8>)>> {
+    let mut files: Vec<_> = std::fs::read_dir(dir)?
+        .filter_map(|e| e.ok())
+        .filter(|e| e.path().extension().map(|x| x == "png").unwrap_or(false))
+        // 跳过 mask 图（`{start}_{end}_{i}_mask.png`），只读原始关键帧。
+        .filter(|e| !e.file_name().to_string_lossy().contains("_mask"))
+        .collect();
+    // 按文件名里的 start_ms 数值排序（`{start}_{end}_{i}.png`），保证时间顺序。
+    files.sort_by_key(|e| {
+        e.file_name()
+            .to_string_lossy()
+            .split('_')
+            .next()
+            .and_then(|s| s.parse::<u64>().ok())
+            .unwrap_or(u64::MAX)
+    });
+
+    let mut kfs = Vec::new();
+    for e in files {
+        let name = e.file_name().to_string_lossy().to_string();
+        // `{start}_{end}_{i}.png` → (start, end, i)。用下划线切，取前两个数字。
+        let stem = name.trim_end_matches(".png");
+        let parts: Vec<&str> = stem.split('_').collect();
+        if parts.len() < 3 {
+            anyhow::bail!("无法从文件名解析时间轴: {}", name);
+        }
+        let start: u64 = parts[0].parse().map_err(|_| anyhow::anyhow!("start 解析失败: {}", name))?;
+        let end: u64 = parts[1].parse().map_err(|_| anyhow::anyhow!("end 解析失败: {}", name))?;
+        let img = image::open(e.path())?.to_rgb8();
+        let (w, h) = (img.width() as usize, img.height() as usize);
+        // RGB → BGR Array3（对齐 subtitle-finder 关键帧的 BGR 格式）。
+        let mut arr = ndarray::Array3::<u8>::zeros((h, w, 3));
+        for y in 0..h {
+            for x in 0..w {
+                let p = img.get_pixel(x as u32, y as u32);
+                arr[[y, x, 0]] = p[2]; // B
+                arr[[y, x, 1]] = p[1]; // G
+                arr[[y, x, 2]] = p[0]; // R
+            }
+        }
+        kfs.push((start, end, arr));
+    }
+    Ok(kfs)
 }
