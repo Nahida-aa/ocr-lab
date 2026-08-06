@@ -11,7 +11,8 @@ use ndarray::Array3;
 use serde::Serialize;
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
-use subtitle_ocr::{FrameResult, MergeArgs, OcrOptions, SubtitleOcr};
+use subtitle_ocr::{OcrOptions, SubtitleOcr};
+use subtitle_ocr_merge::{frame_timestamp_ms, merge_frames, FrameResult, MergeArgs};
 
 #[derive(Parser, Debug)]
 #[command(name = "subtitle-ocr", about = "字幕 OCR（基于 rapidocr-ort，PP-OCRv3）")]
@@ -215,8 +216,9 @@ fn main() -> Result<()> {
         });
 
         if cli.merge {
-            let ts = subtitle_ocr::frame_timestamp_ms(idx, cli.fps);
-            let fr = ocr.aggregate_frame(&lines, ts);
+            let ts = frame_timestamp_ms(idx, cli.fps);
+            let img = subtitle_ocr::aggregate_img(&lines);
+            let fr = FrameResult::from((img, ts));
             timed_frames.push(fr);
         }
     }
@@ -242,7 +244,7 @@ fn main() -> Result<()> {
         .collect();
 
     if cli.merge {
-        let segments = subtitle_ocr::merge_frames(&timed_frames, &MergeArgs::default());
+        let segments = merge_frames(&timed_frames, &MergeArgs::default());
         let merged: Vec<Value> = segments
             .iter()
             .map(|s| {

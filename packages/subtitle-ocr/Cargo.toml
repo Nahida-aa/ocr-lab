@@ -18,6 +18,8 @@ path = "src/main.rs"
 [dependencies]
 # OCR 引擎（det/rec/cls 推理 + 模型加载 + 字典），本包只做字幕专属逻辑。
 rapidocr-ort = { workspace = true }
+# 帧合并层（FrameResult / Segment / merge_frames）：CLI 的 --merge 模式使用。
+subtitle-ocr-merge = { workspace = true }
 # 错误链 / 图像读取（RGB HWC u8）/ 张量 / 序列化 / CLI。
 anyhow.workspace = true
 image = "0.25"

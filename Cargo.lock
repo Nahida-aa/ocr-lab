@@ -6413,6 +6413,16 @@ dependencies = [
  "rapidocr-ort",
  "serde",
  "serde_json",
+ "subtitle-ocr-merge",
+]
+
+[[package]]
+name = "subtitle-ocr-merge"
+version = "0.1.0"
+dependencies = [
+ "rapidocr-ort",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

@@ -3,6 +3,7 @@ resolver = "3"
 members = [
     "packages/rapidocr-ort", "tools/gen_ui_img", "tools/accel-set", "packages/subtitle-ocr",
     "packages/geometry", "packages/subtitle-finder",
+    "packages/subtitle-ocr-merge",
     # 基准测试驱动（独立 cargo 包，见 tests/bench/subtitle-ocr）。
     # 不属于常规构建目标，故不放进 default-members。
     "tests/bench/subtitle-ocr",
@@ -67,6 +68,7 @@ ffmpeg-next = "9.0.0"
 rapidocr-ort = { path = "packages/rapidocr-ort" }
 subtitle-finder = { path = "packages/subtitle-finder" }
 subtitle-ocr = { path = "packages/subtitle-ocr" }
+subtitle-ocr-merge = { path = "packages/subtitle-ocr-merge" }
 # 纯 Rust 二维多边形几何（凸包 / 旋转卡尺最小外接矩形 / 框角点 / 多边形偏移）。
 # 供 rapidocr-ort 的 det 后处理复刻 cpp 的 minAreaRect + unclip 几何。
 geometry = { path = "packages/geometry" }
