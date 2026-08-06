@@ -79,10 +79,10 @@ impl ModelProfile {
 pub struct OcrBox {
     /// 识别出的文字。
     pub text: String,
-    /// 识别置信度（rec 分支平均字符概率），反映「字认得准不准」。
-    pub confidence: f32,
-    /// 检测框得分（det 后处理里框内平均概率），反映「框定位得准不准」。
-    pub score: f32,
+    /// 文字置信度（rec 分支平均字符概率），反映「字认得准不准」。
+    pub text_confidence: f32,
+    /// 框置信度（det 后处理里框内平均概率），反映「框定位得准不准」。
+    pub box_confidence: f32,
     /// 四个顶点（顺时针：左上、右上、右下、左下），原图像素坐标。
     #[serde(rename = "box")]
     pub box_: [[f32; 2]; 4],
@@ -212,10 +212,10 @@ impl OcrEngine {
             }
             results.push(OcrBox {
                 text,
-                // 识别置信度（rec 分支平均字符概率）。
-                confidence: score,
-                // 检测框得分（框内平均概率，来自 det 后处理）。
-                score: b.score,
+                // 文字置信度（rec 分支平均字符概率）。
+                text_confidence: score,
+                // 框置信度（框内平均概率，来自 det 后处理）。
+                box_confidence: b.score,
                 // 四个顶点转 [[x,y];4]。
                 box_: b.polygon.map(|p| [p.x, p.y]),
                 // 几何中心（四点平均），便于点击回灌。

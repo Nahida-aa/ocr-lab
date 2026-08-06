@@ -182,7 +182,7 @@ impl SubtitleOcr {
                         return false;
                     }
                 }
-                !l.text.is_empty() && l.confidence >= self.opts.text_score
+                !l.text.is_empty() && l.text_confidence >= self.opts.text_score
             })
             .collect();
 
@@ -224,7 +224,7 @@ impl SubtitleOcr {
         let text = text.join(" ");
         let confidence = lines
             .iter()
-            .map(|l| l.confidence as f64)
+            .map(|l| l.text_confidence as f64)
             .fold(0.0f64, f64::max);
         // 聚合所有行的四点坐标，取 x / y 值域（无字幕 → [0,0]）。
         let mut x_range = [f32::INFINITY, f32::NEG_INFINITY];
@@ -591,18 +591,18 @@ mod tests {
         // 大框包含小框（覆盖 >70%）→ 小框被剔除。
         let big = OcrBox {
             text: "A".into(),
-            confidence: 0.9,
+            text_confidence: 0.9,
             box_: [[0.0, 0.0], [100.0, 0.0], [100.0, 100.0], [0.0, 100.0]],
-            score: 0.9,
+            box_confidence: 0.9,
             x_range: [0.0, 100.0],
             y_range: [0.0, 100.0],
             center: [50.0, 50.0],
         };
         let small = OcrBox {
             text: "B".into(),
-            confidence: 0.8,
+            text_confidence: 0.8,
             box_: [[10.0, 10.0], [20.0, 10.0], [20.0, 20.0], [10.0, 20.0]],
-            score: 0.8,
+            box_confidence: 0.8,
             x_range: [10.0, 20.0],
             y_range: [10.0, 20.0],
             center: [15.0, 15.0],
@@ -616,18 +616,18 @@ mod tests {
     fn nms_keeps_disjoint_boxes() {
         let a = OcrBox {
             text: "A".into(),
-            confidence: 0.9,
+            text_confidence: 0.9,
             box_: [[0.0, 0.0], [10.0, 0.0], [10.0, 10.0], [0.0, 10.0]],
-            score: 0.9,
+            box_confidence: 0.9,
             x_range: [0.0, 10.0],
             y_range: [0.0, 10.0],
             center: [5.0, 5.0],
         };
         let b = OcrBox {
             text: "B".into(),
-            confidence: 0.9,
+            text_confidence: 0.9,
             box_: [[100.0, 100.0], [110.0, 100.0], [110.0, 110.0], [100.0, 110.0]],
-            score: 0.9,
+            box_confidence: 0.9,
             x_range: [100.0, 110.0],
             y_range: [100.0, 110.0],
             center: [105.0, 105.0],

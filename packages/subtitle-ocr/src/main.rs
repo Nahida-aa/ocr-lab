@@ -152,7 +152,7 @@ struct SegOut {
 fn to_seg_out(line: &subtitle_ocr::OcrBox) -> SegOut {
     SegOut {
         text: line.text.clone(),
-        confidence: line.confidence as f64,
+        confidence: line.text_confidence as f64,
         box_: line.box_.iter().map(|p| [p[0], p[1]]).collect(),
     }
 }
