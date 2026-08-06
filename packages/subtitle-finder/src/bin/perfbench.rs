@@ -113,8 +113,14 @@ fn main() {
 
     // geometry Sobel（跨 crate 调用，subtitle-finder im_ff 用它）单通道 720p。
     let gray = make_gray_frame();
-    bench("geometry sobel_m_edge (跨crate)", 200, || {
+    bench("geometry sobel_m_edge (跨crate)", 2000, || {
         geometry::imgproc::sobel_m_edge(&gray, W, H)
+    });
+    bench("geometry sobel_n_edge (跨crate)", 2000, || {
+        geometry::imgproc::sobel_n_edge(&gray, W, H)
+    });
+    bench("geometry sobel_h_edge (跨crate)", 2000, || {
+        geometry::imgproc::sobel_h_edge(&gray, W, H)
     });
     let _ = (w, h);
 

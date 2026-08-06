@@ -183,26 +183,41 @@ perfbench 用合成 1280×720 BGR 字幕帧（带边缘扰动触发完整管线�
 
 ### 6.5 im_ff：geometry Sobel vs subtitle-finder 阶段（2026-08-07）
 
-perfbench 隔离测（release，同负载）：
+**crate 内 vs 跨 crate Sobel（720p，release，`lto=thin + codegen-units=1`）：**
+
+| Sobel | geometry 内（同 crate，`src/bin/sobel_bench`） | 跨 crate（subtitle-finder perfbench） | 差距 |
+|---|---|---|---|
+| **M-edge**（im_ff 用的） | **0.218 ms** | **0.241 ms** | ~1.1× |
+| N-edge | 0.159 ms | 0.248 ms | ~1.6× |
+| H-edge | 0.155 ms | 0.236 ms | ~1.5× |
+
+- **M-edge（im_ff 唯一用的）几乎无跨 crate 内联损失**（1.1×）：它走 AVX2，
+  且当前 workspace `lto=thin + codegen-units=1` 让跨 crate 也能较好内联。
+- **N/H-edge（AVX-512）确有 ~1.5-1.6× 内联损失**，符合 sobel.rs 注释"跨 crate 慢 ~1.8×"
+  （`#[target_feature]` 跨 crate 不内联，Rust issue #145574）。
+- 但 **im_ff 只用 M-edge**，所以 geometry 部分已是内联后的最快速度
+  （~0.24ms×3 ≈ 0.72ms），不存在跨 crate 拖慢 im_ff。
+
+**perfbench 隔离测（release，同负载）：**
 
 | | 耗时 |
 |---|---|
-| **geometry `sobel_m_edge`**（单通道，跨 crate 调用） | **0.21 ms** |
+| **geometry `sobel_m_edge`**（单通道，跨 crate） | **0.24 ms** |
 | **subtitle-finder `im_ff` 阶段**（3×Sobel + CMOE + 阈值 + 带拼接） | **5.87 ms** |
 
 **结论：geometry 的 Sobel 很快，不是 im_ff 瓶颈。**
-- im_ff 用 3 个 `sobel_m_edge`（Y/U/V）≈ 3×0.21 = **0.63ms**，只占 5.87ms 的 ~11%。
-- 其余 **~5.2ms 是 subtitle-finder 自己的非 Sobel 工作**：`get_im_cmoe_with_thr1/thr2`
+- im_ff 用 3 个 `sobel_m_edge`（Y/U/V）≈ 3×0.24 = **0.72ms**，只占 5.87ms 的 ~12%。
+- 其余 **~5.1ms 是 subtitle-finder 自己的非 Sobel 工作**：`get_im_cmoe_with_thr1/thr2`
   （CMOE 组合 + `find_and_apply_local_thresholding` + `aply_ess/aply_ecp`，均为 u16 全帧
   标量操作）+ 带拼接/写回。
-- **geometry 是精心 SIMD 优化的部分**（sobel.rs 注释：N/H-edge 有 AVX-512，追平 g++；
-  跨 crate 因 `#[target_feature]` 内联限制慢 ~1.8×，0.21ms 已含此损耗）。
 - **im_ff 的优化空间在 subtitle-finder 自写的 CMOE/阈值逻辑**，不在 geometry。
   如 `find_and_apply_local_thresholding`（imgops.rs:255）每次调用 `vec![0i32; 11*16*256]`
   （56KB）分配，且是标量逐块直方图；thr1/thr2 各调一次/帧。可优化该处分配与标量循环。
 
-> geometry 内自带 `sobel_bench` 测试（`cargo test -p geometry --lib sobel_bench -- --ignored`）
-> 数字异常（34ms，比真实慢 ~160×），不可信；以 perfbench 的 0.21ms 为准。
+> ⚠️ geometry 自带的 `sobel_bench` **测试**（`cargo test -p geometry --lib sobel_bench -- --ignored`）
+> 用 dev profile 无优化，数字异常（34ms，比真实慢 ~160×），**不可信**。要测须用
+> `cargo run -p geometry --release --bin sobel_bench`（本仓库新增的 release bin）。
+
 
 
 ## 七、结论与建议
