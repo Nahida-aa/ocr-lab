@@ -265,6 +265,34 @@ fn extend_imf_with_data_from_imnf(im_f: &mut [u8], im_nf: &[u8], w: usize, h: us
 /// 复刻 `IPAlgorithms.cpp:1905`。注意 `Any` 默认下对齐相关分支（Center/Left/Right、
 /// `btd` 段距、`mpd`/`mpned` 密度）不生效，核心是「段内 `ImNE` 边缘点数 >= `g_mpn`」。
 #[allow(clippy::too_many_arguments)]
+/// `IsTooRight`：判断段是否太靠右（C++ IPAlgorithms.cpp:1897）。
+#[inline]
+fn is_too_right(lb: i32, le: i32, to_max2: i32, real_im_x_center: i32) -> bool {
+    (((lb + le - (real_im_x_center * 2)) * 2) >= to_max2) || (lb >= real_im_x_center)
+}
+
+/// 找「偏离中心最远」的段下标 `ll`（C++ Center 路径的公共判定）。
+/// `seg_lb`/`seg_le` 为当前段数组，`ln` 段数。
+fn farthest_from_center(seg_lb: &[i32], seg_le: &[i32], ln: i32, real_im_x_center2: i32, to_max2: i32, real_im_x_center: i32) -> usize {
+    let val1 = (seg_lb[(ln - 1) as usize] + seg_le[(ln - 1) as usize] - real_im_x_center2).abs();
+    let val2 = (seg_lb[0] + seg_le[0] - real_im_x_center2).abs();
+    let offset = (seg_le[0] + seg_lb[0] - real_im_x_center2).abs();
+    if is_too_right(seg_lb[(ln - 1) as usize], seg_le[(ln - 1) as usize], to_max2, real_im_x_center)
+        || (offset <= to_max2 && (seg_le[(ln - 1) as usize] - seg_lb[(ln - 1) as usize]) < (seg_le[0] - seg_lb[0]))
+    {
+        (ln - 1) as usize
+    } else if val1 > val2 {
+        (ln - 1) as usize
+    } else {
+        0
+    }
+}
+
+/// `SecondFiltration`：按 `segh` 条带做边缘密度清理。
+/// C++ `g_text_alignment` 默认 **Center**（非 Any），故实现完整的 Center 路径：
+/// 段合并（btd）、中心偏移移除、`mpd` 最小点密度、`mpned` 最小边缘密度检查。
+/// 之前只实现了 Any 路径，导致噪声清理不足（ISA 过密 → 过度切分）。
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn second_filtration(
     im: &mut [u8],
     im_ne: &[u8],
@@ -277,6 +305,13 @@ pub(crate) fn second_filtration(
 ) -> i32 {
     let segh = p.segh;
     let mpn = p.mpn as i32;
+    let mpd = p.mpd;
+    let mpned = p.mpned;
+    let btd_max = (p.btd * w as f32) as i32;
+    let to_max = (p.to * w as f32) as i32;
+    let to_max2 = 2 * to_max;
+    let real_im_x_center2 = (w - 1) as i32;
+    let real_im_x_center = ((w - 1) / 2) as i32;
     let mut res = 0i32;
 
     for k in 0..n {
@@ -284,73 +319,228 @@ pub(crate) fn second_filtration(
         let da = (segh * w) as i32;
         let mut ia = lb[k] * w as i32;
 
-        // 遍历带内每个 segh 高条带（C++：`for(ia=LB*w; ia<ie; ia+=da)`；Any 路径
-        // 内层 while(1) 只处理一次即稳定）。
         while ia < ie {
-            // 找该条带内的水平白段。
-            let mut seg_lb = vec![0i32; w];
-            let mut seg_le = vec![0i32; w];
-            let mut bln = 0;
-            let mut l = 0usize;
-            let mut x = 0usize;
-            while x < w {
-                let mut has_white = false;
-                for y in 0..segh {
-                    let idx = (ia as usize + x) + y * w;
-                    if im[idx] == 255 {
-                        has_white = true;
+            // 逐条带迭代清理，直到无段变化（C++ `while(1)`）。
+            loop {
+                // 找该条带内的水平白段。
+                let mut seg_lb = vec![0i32; w];
+                let mut seg_le = vec![0i32; w];
+                let mut bln = 0;
+                let mut l = 0usize;
+                let mut x = 0usize;
+                while x < w {
+                    let mut has_white = false;
+                    for y in 0..segh {
+                        let idx = (ia as usize + x) + y * w;
+                        if im[idx] == 255 {
+                            has_white = true;
+                            break;
+                        }
+                    }
+                    if has_white {
+                        if bln == 0 {
+                            seg_lb[l] = x as i32;
+                            seg_le[l] = x as i32;
+                            bln = 1;
+                        } else {
+                            seg_le[l] = x as i32;
+                        }
+                    } else if bln == 1 {
+                        bln = 0;
+                        l += 1;
+                    }
+                    x += 1;
+                }
+                if bln == 1 {
+                    if seg_le[l] == w as i32 - 1 {
+                        l += 1;
+                    }
+                }
+                let mut ln = l as i32;
+                let ln_orig = ln;
+                if ln == 0 {
+                    break;
+                }
+
+                // 段合并（btd_max 距离内的相邻段合并处理，移除偏离中心最远者）。
+                // C++ `do { ... } while (ln != ln_start)` 在 Any 外执行。
+                loop {
+                    let ln_start = ln;
+                    let mut l2 = ln - 2;
+                    while (l2 >= 0) && (l2 < ln - 1) {
+                        if seg_lb[(l2 + 1) as usize] - seg_le[l2 as usize] > btd_max {
+                            // 两段距离过远，移除偏离中心最远的段。
+                            let ll = farthest_from_center(&seg_lb, &seg_le, ln, real_im_x_center2, to_max2, real_im_x_center);
+                            for y in 0..segh {
+                                let start = (ia as usize) + y * w + seg_lb[ll] as usize;
+                                let cnt = (seg_le[ll] - seg_lb[ll] + 1) as usize;
+                                im[start..start + cnt].iter_mut().for_each(|v| *v = 0);
+                            }
+                            for i in ll..(ln - 1) as usize {
+                                seg_lb[i] = seg_lb[i + 1];
+                                seg_le[i] = seg_le[i + 1];
+                            }
+                            ln -= 1;
+                            if l2 == ln - 1 {
+                                l2 -= 1;
+                            }
+                            continue;
+                        }
+                        l2 -= 1;
+                    }
+                    if ln == ln_start {
                         break;
                     }
                 }
-                if has_white {
-                    if bln == 0 {
-                        seg_lb[l] = x as i32;
-                        seg_le[l] = x as i32;
-                        bln = 1;
-                    } else {
-                        seg_le[l] = x as i32;
-                    }
-                } else if bln == 1 {
-                    bln = 0;
-                    l += 1;
+                if ln == 0 {
+                    break;
                 }
-                x += 1;
-            }
-            if bln == 1 {
-                if seg_le[l] == w as i32 - 1 {
-                    l += 1;
-                }
-            }
-            let ln = l as i32;
 
-            // Any 路径：内层 while(1) 一次。若无线段，跳过本带。
-            if ln > 0 {
-                // 统计段内 ImNE 边缘点数。
-                let mut n_ne = 0i32;
-                for y in 0..segh {
-                    let ib = (ia as usize) + y * w;
-                    for ll in 0..ln {
-                        let mut i = ib + seg_lb[ll as usize] as usize;
-                        let val = ib + seg_le[ll as usize] as usize;
-                        while i <= val {
-                            if im_ne[i] == 255 {
-                                n_ne += 1;
-                            }
-                            i += 1;
+                // 中心偏移检查（Center）：移除偏离中心过远的段。
+                let mut offset = (seg_le[(ln - 1) as usize] + seg_lb[0] - real_im_x_center2).abs();
+                if offset > to_max2 {
+                    let mut l3 = ln - 1;
+                    let mut bln_c = 0;
+                    while l3 > 0 {
+                        let val1 = (seg_le[(l3 - 1) as usize] + seg_lb[0] - real_im_x_center2).abs();
+                        let val2 = (seg_le[l3 as usize] + seg_lb[1] - real_im_x_center2).abs();
+                        let ll = if val1 > val2 { 0 } else { l3 };
+                        for y in 0..segh {
+                            let start = (ia as usize) + y * w + seg_lb[ll as usize] as usize;
+                            let cnt = (seg_le[ll as usize] - seg_lb[ll as usize] + 1) as usize;
+                            im[start..start + cnt].iter_mut().for_each(|v| *v = 0);
+                        }
+                        l3 -= 1;
+                        if seg_lb[0] >= real_im_x_center {
+                            bln_c = 0;
+                            break;
+                        }
+                        if seg_le[l3 as usize] <= real_im_x_center {
+                            bln_c = 0;
+                            break;
+                        }
+                        offset = (seg_le[l3 as usize] + seg_lb[0] - real_im_x_center2).abs();
+                        if offset <= to_max2 {
+                            bln_c = 1;
+                            break;
                         }
                     }
+                    if bln_c == 0 {
+                        // 移除 lb[0]..le[l3] 所有。
+                        let end = seg_le[l3 as usize];
+                        for y in 0..segh {
+                            let start = (ia as usize) + y * w + seg_lb[0] as usize;
+                            let cnt = (end - seg_lb[0] + 1) as usize;
+                            im[start..start + cnt].iter_mut().for_each(|v| *v = 0);
+                        }
+                        break;
+                    }
+                    ln = l3 + 1;
                 }
 
-                if n_ne < mpn {
-                    // 移除所有子段（边缘点数不足）。
-                    for y in 0..segh {
-                        let start = (ia as usize) + y * w + seg_lb[0] as usize;
-                        let cnt = (seg_le[(ln - 1) as usize] - seg_lb[0] + 1) as usize;
-                        im[start..start + cnt].iter_mut().for_each(|v| *v = 0);
+                // ln == 2 两段距离过大 → 移除。
+                if ln == 2 {
+                    let mut val1 = seg_le[0] - seg_lb[0] + 1;
+                    let val2 = seg_le[1] - seg_lb[1] + 1;
+                    if val1 < val2 {
+                        val1 = val2;
                     }
-                } else {
-                    // nNE 达标：保留（C++ 中 ln==ln_orig 稳定即 res=1）。
-                    res = 1;
+                    let val2 = seg_lb[1] - seg_le[0] - 1;
+                    if val2 > val1 {
+                        for y in 0..segh {
+                            let start = (ia as usize) + y * w + seg_lb[0] as usize;
+                            let cnt = (seg_le[1] - seg_lb[0] + 1) as usize;
+                            im[start..start + cnt].iter_mut().for_each(|v| *v = 0);
+                        }
+                        break;
+                    }
+                }
+
+                // mpd 检查：S < mpd * SS 时移除偏离中心最远的段。
+                let mut bln_m = 0;
+                while (ln > 1) && (bln_m == 0) {
+                    let mut s = 0i32;
+                    for ll in 0..ln {
+                        s += seg_le[ll as usize] - seg_lb[ll as usize] + 1;
+                    }
+                    let ss = seg_le[(ln - 1) as usize] - seg_lb[0] + 1;
+                    if (s as f32) < mpd * (ss as f32) {
+                        let ll = farthest_from_center(&seg_lb, &seg_le, ln, real_im_x_center2, to_max2, real_im_x_center);
+                        for y in 0..segh {
+                            let start = (ia as usize) + y * w + seg_lb[ll] as usize;
+                            let cnt = (seg_le[ll] - seg_lb[ll] + 1) as usize;
+                            im[start..start + cnt].iter_mut().for_each(|v| *v = 0);
+                        }
+                        for i in ll..(ln - 1) as usize {
+                            seg_lb[i] = seg_lb[i + 1];
+                            seg_le[i] = seg_le[i + 1];
+                        }
+                        ln -= 1;
+                    } else {
+                        bln_m = 1;
+                    }
+                }
+                if ln == 0 {
+                    break;
+                }
+
+                // mpned 检查：nNE < mpn 移除所有；nNE < mpned*S 移除最远段。
+                let mut bln_e = 0;
+                while (ln > 0) && (bln_e == 0) {
+                    let mut s = 0i32;
+                    for ll in 0..ln {
+                        s += seg_le[ll as usize] - seg_lb[ll as usize] + 1;
+                    }
+                    s *= segh as i32;
+                    let mut n_ne = 0i32;
+                    for y in 0..segh {
+                        let ib = (ia as usize) + y * w;
+                        for ll in 0..ln {
+                            let mut i = ib + seg_lb[ll as usize] as usize;
+                            let val = ib + seg_le[ll as usize] as usize;
+                            while i <= val {
+                                if im_ne[i] == 255 {
+                                    n_ne += 1;
+                                }
+                                i += 1;
+                            }
+                        }
+                    }
+                    if n_ne < mpn {
+                        // 移除所有子段。
+                        for y in 0..segh {
+                            let start = (ia as usize) + y * w + seg_lb[0] as usize;
+                            let cnt = (seg_le[(ln - 1) as usize] - seg_lb[0] + 1) as usize;
+                            im[start..start + cnt].iter_mut().for_each(|v| *v = 0);
+                        }
+                        ln = 0;
+                        break;
+                    }
+                    if (n_ne as f32) < mpned * (s as f32) {
+                        let ll = farthest_from_center(&seg_lb, &seg_le, ln, real_im_x_center2, to_max2, real_im_x_center);
+                        for y in 0..segh {
+                            let start = (ia as usize) + y * w + seg_lb[ll] as usize;
+                            let cnt = (seg_le[ll] - seg_lb[ll] + 1) as usize;
+                            im[start..start + cnt].iter_mut().for_each(|v| *v = 0);
+                        }
+                        for i in ll..(ln - 1) as usize {
+                            seg_lb[i] = seg_lb[i + 1];
+                            seg_le[i] = seg_le[i + 1];
+                        }
+                        ln -= 1;
+                    } else {
+                        bln_e = 1;
+                    }
+                }
+                if ln == 0 {
+                    break;
+                }
+
+                if ln == ln_orig {
+                    if ln > 0 {
+                        res = 1;
+                    }
+                    break;
                 }
             }
 
