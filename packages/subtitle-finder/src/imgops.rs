@@ -254,11 +254,9 @@ pub fn color_filtration(bgr: &[u8], w: usize, h: usize, p: &Params) -> (Vec<i32>
 /// `FindAndApplyLocalThresholding`：按 (dw,dh) 分块局部阈值二值化（<thr→0）。就地。
 fn find_and_apply_local_thresholding(im: &mut [u16], dw: usize, dh: usize, w: usize, h: usize) {
     const MAX_EDGE_STR: usize = 11 * 16 * 256;
-    let mx = im.iter().copied().max().unwrap_or(0);
-    if mx == 0 {
-        return;
-    }
-    let mxx = mx as usize;
+    // 用常量上界作为块的初始 min，省掉一次 O(w*h) 全图 max 扫描（原实现
+    // `im.iter().max()`）。edge_str 以 MAX_EDGE_STR 为界，边缘值必 < 它，安全。
+    let mxx = MAX_EDGE_STR - 1;
 
     let mx = w / dw;
     let my = h / dh;
