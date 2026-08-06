@@ -40,7 +40,10 @@ pub struct Segment {
     pub start: u64, // ms
     pub end: u64,   // ms
     pub confidence: Option<f64>,
-    pub box_y: Option<(f32, f32)>,
+    /// 横向值域 `[min_x, max_x]`（像素坐标），无字幕为 `[0,0]`。
+    pub x_range: [f32; 2],
+    /// 纵向值域 `[min_y, max_y]`（像素坐标），无字幕为 `[0,0]`。
+    pub y_range: [f32; 2],
 }
 
 // ===========================================================================
@@ -393,6 +396,14 @@ fn normalize_ws(s: &str) -> String {
     s.chars().filter(|c| !c.is_whitespace()).collect()
 }
 
+/// 把 `Option<(top, bottom)>` 纵向范围转成 `[min_y, max_y]`（无字幕 → `[0,0]`）。
+fn bbox_to_range(bbox: Option<(f32, f32)>) -> [f32; 2] {
+    match bbox {
+        Some((mn, mx)) => [mn, mx],
+        None => [0.0, 0.0],
+    }
+}
+
 /// 合并相邻帧为字幕段（对齐 ocrMerge.ts mergeFrames，mergeFramesArgs={}）。
 /// 注意：cpp 路径下帧不带 bbox（对齐 LocalDub ocrFrameCpp 丢弃 box 的行为），
 /// 因此依赖 box_y 的 substring merge / A-B-C triplet 分支不会触发。
@@ -400,7 +411,7 @@ pub fn merge_frames(frames: &[FrameResult]) -> (String, Vec<Segment>) {
     let mut segments: Vec<Segment> = Vec::new();
     let mut current_text = String::new();
     let mut current_start: u64 = 0;
-    let mut current_box_y: Option<(f32, f32)> = None;
+    let mut current_y_range: [f32; 2] = [0.0, 0.0];
     let mut gap_start: u64 = 0;
     let mut current_confidences: Vec<f64> = Vec::new();
     let mut current_end: u64 = 0;
@@ -433,12 +444,13 @@ pub fn merge_frames(frames: &[FrameResult]) -> (String, Vec<Segment>) {
                 text: std::mem::take(&mut current_text),
                 start: current_start,
                 end: gap_start,
-                box_y: current_box_y,
+                x_range: [0.0, 0.0],
+                y_range: current_y_range,
                 confidence: avg_confidence(&current_confidences),
             });
             current_text.clear();
             current_start = 0;
-            current_box_y = None;
+            current_y_range = [0.0, 0.0];
             gap_start = 0;
             current_confidences.clear();
         }
@@ -449,18 +461,25 @@ pub fn merge_frames(frames: &[FrameResult]) -> (String, Vec<Segment>) {
                     text: std::mem::take(&mut current_text),
                     start: current_start,
                     end: current_end,
-                    box_y: current_box_y,
+                    x_range: [0.0, 0.0],
+                    y_range: current_y_range,
                     confidence: avg_confidence(&current_confidences),
                 });
             }
             current_text = f.text.clone();
             current_start = f.timestamp;
             current_end = f.timestamp;
-            current_box_y = f.bbox;
+            current_y_range = bbox_to_range(f.bbox);
             current_confidences = vec![f.confidence];
         } else {
             current_confidences.push(f.confidence);
             current_end = f.timestamp;
+            // 并入：y 值域取并集。
+            let r = bbox_to_range(f.bbox);
+            current_y_range = [
+                current_y_range[0].min(r[0]),
+                current_y_range[1].max(r[1]),
+            ];
         }
     }
     // D: flush 最后一段
@@ -470,7 +489,8 @@ pub fn merge_frames(frames: &[FrameResult]) -> (String, Vec<Segment>) {
             text: current_text,
             start: current_start,
             end: last_ts,
-            box_y: current_box_y,
+            x_range: [0.0, 0.0],
+            y_range: current_y_range,
             confidence: avg_confidence(&current_confidences),
         });
     }
@@ -537,11 +557,19 @@ fn dedup_overlap(segments: &mut Vec<Segment>, dedup_levenshtein: usize) {
                 let merged_conf = merge_confidence(a.confidence, b.confidence);
                 let new_start = a.start.min(b.start);
                 let new_end = a.end.max(b.end);
-                let new_box = a.box_y;
+                let new_x = [
+                    a.x_range[0].min(b.x_range[0]),
+                    a.x_range[1].max(b.x_range[1]),
+                ];
+                let new_y = [
+                    a.y_range[0].min(b.y_range[0]),
+                    a.y_range[1].max(b.y_range[1]),
+                ];
                 segments[i].text = new_text;
                 segments[i].start = new_start;
                 segments[i].end = new_end;
-                segments[i].box_y = new_box;
+                segments[i].x_range = new_x;
+                segments[i].y_range = new_y;
                 segments[i].confidence = merged_conf;
                 segments.remove(j);
                 j -= 1;

@@ -251,7 +251,8 @@ fn main() -> Result<()> {
                     "start": s.start_ms,
                     "end": s.end_ms,
                     "confidence": s.confidence,
-                    "box_y": s.box_y,
+                    "x_range": s.x_range,
+                    "y_range": s.y_range,
                 })
             })
             .collect();

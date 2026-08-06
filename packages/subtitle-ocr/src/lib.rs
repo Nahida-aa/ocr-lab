@@ -67,8 +67,10 @@ pub struct FrameResult {
     pub text: String,
     /// 该帧最高置信度（取各行最大）。
     pub confidence: f64,
-    /// 该帧字幕框纵向值域 `[min_y, max_y]`（像素坐标），用于合并后回带。
-    pub box_y: Option<(f32, f32)>,
+    /// 横向值域 `[min_x, max_x]`（像素坐标），无字幕时为 `[0,0]`。
+    pub x_range: [f32; 2],
+    /// 纵向值域 `[min_y, max_y]`（像素坐标），无字幕时为 `[0,0]`。
+    pub y_range: [f32; 2],
     /// 时间戳（毫秒），由帧序号 × 帧间隔得到。
     pub timestamp_ms: u64,
 }
@@ -84,9 +86,10 @@ pub struct Segment {
     pub end_ms: u64,
     /// 段平均置信度。
     pub confidence: f64,
+    /// 段横向值域 `[min_x, max_x]`（像素坐标），取覆盖帧的最小/最大。
+    pub x_range: [f32; 2],
     /// 段纵向值域 `[min_y, max_y]`（像素坐标），取覆盖帧的最小/最大。
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub box_y: Option<(f32, f32)>,
+    pub y_range: [f32; 2],
 }
 
 /// 帧合并参数（对齐 ocrMerge.ts 的可调项）。
@@ -220,17 +223,27 @@ impl SubtitleOcr {
             .iter()
             .map(|l| l.confidence as f64)
             .fold(0.0f64, f64::max);
-        let box_y = lines.iter().flat_map(|l| l.box_).fold(None::<(f32, f32)>, |acc, p| {
-            let y = p[1];
-            Some(match acc {
-                None => (y, y),
-                Some((mn, mx)) => (mn.min(y), mx.max(y)),
-            })
-        });
+        // 聚合所有行的四点坐标，取 x / y 值域（无字幕 → [0,0]）。
+        let mut x_range = [f32::INFINITY, f32::NEG_INFINITY];
+        let mut y_range = [f32::INFINITY, f32::NEG_INFINITY];
+        for l in lines {
+            for p in &l.box_ {
+                x_range[0] = x_range[0].min(p[0]);
+                x_range[1] = x_range[1].max(p[0]);
+                y_range[0] = y_range[0].min(p[1]);
+                y_range[1] = y_range[1].max(p[1]);
+            }
+        }
+        let (x_range, y_range) = if lines.is_empty() {
+            ([0.0, 0.0], [0.0, 0.0])
+        } else {
+            (x_range, y_range)
+        };
         FrameResult {
             text,
             confidence,
-            box_y,
+            x_range,
+            y_range,
             timestamp_ms,
         }
     }
@@ -398,13 +411,14 @@ pub fn merge_frames(frames: &[FrameResult], args: &MergeArgs) -> Vec<Segment> {
                 start_ms: f.timestamp_ms,
                 end_ms: f.timestamp_ms,
                 confidence: f.confidence,
-                box_y: f.box_y,
+                x_range: f.x_range,
+                y_range: f.y_range,
             });
             cur_count = 1;
             cur_last_text = f.text.clone();
         } else if let Some(c) = cur.as_mut() {
             // 并入：文本取较长者，置信度取**所有帧的算术均值**（非逐对平均，
-            // 逐对平均在有 >2 帧时会偏离真值），纵向值域取并集，end 刷新。
+            // 逐对平均在有 >2 帧时会偏离真值），值域取并集，end 刷新。
             if f.text.chars().count() > c.text.chars().count() {
                 c.text = f.text.clone();
             }
@@ -412,11 +426,8 @@ pub fn merge_frames(frames: &[FrameResult], args: &MergeArgs) -> Vec<Segment> {
             c.confidence = (c.confidence * (cur_count - 1) as f64 + f.confidence)
                 / cur_count as f64;
             c.end_ms = f.timestamp_ms;
-            if let (Some((amn, amx)), Some((bmn, bmx))) = (c.box_y, f.box_y) {
-                c.box_y = Some((amn.min(bmn), amx.max(bmx)));
-            } else {
-                c.box_y = c.box_y.or(f.box_y);
-            }
+            c.x_range = [c.x_range[0].min(f.x_range[0]), c.x_range[1].max(f.x_range[1])];
+            c.y_range = [c.y_range[0].min(f.y_range[0]), c.y_range[1].max(f.y_range[1])];
             cur_last_text = f.text.clone();
         }
     }
@@ -435,11 +446,14 @@ mod tests {
     use super::*;
 
     /// 构造一帧结果。
-    fn fr(text: &str, ts: u64, conf: f64, box_y: Option<(f32, f32)>) -> FrameResult {
+    fn fr(text: &str, ts: u64, conf: f64, y_range: Option<(f32, f32)>) -> FrameResult {
+        // 测试里只给 y 值域；x 用固定占位。
+        let y_range = y_range.unwrap_or((0.0, 0.0));
         FrameResult {
             text: text.to_string(),
             confidence: conf,
-            box_y,
+            x_range: [0.0, 0.0],
+            y_range: [y_range.0, y_range.1],
             timestamp_ms: ts,
         }
     }
@@ -481,7 +495,7 @@ mod tests {
         assert_eq!(segs[0].start_ms, 1000);
         assert_eq!(segs[0].end_ms, 1000);
         assert_eq!(segs[0].text, "你好");
-        assert_eq!(segs[0].box_y, Some((600.0, 650.0)));
+        assert_eq!(segs[0].y_range, [600.0, 650.0]);
     }
 
     #[test]
@@ -499,7 +513,7 @@ mod tests {
         // 置信度取均值。
         assert!((segs[0].confidence - (0.9 + 0.95 + 0.92) / 3.0).abs() < 1e-9);
         // 纵向值域取并集。
-        assert_eq!(segs[0].box_y, Some((640.0, 688.0)));
+        assert_eq!(segs[0].y_range, [640.0, 688.0]);
     }
 
     #[test]
