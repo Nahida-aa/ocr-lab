@@ -218,6 +218,29 @@ perfbench 用合成 1280×720 BGR 字幕帧（带边缘扰动触发完整管线�
 > 用 dev profile 无优化，数字异常（34ms，比真实慢 ~160×），**不可信**。要测须用
 > `cargo run -p geometry --release --bin sobel_bench`（本仓库新增的 release bin）。
 
+### 6.6 im_ff 内部子函数拆解（真实视频 8.3ms/帧，临时插桩测）
+
+在 `get_im_cmoe_with_thr1/thr2` 与 `find_and_apply_local_thresholding` 临时加计时：
+
+| im_ff 内子部分 | 每帧 | 占比 | 归属 |
+|---|---|---|---|
+| **`aply_ess` + `aply_ecp`**（thr1/thr2 各一次，2×1.78ms） | **3.56 ms** | ~43% | geometry SIMD（5×5 加权核，计算密集） |
+| **`find_and_apply_local_thresholding`**（2×0.69ms） | **1.38 ms** | ~17% | subtitle-finder 标量（56KB 分配 + 逐块直方图） |
+| CMOE 组合循环（2×）+ 带拼接/写回 + 3×Sobel | ~3.4 ms | ~40% | subtitle-finder 标量 + geometry |
+
+**关键结论：**
+1. **`aply_ess`+`aply_ecp` 是 im_ff 最大头（3.56ms，43%）**，在 geometry 内、已 SIMD
+   （AVX2），但因是 5×5 加权 stencil（每像素 ~40 次 load）计算密集，且 thr1/thr2 各调
+   两次。**改算法会破坏输出；若想加速需优化 geometry 内实现**（如减少重复 load /
+   AVX-512）。
+2. `find_and_apply_local_thresholding`（1.38ms，17%）是 subtitle-finder 自写标量：
+   `vec![0i32; 11*16*256]`（56KB）每调用分配，`im.iter().max()` 全扫，逐块标量直方图。
+   **可优化**：复用 edge_str 缓冲 + 合并 max 扫描。
+3. 结合 6.5：im_ff ≈ 0.72ms（Sobel）+ 3.56ms（ess/ecp）+ 1.38ms（阈值）+ ~2.6ms（CMOE
+   组合/拼接写回）。**真正可安全优化的是阈值部分（1.38ms）**；ess/ecp 在 geometry 需
+   谨慎。
+
+
 
 
 ## 七、结论与建议
