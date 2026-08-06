@@ -201,9 +201,8 @@ pub(crate) fn get_intersect_images(
     let h = cache.h();
     let dl = p.dl;
 
-    // 收集 [fn, fn+DL-1] 的帧产物。第一帧越界 → 真·无数据（返回 None）；
-    // 仅尾部帧不足 → 用可用帧，bln=false（对齐 C++：need_to_skip → bln=0，
-    // 触发「字幕结束」分支以正确保存末尾段，而非直接退出）。
+    // 收集 [fn, fn+DL-1] 的帧产物。第一帧越界 → 真·无数据（返回 None）。
+    // 仅尾部帧不足 → 用可用帧，bln=false（触发「字幕结束」分支保存末尾段）。
     let f0 = try_frame(cache, fn_ as i32)?;
     let mut ims: Vec<Vec<u8>> = Vec::with_capacity(dl);
     let mut imys: Vec<Vec<u16>> = Vec::with_capacity(dl);
