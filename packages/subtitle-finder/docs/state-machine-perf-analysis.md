@@ -238,6 +238,27 @@ perfbench 用合成 1280×720 BGR 字幕帧（带边缘扰动触发完整管线�
    **可优化**：复用 edge_str 缓冲 + 合并 max 扫描。
 3. 结合 6.5：im_ff ≈ 0.72ms（Sobel）+ 3.56ms（ess/ecp）+ 1.38ms（阈值）+ ~2.6ms（CMOE
    组合/拼接写回）。**真正可安全优化的是阈值部分（1.38ms）**；ess/ecp 在 geometry 需
+
+### 6.7 已完成优化：aply_ess/aply_ecp 加 AVX-512（im_ff 最大头，2026-08-07）
+
+按 6.6 定位，给 `aply_ess`/`aply_ecp`（im_ff 最大头 43%）加 AVX-512 快路径
+（`geometry/src/imgproc/conv.rs`）：
+
+- `aply_ecp_avx512` / `aply_ess_avx512`：一次 **16 像素**（zmm，i32 加宽），相比 AVX2
+  的 8 像素吞吐翻倍。除法仍标量（Rust std::arch 无 `_mm512_div_epi32`），但除法占比
+  小，瓶颈是 25 次 load+累加。ecp 中心==0 掩码用 `_mm512_cmpgt_epi32_mask`。
+- 运行时按 `is_x86_feature_detected!(avx512f,bw,vl)` 分派，无 AVX-512 回落 AVX2。
+
+**结果：**
+- 整管线 im_ff 阶段：**7369 → 6116ms**（884 帧，~1.4ms/帧，**~17%**）
+- 正确性：`aply_ess/ecp_simd_matches_scalar` 通过，subtitle-finder 24 测试过，
+  clip5s 仍 4 段不变
+- isolated bench 数字受机器负载噪声影响波动，以整管线 profile 为准
+
+> 经验：AVX-512 对 5×5 加权核这类"load 密集"算子收益明显（一次 16 像素翻倍吞吐）；
+> 但除法/分支仍标量，因为 Rust std::arch 缺 AVX-512 整数除法。若需再进一步，可考虑
+> 对 ess/ecp 用 `_mm512_mul_epu32` 乘倒数做向量除法。
+
    谨慎。
 
 
