@@ -68,6 +68,8 @@ pub struct FrameResult {
     pub text: String,
     /// 该帧最高置信度（取各行最大）。
     pub confidence: f64,
+    /// 该帧所有识别区域明细（每行文本/框/score，含坐标还原）。
+    pub boxs: Vec<OcrBox>,
     /// 横向值域 `[min_x, max_x]`（像素坐标），无字幕时为 `[0,0]`。
     pub x_range: [f32; 2],
     /// 纵向值域 `[min_y, max_y]`（像素坐标），无字幕时为 `[0,0]`。
@@ -243,6 +245,7 @@ impl SubtitleOcr {
         FrameResult {
             text,
             confidence,
+            boxs: lines.to_vec(),
             x_range,
             y_range,
             timestamp_ms,
@@ -453,6 +456,7 @@ mod tests {
         FrameResult {
             text: text.to_string(),
             confidence: conf,
+            boxs: Vec::new(),
             x_range: [0.0, 0.0],
             y_range: [y_range.0, y_range.1],
             timestamp_ms: ts,
