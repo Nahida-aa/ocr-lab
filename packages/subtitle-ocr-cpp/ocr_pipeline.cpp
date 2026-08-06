@@ -72,12 +72,12 @@ static float boxThreshFromEnv() {
 
 struct OCRResult {
     std::string text;
-    struct Segment {
+    struct OcrBox {
         std::string text;
         float confidence;
         std::vector<std::vector<int>> box; // 4x2
     };
-    std::vector<Segment> segments;
+    std::vector<OcrBox> boxes;
     double charListLoadMs, imageLoadMs, modelLoadMs, detMs, postMs, recMs, totalMs;
 };
 
@@ -772,12 +772,12 @@ static OCRResult runOcr(
             boxOut.push_back({(int)std::round(p.x), (int)std::round(p.y)});
         }
 
-        result.segments.push_back({text, conf, std::move(boxOut)});
+        result.boxes.push_back({text, conf, std::move(boxOut)});
         boxIdx++;
     }
 
     // Sort top-to-bottom, left-to-right
-    std::sort(result.segments.begin(), result.segments.end(),
+    std::sort(result.boxes.begin(), result.boxes.end(),
         [](auto& a, auto& b) {
             auto boxCenterY = [](auto& s) {
                 float sum = 0;
@@ -795,8 +795,8 @@ static OCRResult runOcr(
         });
 
     // Build full text
-    for (auto& seg : result.segments)
-        result.text += seg.text;
+    for (auto& box : result.boxes)
+        result.text += box.text;
 
     result.totalMs = result.charListLoadMs + result.imageLoadMs + result.modelLoadMs +
                      result.detMs + result.postMs + result.recMs;
@@ -810,18 +810,18 @@ static std::string toJson(const OCRResult& r, const std::string& filename = "") 
     ss << std::fixed << std::setprecision(2);
     ss << "{\"text\": " << std::quoted(r.text);
     if (!filename.empty()) ss << ", \"file\": " << std::quoted(filename);
-    ss << ", \"segments\": [";
-    for (size_t i = 0; i < r.segments.size(); ++i) {
-        auto& seg = r.segments[i];
-        ss << "{\"text\": " << std::quoted(seg.text)
-           << ", \"confidence\": " << seg.confidence
+    ss << ", \"boxes\": [";
+    for (size_t i = 0; i < r.boxes.size(); ++i) {
+        auto& box = r.boxes[i];
+        ss << "{\"text\": " << std::quoted(box.text)
+           << ", \"confidence\": " << box.confidence
            << ", \"box\": [";
-        for (size_t j = 0; j < seg.box.size(); ++j) {
-            ss << "[" << seg.box[j][0] << "," << seg.box[j][1] << "]";
-            if (j + 1 < seg.box.size()) ss << ",";
+        for (size_t j = 0; j < box.box.size(); ++j) {
+            ss << "[" << box.box[j][0] << "," << box.box[j][1] << "]";
+            if (j + 1 < box.box.size()) ss << ",";
         }
         ss << "]}";
-        if (i + 1 < r.segments.size()) ss << ",";
+        if (i + 1 < r.boxes.size()) ss << ",";
     }
     ss << "]";
     ss << ", \"charListLoadMs\": " << r.charListLoadMs
