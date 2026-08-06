@@ -3,11 +3,13 @@
 //! 用法：
 //!   cargo run -p subtitle-finder --release -- <video.mp4>
 //!   cargo run -p subtitle-finder --release -- --profile <video.mp4>  # 附性能剖析
+//!   cargo run -p subtitle-finder --release -- --no-save <video.mp4>   # 只写 timeline.txt，不写关键帧图
 //!
 //! 输出：
 //!   - 关键帧 PNG 图（RGB，H×W）到 `out/` 目录，文件名 `{start_ms}_{end_ms}_{i}.png`
 //!   - `out/timeline.txt`：每行 `start_ms,end_ms`（字幕段时间轴）
 //!   - `out/keyframes.json`：结构化列表 { start_ms, end_ms, image }
+//!   - `--no-save` 时只写 `timeline.txt`，跳过 PNG / keyframes.json（纯算法计时用）。
 
 use std::path::PathBuf;
 
@@ -22,15 +24,17 @@ fn main() -> anyhow::Result<()> {
 
     let args: Vec<String> = std::env::args().collect();
     if args.len() < 2 {
-        anyhow::bail!("用法: subtitle-finder [--profile] [--out <dir>] <video.mp4>");
+        anyhow::bail!("用法: subtitle-finder [--profile] [--no-save] [--out <dir>] <video.mp4>");
     }
     let mut profile = false;
+    let mut no_save = false;
     let mut video_path: Option<String> = None;
     let mut out_dir_arg: Option<String> = None;
     let mut i = 1;
     while i < args.len() {
         match args[i].as_str() {
             "--profile" => profile = true,
+            "--no-save" => no_save = true,
             "--out" => {
                 i += 1;
                 out_dir_arg = args.get(i).cloned();
@@ -75,26 +79,31 @@ fn main() -> anyhow::Result<()> {
         let name = format!("{}_{}_{}", kf.start_ms, kf.end_ms, i);
         println!("  [{}] {}ms - {}ms", i, kf.start_ms, kf.end_ms);
 
-        // 保存原始帧 PNG（BGR → RGB，含背景）。
-        let path = out_dir.join(format!("{}.png", name));
-        save_png(&path, &kf.frame)?;
-        // 保存去背景字幕前景 PNG（黑底白字，对应 VideoSubFinder 的 ISA 图）。
-        let mask_path = out_dir.join(format!("{}_mask.png", name));
-        save_mask_png(&mask_path, &kf.mask)?;
+        if !no_save {
+            // 保存原始帧 PNG（BGR → RGB，含背景）。
+            let path = out_dir.join(format!("{}.png", name));
+            save_png(&path, &kf.frame)?;
+            // 保存去背景字幕前景 PNG（黑底白字，对应 VideoSubFinder 的 ISA 图）。
+            let mask_path = out_dir.join(format!("{}_mask.png", name));
+            save_mask_png(&mask_path, &kf.mask)?;
 
-        // 时间轴。
+            json.push(format!(
+                "{{\"start_ms\":{},\"end_ms\":{},\"image\":\"{}.png\",\"mask\":\"{}_mask.png\"}}",
+                kf.start_ms, kf.end_ms, name, name
+            ));
+        }
+
+        // 时间轴（--no-save 也写，是纯计时也要的最小产物）。
         timeline.push_str(&format!("{},{}\n", kf.start_ms, kf.end_ms));
-        json.push(format!(
-            "{{\"start_ms\":{},\"end_ms\":{},\"image\":\"{}.png\",\"mask\":\"{}_mask.png\"}}",
-            kf.start_ms, kf.end_ms, name, name
-        ));
     }
 
     std::fs::write(out_dir.join("timeline.txt"), timeline)?;
-    std::fs::write(
-        out_dir.join("keyframes.json"),
-        format!("[{}]\n", json.join(",")),
-    )?;
+    if !no_save {
+        std::fs::write(
+            out_dir.join("keyframes.json"),
+            format!("[{}]\n", json.join(",")),
+        )?;
+    }
     println!("输出目录: {}", out_dir.display());
     Ok(())
 }
