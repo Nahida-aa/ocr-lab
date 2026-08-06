@@ -74,8 +74,8 @@ struct OCRResult {
     std::string text;
     struct OcrBox {
         std::string text;
-        float confidence;  // 识别置信度（rec 分支平均字符概率），「字认得准不准」
-        float score;       // 检测框得分（det 后处理框内平均概率），「框定位得准不准」
+        float text_confidence;  // 识别置信度（rec 分支平均字符概率），「字认得准不准」
+        float box_confidence;   // 检测框得分（det 后处理框内平均概率），「框定位得准不准」
         std::vector<std::vector<int>> box; // 4x2
     };
     std::vector<OcrBox> boxes;
@@ -814,8 +814,8 @@ static std::string toJson(const OCRResult& r, const std::string& filename = "") 
     for (size_t i = 0; i < r.boxes.size(); ++i) {
         auto& box = r.boxes[i];
         ss << "{\"text\": " << std::quoted(box.text)
-           << ", \"confidence\": " << box.confidence
-           << ", \"score\": " << box.score
+           << ", \"text_confidence\": " << box.text_confidence
+           << ", \"box_confidence\": " << box.box_confidence
            << ", \"box\": [";
         for (size_t j = 0; j < box.box.size(); ++j) {
             ss << "[" << box.box[j][0] << "," << box.box[j][1] << "]";
