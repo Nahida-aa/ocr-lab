@@ -7,6 +7,7 @@
 use std::path::Path;
 
 use anyhow::Result;
+use tracing::trace;
 
 use crate::compare;
 use crate::filter;
@@ -86,6 +87,7 @@ impl<'a> FrameCache<'a> {
             } else {
                 vec![0; w * h]
             };
+            trace!(frame = count, pos = count as i64 * 1000 / 30, has_text, "decode frame");
             self.frames.push(Some(FrameData {
                 bgr: flat,
                 im: im_tf,
@@ -193,24 +195,41 @@ pub(crate) fn get_intersect_images(
     let h = cache.h();
     let dl = p.dl;
 
-    // 收集 [fn, fn+DL-1] 的帧产物。
+    // 收集 [fn, fn+DL-1] 的帧产物。第一帧越界 → 真·无数据（返回 None）；
+    // 仅尾部帧不足 → 用可用帧，bln=false（对齐 C++：need_to_skip → bln=0，
+    // 触发「字幕结束」分支以正确保存末尾段，而非直接退出）。
+    let f0 = try_frame(cache, fn_ as i32)?;
     let mut ims: Vec<Vec<u8>> = Vec::with_capacity(dl);
     let mut imys: Vec<Vec<u16>> = Vec::with_capacity(dl);
-    for i in 0..dl {
-        let f = try_frame(cache, (fn_ + i) as i32)?;
-        ims.push(f.im.clone());
-        imys.push(f.y.clone());
+    ims.push(f0.im.clone());
+    imys.push(f0.y.clone());
+    let mut full = true;
+    for i in 1..dl {
+        match try_frame(cache, (fn_ + i) as i32) {
+            Some(f) => {
+                ims.push(f.im.clone());
+                imys.push(f.y.clone());
+            }
+            None => {
+                full = false;
+                break;
+            }
+        }
     }
     let im_refs: Vec<&[u8]> = ims.iter().map(|v| v.as_slice()).collect();
     let iy_refs: Vec<&[u16]> = imys.iter().map(|v| v.as_slice()).collect();
 
     let mut im_int = ims[0].clone();
-    intersect_images_range(&mut im_int, &im_refs, 1, dl - 1, w, h);
+    intersect_images_range(&mut im_int, &im_refs, 1, im_refs.len() - 1, w, h);
 
     let mut y_int = imys[0].clone();
-    intersect_y_images_range(&mut y_int, &iy_refs, 1, dl - 1, p);
+    intersect_y_images_range(&mut y_int, &iy_refs, 1, iy_refs.len() - 1, p);
 
-    let bln = analyse_image_flat(&im_int, Some(&y_int), w, h, p);
+    let bln = if full {
+        analyse_image_flat(&im_int, Some(&y_int), w, h, p)
+    } else {
+        false
+    };
     Some((im_int, y_int, bln))
 }
 
