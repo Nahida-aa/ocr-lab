@@ -74,7 +74,8 @@ struct OCRResult {
     std::string text;
     struct OcrBox {
         std::string text;
-        float confidence;
+        float confidence;  // 识别置信度（rec 分支平均字符概率），「字认得准不准」
+        float score;       // 检测框得分（det 后处理框内平均概率），「框定位得准不准」
         std::vector<std::vector<int>> box; // 4x2
     };
     std::vector<OcrBox> boxes;
@@ -689,7 +690,6 @@ static OCRResult runOcr(
     // --- Recognition for each box ---
     int boxIdx = 0;
     for (auto& [boxPts, score] : boxesPts) {
-        (void)score;
         if (boxPts.size() < 4) continue;
 
         // box 坐标现在是 ROI 内部的坐标。如果开启了 bottom_only，先加回 yOffset 以便在原图做裁剪
@@ -772,7 +772,7 @@ static OCRResult runOcr(
             boxOut.push_back({(int)std::round(p.x), (int)std::round(p.y)});
         }
 
-        result.boxes.push_back({text, conf, std::move(boxOut)});
+        result.boxes.push_back({text, conf, score, std::move(boxOut)});
         boxIdx++;
     }
 
@@ -815,6 +815,7 @@ static std::string toJson(const OCRResult& r, const std::string& filename = "") 
         auto& box = r.boxes[i];
         ss << "{\"text\": " << std::quoted(box.text)
            << ", \"confidence\": " << box.confidence
+           << ", \"score\": " << box.score
            << ", \"box\": [";
         for (size_t j = 0; j < box.box.size(); ++j) {
             ss << "[" << box.box[j][0] << "," << box.box[j][1] << "]";
