@@ -201,25 +201,29 @@ pub(crate) fn get_intersect_images(
     let h = cache.h();
     let dl = p.dl;
 
-    // 收集 [fn, fn+DL-1] 的帧产物。第一帧越界 → 真·无数据（返回 None）。
-    // 仅尾部帧不足 → 用可用帧，bln=false（触发「字幕结束」分支保存末尾段）。
+    // 收集 [fn, fn+DL-1] 中**有字幕**（has_text）的帧。第一帧越界 → 真·无数据（返回 None）。
+    // 只对 has_text=1 的帧做交集：空字幕帧（has_text=0）不参与，避免把交集清空导致
+    // 段提前结束（C++ 异步下同样能看到段延伸到最后一个有字幕帧）。全部无字幕 → bln=false。
     let f0 = try_frame(cache, fn_ as i32)?;
     let mut ims: Vec<Vec<u8>> = Vec::with_capacity(dl);
     let mut imys: Vec<Vec<u16>> = Vec::with_capacity(dl);
-    ims.push(f0.im.clone());
-    imys.push(f0.y.clone());
-    let mut full = true;
+    if f0.has_text {
+        ims.push(f0.im.clone());
+        imys.push(f0.y.clone());
+    }
     for i in 1..dl {
         match try_frame(cache, (fn_ + i) as i32) {
-            Some(f) => {
+            Some(f) if f.has_text => {
                 ims.push(f.im.clone());
                 imys.push(f.y.clone());
             }
-            None => {
-                full = false;
-                break;
-            }
+            Some(_) => {} // 无字幕帧跳过
+            None => break,
         }
+    }
+    if ims.is_empty() {
+        // 窗口内无字幕帧 → bln=false（段结束）。
+        return Some((vec![0u8; w * h], vec![0u16; w * h], false));
     }
     let im_refs: Vec<&[u8]> = ims.iter().map(|v| v.as_slice()).collect();
     let iy_refs: Vec<&[u16]> = imys.iter().map(|v| v.as_slice()).collect();
@@ -230,11 +234,7 @@ pub(crate) fn get_intersect_images(
     let mut y_int = imys[0].clone();
     intersect_y_images_range(&mut y_int, &iy_refs, 1, iy_refs.len() - 1, p);
 
-    let bln = if full {
-        analyse_image_flat(&im_int, Some(&y_int), w, h, p)
-    } else {
-        false
-    };
+    let bln = analyse_image_flat(&im_int, Some(&y_int), w, h, p);
     Some((im_int, y_int, bln))
 }
 
@@ -479,7 +479,24 @@ fn run_state_machine(
         // 追踪阶段：fn_ 为字幕起始。
         let f0 = match get_frame(&cache, fn_) {
             Ok(f) => f,
-            Err(_) => break 'outer,
+            Err(_) => {
+                // EOF：保存当前进行中的字幕段。
+                if bf != -2 {
+                    let last = cache.len().saturating_sub(1) as i32;
+                    if let Some(f) = try_frame(&cache, last) {
+                        et = f.pos;
+                    }
+                    if last - bf + 1 >= p.dl as i32 {
+                        let mut im_int = im_int_s.clone();
+                        let mut im_y = im_y_s.clone();
+                        if filter::analize_for_sub_presence(&im_ne_s, &mut im_int, &mut im_y, w, h, p) == 1 {
+                            save_keyframe(&im_fs, &im_int, bt, et);
+                        }
+                    }
+                    bf = -2;
+                }
+                break 'outer;
+            }
         };
         prev_pos = if fn_ > 0 { get_frame(&cache, fn_ - 1)?.pos } else { -1 };
         let cur_pos = f0.pos;
@@ -487,7 +504,24 @@ fn run_state_machine(
         // bln = GetIntersectImages(fn)：ImInt = intersect(fn..fn+DL-1)。
         let (im_int, y_int, mut bln) = match get_intersect_images(&cache, fn_ as usize) {
             Some(v) => v,
-            None => break 'outer, // 帧越界 → 结束
+            None => {
+                // EOF：保存当前进行中的字幕段。
+                if bf != -2 {
+                    let last = cache.len().saturating_sub(1) as i32;
+                    if let Some(f) = try_frame(&cache, last) {
+                        et = f.pos;
+                    }
+                    if last - bf + 1 >= p.dl as i32 {
+                        let mut im_int = im_int_s.clone();
+                        let mut im_y = im_y_s.clone();
+                        if filter::analize_for_sub_presence(&im_ne_s, &mut im_int, &mut im_y, w, h, p) == 1 {
+                            save_keyframe(&im_fs, &im_int, bt, et);
+                        }
+                    }
+                    bf = -2;
+                }
+                break 'outer; // 帧越界 → 结束
+            }
         };
 
         // fn == bf → 记录当前为字幕段存储。
@@ -716,6 +750,21 @@ fn run_state_machine(
             prev_im_ne = get_frame(&cache, fn_)?.ne.clone();
             fn_ += 1;
             if fn_ >= count as i32 {
+                // EOF：保存当前进行中的字幕段（否则末尾段丢失）。
+                if bf != -2 {
+                    let last = cache.len().saturating_sub(1) as i32;
+                    if let Some(f) = try_frame(&cache, last) {
+                        et = f.pos;
+                    }
+                    if last - bf + 1 >= p.dl as i32 {
+                        let mut im_int = im_int_s.clone();
+                        let mut im_y = im_y_s.clone();
+                        if filter::analize_for_sub_presence(&im_ne_s, &mut im_int, &mut im_y, w, h, p) == 1 {
+                            save_keyframe(&im_fs, &im_int, bt, et);
+                        }
+                    }
+                    bf = -2;
+                }
                 break;
             }
         }
