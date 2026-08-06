@@ -42,21 +42,32 @@
     检查（S < mpd*SS 时移除最远段）、`mpned` 最小边缘密度检查（nNE < mpned*S 时移除）。
     Any 路径跳过这些，导致 Rust 无法清理噪声 → ISA 过密 → im_res 过密 → compare 过度敏感。
 
-## 待办：实现 Center 对齐（SecondFiltration 的 Center 路径）
-- `second_filtration` 需加 Center 特有逻辑（mpd/mpned 密度检查 + 中心偏移段移除）。
-- 需确认 `analyse_image` 等其他用 g_text_alignment 的函数是否也要 Center。
-- C++ 有 32 处 g_text_alignment 使用，需逐一评估。
+## ✅ 已实现 Center 对齐（filter.rs second_filtration）
+- 已实现完整 Center 路径：`is_too_right` / `farthest_from_center` helper + 逐条带 `while(1)`
+  迭代，含段合并（btd_max）、中心偏移移除、`mpd` 最小点密度、`mpned` 最小边缘密度检查。
+- 效果：SF 从 54157 → 2103（C++ 4579），TF 从 54459 → 6984（C++ 6535）。
+- **段数 7 → 4，与 C++ 对齐**（提交 5c10a58）。
+
+## 剩余差异：末尾段时间偏早 ~5 帧（非 bug）
+- Rust 段3/段4 提前结束：Rust `2266-3332, 3700-4899` vs C++ `2266-3499, 3700-5032`。
+- 根因：C++ `GetIntersectImages` 的 bln = `AND(每帧 has_text)`，但 C++ 是**异步多线程**，
+  在 fn 处读到的未来帧（fn+DL-1）has_text 有**滞后**，导致段结束时点偏后。Rust 顺序实现
+  直接读到未来帧 has_text=0（如 fn=105 无字幕），提前判结束。
+- 结论：非算法 bug，是 C++ 异步时序 vs Rust 顺序的固有差异。段数已对齐。
 
 ## 现状
-- Rust 当前输出（bt601 scaler 基线）：7 段
-  `133-332, 333-832, 966-1332, 1333-1832, 1832-2199, 2266-3332, 3933-4899`
+- Rust 当前输出：4 段
+  `132-932, 932-2265, 2266-3332, 3700-4899`
 - C++（cli 分支）：4 段
   `133-932, 933-2265, 2266-3499, 3700-5032`
-- frame.rs 已还原到基线（bt601 scaler），工作区干净。
+- 前两段起止几乎一致（差 1ms）；段3/段4 结束提前 ~5 帧（C++ 异步时序）。
+- 23 单测通过，workspace 干净，frame.rs 用 bt601 scaler（未改）。
 
 ## 排查工具备忘
 - Rust 调试日志：`RUST_LOG=subtitle_finder=trace`（decode frame isa_wc / 边缘图白点 /
-  dilate(NE) / second_filtration step / compare 详情 / 内容变化判定帧）。
-- C++ 独立对比程序：cli 分支写 `edge_dump`（读固定 BGR → GetImNE/GetImHE → dump），
-  需要 stub `g_ReportFileName`/`GetFileNameWithExtension` + 链接 MyClosedFigure.o。
+  dilate(NE) / second_filtration step / compare 详情 / 内容变化判定帧 / save_keyframe）。
+- C++ 独立对比程序：cli 分支写 `edge_dump`（读固定 BGR → GetImNE/GetImHE → dump）、
+  `tf_dump`（读固定 BGR → GetTransformedImage → FF/SF/TF/NE），需 stub
+  `g_ReportFileName`/`GetFileNameWithExtension` + 链接 MyClosedFigure.o。
 - 用 ffmpeg CLI 转 BGR 作为 OpenCV 的可靠参照（默认 bt709 与 OpenCV 100% 一致）。
+- 关键结论已反复验证：用相同 BGR 喂两边才能可靠对比（cli 分支 FastSearchSubtitles 有帧同步 bug）。
