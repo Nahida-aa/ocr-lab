@@ -72,13 +72,13 @@ static float boxThreshFromEnv() {
 
 struct OCRResult {
     std::string text;
-    struct OcrBox {
+    struct OcrBoxResult {
         std::string text;
         float text_confidence;  // 识别置信度（rec 分支平均字符概率），「字认得准不准」
         float box_confidence;   // 检测框得分（det 后处理框内平均概率），「框定位得准不准」
         std::vector<std::vector<int>> box; // 4x2
     };
-    std::vector<OcrBox> boxes;
+    std::vector<OcrBoxResult> boxes;
     double charListLoadMs, imageLoadMs, modelLoadMs, detMs, postMs, recMs, totalMs;
 };
 
