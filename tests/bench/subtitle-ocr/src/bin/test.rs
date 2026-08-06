@@ -7,23 +7,12 @@
 //! 校验输出 JSON 结构（file / segments / text / confidence / box）。
 //! py / rust 尚未实现时优雅跳过（退出非 0）。
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::Command;
 
-const IMPLS: &[&str] = &["cpp", "py", "rust"];
+use bench_subtitle_ocr::repo_root;
 
-fn repo_root() -> PathBuf {
-    // CARGO_MANIFEST_DIR = .../tests/bench/subtitle-ocr
-    let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
-    manifest
-        .parent()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .to_path_buf()
-}
+const IMPLS: &[&str] = &["cpp", "py", "rust"];
 
 /// 帧源目录（仓库内既存的 tests/.test-frames，不再复制到包内临时目录）。
 fn frames_dir() -> PathBuf {

@@ -14,20 +14,8 @@ use std::process::Command;
 
 use bench_subtitle_ocr::{
     align_segments, extract_frames, list_frame_files, merge_frames, normalize_for_cer, compute_cer,
-    AlignReport, FrameResult, TimedText,
+    repo_root, AlignReport, FrameResult, TimedText,
 };
-
-fn repo_root() -> PathBuf {
-    let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
-    manifest
-        .parent()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .to_path_buf()
-}
 
 fn cpp_bin() -> PathBuf {
     repo_root()

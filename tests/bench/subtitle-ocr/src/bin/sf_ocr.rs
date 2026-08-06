@@ -14,24 +14,11 @@
 //! - 关键帧自带 start_ms/end_ms 时间轴，直接拼成字幕行。
 //! - 模型目录默认仓库根 `models/rapidocr`。
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use anyhow::Result;
 use rapidocr_ort::ModelProfile;
 use subtitle_ocr::{OcrOptions, SubtitleOcr};
-
-/// 仓库根：CARGO_MANIFEST_DIR = .../tests/bench/subtitle-ocr，上溯 3 级。
-fn repo_root() -> PathBuf {
-    let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
-    manifest
-        .parent() // .../tests/bench
-        .unwrap()
-        .parent() // .../tests
-        .unwrap()
-        .parent() // 仓库根
-        .unwrap()
-        .to_path_buf()
-}
 
 fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().collect();
@@ -49,7 +36,7 @@ fn main() -> Result<()> {
     println!("找到 {} 个关键帧", kfs.len());
 
     // 2) 初始化 subtitle-ocr（模型目录仓库根 models/rapidocr）。
-    let model_dir = repo_root().join("models").join("rapidocr");
+    let model_dir = bench_subtitle_ocr::repo_root().join("models").join("rapidocr");
     if !model_dir.exists() {
         anyhow::bail!("模型目录不存在: {}（用 --model 指定或放 models/rapidocr）", model_dir.display());
     }

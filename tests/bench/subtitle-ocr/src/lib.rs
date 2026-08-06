@@ -5,6 +5,20 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+/// 仓库根路径（CARGO_MANIFEST_DIR = .../tests/bench/subtitle-ocr，上溯 3 级）。
+/// 供各 bin（bench / test / sf_ocr）共用，避免重复定义。
+pub fn repo_root() -> PathBuf {
+    let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
+    manifest
+        .parent() // .../tests/bench
+        .unwrap()
+        .parent() // .../tests
+        .unwrap()
+        .parent() // 仓库根
+        .unwrap()
+        .to_path_buf()
+}
+
 // ===========================================================================
 // 帧结果与段
 // ===========================================================================
