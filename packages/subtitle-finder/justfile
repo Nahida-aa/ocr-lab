@@ -1,0 +1,42 @@
+# subtitle-finder：吃视频 → 输出字幕关键帧 + 时间轴（复刻 VideoSubFinder 筛选管线）。
+# 用法（在 packages/subtitle-finder/ 下）：
+#   just                       # 默认 = 显示任务列表
+#   just build                 # release 编译
+#   just run <video>           # 跑一帧视频，输出关键帧到 out/
+#   just profile <video>       # 带分阶段耗时剖析跑
+#   just test                  # 跑单测
+#   just ocr <video>           # 跑 + 用 subtitle-ocr 对关键帧原始帧 OCR
+#   just out-clean             # 清空 out/（关键帧 + mask + json）
+#
+# 输出：packages/subtitle-finder/out/{start}_{end}_{i}.png + _mask.png +
+#       timeline.txt + keyframes.json
+
+# ---- 默认任务（`just` 无参即显示列表） ----
+default:
+    @just --list
+
+# ---- 编译（release，含 LTO） ----
+build:
+    cargo build -p subtitle-finder --release
+
+# ---- 跑一段视频（输出关键帧 + 时间轴到 out/） ----
+run video="/tmp/clip5s.mp4":
+    cargo run -p subtitle-finder --release -- {{video}}
+
+# ---- 带分阶段耗时剖析跑 ----
+profile video="/tmp/clip5s.mp4":
+    cargo run -p subtitle-finder --release -- --profile {{video}}
+
+# ---- 跑 + 用 subtitle-ocr 对 out/ 所有关键帧 OCR（批量，验证字幕识别） ----
+# 注：subtitle-ocr --dir 需绝对路径；OCR 的图（含原始帧 + _mask）里看原始帧结果。
+ocr video="/tmp/clip5s.mp4":
+    cargo run -p subtitle-finder --release -- {{video}}
+    cargo run -p subtitle-ocr --release -- --dir $(pwd)/out --subtitle-only
+
+# ---- 单测 ----
+test:
+    cargo test -p subtitle-finder
+
+# ---- 清空 out/（关键帧产物） ----
+out-clean:
+    @rm -f out/*.png out/timeline.txt out/keyframes.json
