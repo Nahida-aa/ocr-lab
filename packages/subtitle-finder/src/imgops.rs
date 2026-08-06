@@ -99,6 +99,10 @@ pub fn intersect_two_images_inplace<T: Copy, T2: Copy + Default + PartialEq>(
 /// 3×3 矩形形态学膨胀，迭代 `iters` 次（对齐 OpenCV `dilate` 默认 3×3 矩形核）。
 /// 返回新图。
 pub fn dilate(im: &[u8], w: usize, h: usize, iters: i32) -> Vec<u8> {
+    // 迭代 3×3 方形膨胀（对应 OpenCV cv::dilate(_,_,Mat(),Point(-1,-1),iters)）。
+    // 用 **scatter**：只对白像素写 3×3 邻域。边缘图（NE）是稀疏的，scatter 只在
+    // 白点处工作，比"每输出像素 gather 9 邻域"快得多（实测 gather iters=6 慢 3×）。
+    // 尝试过的替代方案：可分离两趟（缓存不友好）、gather 逐像素（不利用稀疏）都更慢。
     let mut cur = im.to_vec();
     for _ in 0..iters.max(0) {
         let mut next = cur.clone();
@@ -951,6 +955,59 @@ mod tests {
         gimg::apply_moderate_threshold(&mut v, 0.5);
         // 阈值 = 255*0.5 = 127（截断 127）。<127→0，>=127→255。
         assert_eq!(v, vec![0, 0, 255, 255]);
+    }
+
+    /// 参考实现：迭代 3×3 膨胀（对应 OpenCV cv::dilate(..., Mat(), Point(-1,-1), iters)）。
+    fn dilate_reference(im: &[u8], w: usize, h: usize, iters: i32) -> Vec<u8> {
+        let mut cur = im.to_vec();
+        for _ in 0..iters.max(0) {
+            let mut next = cur.clone();
+            for y in 0..h {
+                for x in 0..w {
+                    if cur[y * w + x] != 0 {
+                        for dy in -1..=1i32 {
+                            for dx in -1..=1i32 {
+                                let nx = x as i32 + dx;
+                                let ny = y as i32 + dy;
+                                if nx >= 0 && ny >= 0 && nx < w as i32 && ny < h as i32 {
+                                    next[ny as usize * w + nx as usize] = 255;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            cur = next;
+        }
+        cur
+    }
+
+    /// 现 dilate（迭代 3×3 scatter）必须与参考实现逐像素一致（防回归）。
+    #[test]
+    fn dilate_matches_reference() {
+        // 确定性伪随机 + 结构化用例。
+        for &(w, h) in &[(3, 3), (5, 4), (17, 9), (32, 20), (64, 40)] {
+            for &iters in &[1i32, 2, 3, 6] {
+                // 随机稀疏点。
+                let mut seed = (w * 31 + h * 7 + iters as usize) as u32;
+                let mut im = vec![0u8; w * h];
+                for v in im.iter_mut() {
+                    seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+                    if (seed >> 16) % 10 == 0 {
+                        *v = 255;
+                    }
+                }
+                let r1 = dilate(&im, w, h, iters);
+                let r2 = dilate_reference(&im, w, h, iters);
+                assert_eq!(r1, r2, "随机用例不匹配 w={} h={} iters={}", w, h, iters);
+
+                // 全白 / 全黑。
+                let all_white = vec![255u8; w * h];
+                assert_eq!(dilate(&all_white, w, h, iters), dilate_reference(&all_white, w, h, iters));
+                let all_black = vec![0u8; w * h];
+                assert_eq!(dilate(&all_black, w, h, iters), dilate_reference(&all_black, w, h, iters));
+            }
+        }
     }
 
     #[test]

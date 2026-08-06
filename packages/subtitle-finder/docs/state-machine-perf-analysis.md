@@ -155,6 +155,33 @@ perfbench 用合成 1280×720 BGR 字幕帧（带边缘扰动触发完整管线�
 
 **优化 filter 是唯一能显著降每帧耗时的地方**（14ms → 若能砍半，每帧省 ~7ms）。
 
+### 6.4 filter 内部子函数拆解（真实视频，临时插桩测）
+
+在 `filter_transformed_image` 内临时加 `std::time::Instant` 计时各子调用，跑真实视频
+（30s/884 帧）累计取均值：
+
+| 子函数 | 每帧 | 占 filter | 说明 |
+|---|---|---|---|
+| **`dilate(NE)`**（iters=6） | ~5.8 ms | ~45% | 3×3 迭代膨胀 |
+| **`filter_by_not_intersected_figures`** | ~2.9 ms | ~22% | 连通域筛选（与 mask 相交保留） |
+| **`clear_image_from_small_symbols`** | ~2.4 ms | ~18% | 剔除过小符号 |
+| `extend_imf_with_data_from_imnf` | ~0.64 ms | 5% | 用边缘扩展文字行 |
+| `second_filtration` | ~0.15 ms | 1% | 边缘密度过滤 |
+| `restore_still_exist_lines` ×2 | ~0.45 ms | 3% | 行邻域恢复 |
+| 合计 | ~13 ms | 100% | |
+
+**关键实验（2026-08-07）——dilate 已接近最优，勿再微优化：**
+- 试过**可分离两趟**（方形 SE 等价 + 水平/垂直一趟）：缓存不友好（垂直趟列主序遍历
+  跨度 1280），实测慢 3×（7→19ms）。
+- 试过**gather 逐像素**（每输出像素读 9 邻域）：边缘图稀疏，scatter 只在白点工作，
+  gather 对每像素都读 9 邻域，实测慢 3×（7→21ms）。
+- **结论**：边缘图（NE）稀疏，`dilate` 的 **scatter 实现（只处理白点）已是最优**。
+  dilate 的 ~6ms 是 720p × 6 次 3×3 迭代的固有成本，受边缘密度线性影响。
+
+> filter 三大头 dilate(5.8) + filter_fig(2.9) + clear_sym(2.4) ≈ 11ms。
+> dilate 难再优化；filter_fig / clear_sym 是连通域遍历，可看是否有冗余全图扫描。
+
+
 ## 七、结论与建议
 
 - **状态机分配 churn 不是墙钟瓶颈**，第 2/3/4 项优化（compare 去拷贝、prev_im_ne

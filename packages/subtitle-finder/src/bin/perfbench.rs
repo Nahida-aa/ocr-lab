@@ -87,6 +87,11 @@ fn main() {
     bench("dilate(iters=1)", 2000, || {
         imgops::dilate(a, W, H, 1)
     });
+    // filter 里真实用法是 dilate(iters=6)（NE 边缘图）。用较密的边缘图测。
+    let dense_edges = make_edge_dense();
+    bench("dilate(iters=6) 边缘图", 200, || {
+        imgops::dilate(&dense_edges, W, H, 6)
+    });
     bench("intersect_two_images_inplace", 5000, || {
         let mut x = a.clone();
         imgops::intersect_two_images_inplace(&mut x, b, 0u8);
@@ -136,6 +141,33 @@ fn main() {
         "合计",
         prof.total_ms() / iters as f64
     );
+}
+
+/// 合成一帧类边缘图：稀疏横/竖线 + 少量噪声（模拟 Sobel 边缘 NE 图）。
+/// ⚠️ dilate 是 scatter（只在白点处工作），耗时随**白点密度**线性增长。
+/// 真实 NE 边缘稀疏，这里保持稀疏才贴近实际（密集合成数据会高估 dilate 3-4×）。
+fn make_edge_dense() -> Vec<u8> {
+    let mut im = vec![0u8; W * H];
+    // 稀疏横线（每 9 行一条）、稀疏竖线（每 12 列一条）。
+    for y in (0..H).step_by(9) {
+        for x in 0..W {
+            im[y * W + x] = 255;
+        }
+    }
+    for x in (0..W).step_by(12) {
+        for y in 0..H {
+            im[y * W + x] = 255;
+        }
+    }
+    // 少量噪声点（~1.5% 密度）。
+    let mut seed = 777u32;
+    for i in 0..W * H {
+        seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+        if (seed >> 16) % 70 == 0 {
+            im[i] = 255;
+        }
+    }
+    im
 }
 
 /// 合成一帧 1280x720 BGR：浅灰背景 + 底部几行**带边缘变奏**的白色文字。
