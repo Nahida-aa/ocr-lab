@@ -643,3 +643,74 @@ pub fn list_frame_files(dir: &Path) -> Vec<PathBuf> {
     files.sort();
     files
 }
+
+// ============================================================================
+// 共享的 CER / summary 生成（供 sf_ocr / bench 复用）。
+// ============================================================================
+
+/// CER 结果（raw + norm + 字符数）。
+pub struct CerResult {
+    pub raw: f64,
+    pub norm: f64,
+    pub hyp_chars: usize,
+    pub ref_chars: usize,
+}
+
+/// 读 ocr.json / GT 的 `result.segments` → 去空白 join 文本（用于 CER）。
+pub fn load_segments_text(path: &Path) -> Vec<String> {
+    let content = std::fs::read_to_string(path).unwrap();
+    let v: serde_json::Value = serde_json::from_str(&content).unwrap();
+    v.get("result")
+        .and_then(|r| r.get("segments"))
+        .and_then(|s| s.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|s| s.get("text").and_then(|t| t.as_str()))
+                .map(|t| t.trim().to_string())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// 读 ocr.json / GT 的 `result.segments` → 带时间轴的 TimedText 列表（用于对齐）。
+pub fn load_timed_segments(path: &Path) -> Vec<TimedText> {
+    let content = std::fs::read_to_string(path).unwrap();
+    let v: serde_json::Value = serde_json::from_str(&content).unwrap();
+    v.get("result")
+        .and_then(|r| r.get("segments"))
+        .and_then(|s| s.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|s| {
+                    Some(TimedText {
+                        text: s.get("text").and_then(|t| t.as_str())?.trim().to_string(),
+                        start: s.get("start").and_then(|t| t.as_u64())?,
+                        end: s.get("end").and_then(|t| t.as_u64())?,
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn strip_ws(s: &str) -> String {
+    s.chars().filter(|c| !c.is_whitespace()).collect()
+}
+
+/// 对齐 eval-ocr.ts main()：读 hyp/GT 的 result.segments，join 文本，算 raw + norm CER。
+pub fn eval_cer(hyp_path: &Path, gt_path: &Path) -> CerResult {
+    let gt_segs = load_segments_text(gt_path);
+    let hyp_segs = load_segments_text(hyp_path);
+    let gt_full: String = gt_segs.concat();
+    let hyp_full: String = hyp_segs.concat();
+
+    let raw = compute_cer(&strip_ws(&gt_full), &strip_ws(&hyp_full));
+    let norm = compute_cer(&normalize_for_cer(&gt_full), &normalize_for_cer(&hyp_full));
+
+    CerResult {
+        raw,
+        norm,
+        hyp_chars: strip_ws(&hyp_full).chars().count(),
+        ref_chars: strip_ws(&gt_full).chars().count(),
+    }
+}

@@ -34,6 +34,7 @@ fn main() -> Result<()> {
     let mut video_arg = None;
     let mut from_dir: Option<PathBuf> = None;
     let mut out_dir: Option<PathBuf> = None;
+    let mut label = "sf".to_string();
     let mut i = 1;
     while i < args.len() {
         match args[i].as_str() {
@@ -44,6 +45,10 @@ fn main() -> Result<()> {
             "--out" => {
                 i += 1;
                 out_dir = args.get(i).map(PathBuf::from);
+            }
+            "--label" => {
+                i += 1;
+                label = args.get(i).cloned().unwrap_or(label);
             }
             _ => video_arg = Some(args[i].clone()),
         }
@@ -96,25 +101,91 @@ fn main() -> Result<()> {
         }));
     }
 
-    // 4) 可选：写 ocr.json（对齐 bench 的 result.segments 结构，便于下游 eval）。
-    if let Some(dir) = out_dir {
-        std::fs::create_dir_all(&dir)?;
-        let merged: Vec<String> = segments
-            .iter()
-            .map(|s| s.get("text").and_then(|v| v.as_str()).unwrap_or("").to_string())
-            .filter(|t| !t.is_empty())
-            .collect();
-        let ocr_output = serde_json::json!({
-            "audio_info": { "duration": segments.last().map(|s| s["end"].as_u64().unwrap_or(0)).unwrap_or(0) },
-            "result": { "text": merged.join(" "), "segments": segments },
-            "_engine": "sf-keyframe",
-            "_source": "video_hardsub",
-            "_fps": 30,
-            "_timingsMs": serde_json::Value::Null,
+    // 4) 写 ocr.json + summary.json 到结果目录。
+    //    默认 `tests/bench/subtitle-ocr/results/<label>/`（项目内，用户约定），
+    //    也可用 --out <dir> 覆盖。
+    let results_dir = match out_dir {
+        Some(d) => d,
+        None => bench_subtitle_ocr::repo_root()
+            .join("tests")
+            .join("bench")
+            .join("subtitle-ocr")
+            .join("results")
+            .join(&label),
+    };
+    std::fs::create_dir_all(&results_dir)?;
+    let merged: Vec<String> = segments
+        .iter()
+        .map(|s| s.get("text").and_then(|v| v.as_str()).unwrap_or("").to_string())
+        .filter(|t| !t.is_empty())
+        .collect();
+    let ocr_output = serde_json::json!({
+        "audio_info": { "duration": segments.last().map(|s| s["end"].as_u64().unwrap_or(0)).unwrap_or(0) },
+        "result": { "text": merged.join(" "), "segments": segments },
+        "_engine": "sf-keyframe",
+        "_source": "video_hardsub",
+        "_fps": 30,
+        "_timingsMs": serde_json::Value::Null,
+    });
+    let ocr_path = results_dir.join("ocr.json");
+    std::fs::write(&ocr_path, serde_json::to_string_pretty(&ocr_output).unwrap())?;
+    println!("OCR 结果已写入: {}", ocr_path.display());
+
+    // summary.json：对 GT（ref/ocr_manual.json）算 CER + 时序对齐。
+    let gt_path = bench_subtitle_ocr::repo_root()
+        .join("tests")
+        .join("bench")
+        .join("subtitle-ocr")
+        .join("ref")
+        .join("ocr_manual.json");
+    if gt_path.exists() {
+        let cer = bench_subtitle_ocr::eval_cer(&ocr_path, &gt_path);
+        let align = bench_subtitle_ocr::align_segments(
+            &bench_subtitle_ocr::load_timed_segments(&gt_path),
+            &bench_subtitle_ocr::load_timed_segments(&ocr_path),
+        );
+        let summary_json = serde_json::json!({
+            "label": label,
+            "engine": "sf-keyframe",
+            "keyframes": kfs.len(),
+            "segments": kfs.len(),
+            "cer": cer.norm,
+            "cer_raw": cer.raw,
+            "hyp_chars": cer.hyp_chars,
+            "ref_chars": cer.ref_chars,
+            "ocr_inference_s": 0.0,
+            "ocr_frames": kfs.len(),
+            "alignment": {
+                "paired": align.pairs.len(),
+                "missed": align.missed,
+                "spurious": align.spurious,
+                "zero_duration": align.zero_duration,
+                "split": align.split,
+                "merged": align.merged,
+                "iou_mean": (align.iou_mean * 10000.0).round() / 10000.0,
+                "paired_cer": align.paired_cer,
+                "start_delta_ms": {
+                    "mean": align.start_delta_mean.round(),
+                    "median": align.start_delta_median.round(),
+                    "p95_abs": align.start_delta_p95_abs.round(),
+                },
+                "end_delta_ms": {
+                    "mean": align.end_delta_mean.round(),
+                    "median": align.end_delta_median.round(),
+                    "p95_abs": align.end_delta_p95_abs.round(),
+                },
+            },
+            "ocr_timings_ms": serde_json::Value::Null,
         });
-        let ocr_path = dir.join("ocr.json");
-        std::fs::write(&ocr_path, serde_json::to_string_pretty(&ocr_output).unwrap())?;
-        println!("OCR 结果已写入: {}", ocr_path.display());
+        let summary_path = results_dir.join("summary.json");
+        std::fs::write(&summary_path, serde_json::to_string_pretty(&summary_json).unwrap())?;
+        println!("summary 已写入: {}", summary_path.display());
+        println!(
+            "  CER(norm)={:.4} raw={:.4} | 时序: paired={} missed={} spurious={}",
+            cer.norm, cer.raw, align.pairs.len(), align.missed, align.spurious
+        );
+    } else {
+        println!("GT 不存在（{}），跳过 summary.json", gt_path.display());
     }
 
     Ok(())
