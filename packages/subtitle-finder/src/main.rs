@@ -22,15 +22,22 @@ fn main() -> anyhow::Result<()> {
 
     let args: Vec<String> = std::env::args().collect();
     if args.len() < 2 {
-        anyhow::bail!("用法: subtitle-finder [--profile] <video.mp4>");
+        anyhow::bail!("用法: subtitle-finder [--profile] [--out <dir>] <video.mp4>");
     }
     let mut profile = false;
     let mut video_path: Option<String> = None;
-    for a in &args[1..] {
-        match a.as_str() {
+    let mut out_dir_arg: Option<String> = None;
+    let mut i = 1;
+    while i < args.len() {
+        match args[i].as_str() {
             "--profile" => profile = true,
-            _ => video_path = Some(a.clone()),
+            "--out" => {
+                i += 1;
+                out_dir_arg = args.get(i).cloned();
+            }
+            _ => video_path = Some(args[i].clone()),
         }
+        i += 1;
     }
     let video_path = video_path.ok_or_else(|| anyhow::anyhow!("缺少视频路径"))?;
     let video = PathBuf::from(&video_path);
@@ -55,8 +62,11 @@ fn main() -> anyhow::Result<()> {
 
     println!("找到 {} 个关键帧", kfs.len());
 
-    // 输出目录：包内 out/（稳定、可查看）。
-    let out_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("out");
+    // 输出目录：默认包内 out/；--out 指定（相对当前工作目录）。
+    let out_dir = match out_dir_arg {
+        Some(d) => PathBuf::from(d),
+        None => PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("out"),
+    };
     std::fs::create_dir_all(&out_dir)?;
 
     let mut timeline = String::new();
