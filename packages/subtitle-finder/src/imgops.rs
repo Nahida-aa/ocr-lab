@@ -102,7 +102,9 @@ pub fn dilate(im: &[u8], w: usize, h: usize, iters: i32) -> Vec<u8> {
     // 迭代 3×3 方形膨胀（对应 OpenCV cv::dilate(_,_,Mat(),Point(-1,-1),iters)）。
     // 用 **scatter**：只对白像素写 3×3 邻域。边缘图（NE）是稀疏的，scatter 只在
     // 白点处工作，比"每输出像素 gather 9 邻域"快得多（实测 gather iters=6 慢 3×）。
-    // 尝试过的替代方案：可分离两趟（缓存不友好）、gather 逐像素（不利用稀疏）都更慢。
+    // 尝试过的替代方案：可分离两趟（缓存不友好）、gather 逐像素（不利用稀疏）、
+    // 双缓冲交替（省 clone 但被 scatter 计算主导）都不比本实现快。本实现是多年 C++
+    // 移植的对齐版本，输出必须逐像素一致。
     let mut cur = im.to_vec();
     for _ in 0..iters.max(0) {
         let mut next = cur.clone();
