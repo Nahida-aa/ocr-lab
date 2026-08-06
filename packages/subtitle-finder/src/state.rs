@@ -87,7 +87,13 @@ impl<'a> FrameCache<'a> {
             } else {
                 vec![0; w * h]
             };
-            trace!(frame = count, pos = count as i64 * 1000 / 30, has_text, "decode frame");
+            trace!(
+                frame = count,
+                pos = count as i64 * 1000 / 30,
+                has_text,
+                isa_wc = im_tf.iter().filter(|&&v| v == 255).count(),
+                "decode frame"
+            );
             self.frames.push(Some(FrameData {
                 bgr: flat,
                 im: im_tf,
@@ -509,6 +515,9 @@ fn run_state_machine(
                         &im_int_s, Some(&im_y_s), &im_ne_s, Some(&prev_im_ne),
                         &im_int, Some(&y_int), &f0.ne, w, h, 0, w as i32 - 1, p,
                     );
+                    if !bln {
+                        trace!(fn_, bf, "追踪: 判定字幕内容变化");
+                    }
                     if bln && (fn_ - bf + 1 == 3) {
                         im_fs = f0.bgr.clone();
                         im_ne_s = f0.ne.clone();

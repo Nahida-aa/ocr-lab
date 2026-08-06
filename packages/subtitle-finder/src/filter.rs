@@ -391,12 +391,21 @@ pub fn filter_transformed_image(
     // 导致膨胀半径偏小（3 vs 6），噪声过滤不足。改用 p.min_h=12/720。
     let dil_iters = ((p.min_h * h as f32) as i32) / 2;
     let ne_dil = imgops::dilate(im_ne, w, h, dil_iters);
+    tracing::trace!(
+        dil_iters,
+        ne_wc = im_ne.iter().filter(|&&v| v == 255).count(),
+        dil_wc = ne_dil.iter().filter(|&&v| v == 255).count(),
+        "filter_transformed_image: dilate(NE)"
+    );
     let mut im_res1 = im_sf.to_vec();
     imgops::intersect_two_images_inplace(&mut im_res1, &ne_dil, 0u8);
     im_sf.copy_from_slice(&im_res1);
+    let step1_wc = im_sf.iter().filter(|&&v| v == 255).count();
 
     // 2) 二次过滤（连通域边缘密度），就地改 ImSF。
     let mut res = second_filtration(im_sf, im_ne, lb, le, n, w, h, p);
+    let step2_wc = im_sf.iter().filter(|&&v| v == 255).count();
+    tracing::trace!(step1_wc, step2_wc, res, "filter_transformed_image: second_filtration");
 
     if res == 1 {
         // ImTF = ImSF。

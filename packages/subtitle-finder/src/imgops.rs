@@ -632,6 +632,13 @@ pub fn get_transformed_image(
         pf.im_ff_ms += t0.elapsed().as_secs_f64() * 1000.0;
     }
 
+    tracing::trace!(
+        ff_wc = im_ff.iter().filter(|&&v| v == 255).count(),
+        ne_wc = im_ne.iter().filter(|&&v| v == 255).count(),
+        he_wc = im_he.iter().filter(|&&v| v == 255).count(),
+        "get_transformed_image: 边缘图白点"
+    );
+
     // 4) NE + HE 并集。
     let mut im_ne = im_ne;
     combine_two_images(&mut im_ne, &im_he, 255);

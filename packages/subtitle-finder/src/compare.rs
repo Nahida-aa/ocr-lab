@@ -152,7 +152,7 @@ fn compare_ve(
             max_dif = cur_dif;
         }
         if cur_dif > veple as f64 {
-            debug!(k, cur_dif, veple, "compare_ve: 带 dif/cmb > veple => false");
+            debug!(k, cur_dif, dif1, dif2, cmb, "compare_ve: 带 dif/cmb > veple => false");
             return (false, max_dif);
         }
     }
