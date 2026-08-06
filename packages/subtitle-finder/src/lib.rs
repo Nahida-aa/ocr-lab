@@ -10,6 +10,7 @@
 pub mod compare;
 pub mod filter;
 pub mod frame;
+pub mod imgops;
 pub mod params;
 pub mod preprocess;
 pub mod state;
@@ -23,8 +24,11 @@ pub struct Keyframe {
     pub start_ms: u64,
     /// 字幕段结束时间（毫秒）。
     pub end_ms: u64,
-    /// 代表帧的 BGR 图像（H×W×3，0-255）。
+    /// 代表帧的 BGR 图像（H×W×3，0-255，含背景）。
     pub frame: ndarray::Array3<u8>,
+    /// 去背景字幕前景 mask（H×W，255=字幕文字，0=背景）。
+    /// 对应 VideoSubFinder 的 ImISA（交叠前景图），供 OCR 识别用。
+    pub mask: ndarray::Array2<u8>,
 }
 
 /// 对视频逐帧筛选，输出字幕关键帧 + 时间轴。
@@ -32,25 +36,9 @@ pub struct Keyframe {
 /// `video` 为视频路径；`params` 为筛选参数（对齐 VideoSubFinder 默认值，
 /// 见 `params::Params::default()`）。
 ///
-/// TODO(state)：逐帧解码已接入，但筛选状态机（FastSearchSubtitles）未实现，
-/// 当前仅解码并统计帧数。
-pub fn find_keyframes(video: &std::path::Path, _params: &params::Params) -> Result<Vec<Keyframe>> {
-    let mut count = 0usize;
-    let mut first_frame: Option<ndarray::Array3<u8>> = None;
-    frame::for_each_frame(video, |arr| {
-        count += 1;
-        if first_frame.is_none() {
-            first_frame = Some(arr);
-        }
-        Ok(true)
-    })?;
-    eprintln!("subtitle-finder: 解码 {} 帧", count);
-    anyhow::bail!(
-        "subtitle-finder 筛选状态机未实现（DESIGN.md），已解码 {} 帧（首帧 {}x{}）",
-        count,
-        first_frame.as_ref().map(|f| f.dim().1).unwrap_or(0),
-        first_frame.as_ref().map(|f| f.dim().0).unwrap_or(0),
-    );
+/// TODO(state)：状态机（FastSearchSubtitles）尚未完全接入，当前解码全部帧后返回空列表。
+pub fn find_keyframes(video: &std::path::Path, params: &params::Params) -> Result<Vec<Keyframe>> {
+    state::find_keyframes(video, params)
 }
 
 #[cfg(test)]
@@ -99,5 +87,28 @@ mod tests {
         assert_eq!(dims, Some((720, 1280)), "720p 分辨率");
         assert_eq!(count, 30);
         eprintln!("subtitle-finder 解码前 {} 帧，{}x{}", count, dims.unwrap().0, dims.unwrap().1);
+    }
+
+    /// 集成测试：跑完整状态机，验证能输出关键帧（非空、时间轴有序）。
+    /// 依赖 tests/bench/subtitle-ocr/ref/video_source.mp4 存在（不入库，需自备）。
+    #[test]
+    #[ignore] // 全量解码 5100 帧较慢，手动跑
+    fn runs_state_machine_produces_keyframes() {
+        let video = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("tests/bench/subtitle-ocr/ref/video_source.mp4");
+        assert!(video.exists(), "缺少测试视频: {}", video.display());
+
+        let kfs = find_keyframes(&video, &params::Params::default()).expect("find_keyframes 失败");
+        eprintln!("subtitle-finder 输出 {} 个关键帧", kfs.len());
+        // 时间轴应非递减。
+        for w in kfs.windows(2) {
+            assert!(w[0].start_ms <= w[1].start_ms, "时间轴应有序");
+        }
+        // 至少应有一些关键帧。
+        assert!(!kfs.is_empty(), "应找到字幕关键帧");
     }
 }

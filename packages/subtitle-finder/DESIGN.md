@@ -24,6 +24,9 @@
   - 或结构化 JSON：{ 关键帧路径, start_ms, end_ms, text_img }
 ```
 
+> **当前实现**：`find_keyframes` 返回 `Vec<Keyframe>{ start_ms, end_ms, frame: Array3<u8> }`。
+> CLI（`main.rs`）把代表帧存为 `{start_ms}_{end_ms}_{i}.ppm`。JSON 输出未实现（可按需加）。
+
 下游：`rapidocr-ort` 对关键帧图 rec，得到字幕文本（对应 RapidVideOCR）。
 
 ## 核心算法（复刻自 VideoSubFinder `SSAlgorithms.cpp`）
@@ -79,23 +82,24 @@ VideoSubFinder 用 ffmpeg/OpenCV 逐帧 `OneStep()` 读入内存处理，不落�
 packages/subtitle-finder/
   src/
     lib.rs          # 对外 API：find_keyframes(video) -> Vec<Keyframe>
-    frame.rs        # 逐帧解码（视频 → 帧流）
-    preprocess.rs   # 交集 / ILA-ISA 图生成 / AnalyseImage 投影
-    filter.rs       # FilterTransformedImage（用 OpenCV findContours 替代连通域）
+    frame.rs        # 逐帧解码（视频 → 帧流，ffmpeg-next 回调模式）
+    imgops.rs       # 基础像素算子（交集/色差/颜色滤波/BGR→YUV/阈值化/卷积等）
+    preprocess.rs   # AnalyseImage 投影 / intersect（Array2 版）
+    filter.rs       # FilterTransformedImage（自写 BFS 连通域替代）
     compare.rs      # CompareTwoSubs / CompareTwoSubsOptimal（跨帧比较）
-    state.rs        # FastSearchSubtitles 状态机（时间轴）
+    state.rs        # FastSearchSubtitles 状态机（时间轴）+ FrameCache
     params.rs       # 全局参数（对齐上表）
-    export.rs       # 输出关键帧图 + 时间轴（文件名/JSON）
+    main.rs         # CLI（可选 --profile 剖析）
 ```
 
 ## 复用策略
 
 | 算子 | 来源 |
 | --- | --- |
-| 逐像素交集 / 投影 | `geometry::imgproc`（SIMD） |
-| 连通域（文字块） | OpenCV `findContours`（替代手写 CMyClosedFigure） |
-| 图像读取 | `image` crate（转 BGR） |
-| 视频解码 | **待定**（见下） |
+| 逐像素交集 / 投影 / Sobel / 卷积 / 阈值 | `geometry::imgproc`（SIMD，文件夹模块） |
+| 连通域（文字块） | 自写 BFS 8 邻接（`filter.rs`，替代 CMyClosedFigure / OpenCV findContours） |
+| 图像读取 | 逐帧解码直接产出 BGR（`ffmpeg-next`） |
+| 视频解码 | `ffmpeg-next`（已采用，见下） |
 | 识别 | `rapidocr-ort`（下游，不在本包） |
 
 ## 视频解码方案（待你决策）
@@ -108,3 +112,79 @@ packages/subtitle-finder/
 
 建议方案 1（`ffmpeg-next`），才能做到 30fps 逐帧复刻 VideoSubFinder 的时间行为。
 若你不想引 FFmpeg 依赖，需接受抽帧粒度与 VideoSubFinder 不完全一致（时间偏移回来）。
+
+> 已采用方案 1：`frame.rs` 用 `ffmpeg-next` 逐帧解码（回调模式），配合 `state.rs` 的
+> `FrameCache` 顺序缓存每帧转换产物。
+
+## 性能基准与优化（重要）
+
+### 参照系：不是对齐 OpenCV，是对齐 C++ 编译方式
+
+本包的目标是复刻 VideoSubFinder（它内部用 OpenCV）。**性能参照是「C++ 编译器如何编译
+同样的算子」，不是 OpenCV 的函数调用**——因为 VideoSubFinder 的核心算子（`ImprovedSobelMEdge`
+等）是自定义变体，OpenCV 没有直接对应函数。C++ 参照用 `g++ -O3 -march=native` 编译
+逐位一致的朴素循环（见 `tools/perf-compare/`）。
+
+### 最重要的优化：`.cargo/config.toml` 开 `-C target-cpu=native`
+
+**这是性价比最高的一步。** 它让 LLVM 对**所有标量循环**自动向量化（等价 g++ 对朴素
+循环的自动向量化）。实测 subtitle-finder 全流程 **~55ms/帧 → ~36ms/帧**（~34%），
+连没专门手写 SIMD 的算子（bgr2yuv 274→101ms、连通域 filter 1415→1176ms）都大幅改善。
+
+**注意**：`-C target-cpu=native` 产物**不跨机器可移植**（换机器需重编）。若需可移植，
+改 `.cargo/config.toml` 为 `-C target-feature=+avx2`（AVX2 是现代 x86-64 常见）。
+
+### 手写 SIMD 算子（在 `geometry::imgproc`，文件夹模块）
+
+| 算子 | 位置 | 说明 |
+| --- | --- | --- |
+| `sobel_m/n/h_edge` | `geometry::imgproc/sobel.rs` | 自定义 Sobel 变体，AVX2 |
+| `aply_ess` / `aply_ecp` | `geometry::imgproc/conv.rs` | 5×5 卷积 |
+| `apply_moderate_threshold` / `zero_below_threshold` | `conv.rs` | 阈值化 |
+| `resize_bilinear_hwc` / `normalize_chw` | `resize.rs` / `normalize.rs` | 供 rapidocr |
+
+**经验**：开 `native` 后，手写 AVX2 对简单核（sobel_n/h、aply_ess）收益很小或略负
+（LLVM 自动向量化已足够）。只 `sobel_m` 的 16×i16 版（权重用 shift+add 替代 `mullo_epi32`）
+仍 ~2× 优于标量，值得保留。
+
+### 与 C++ 对比（720p，release，`tools/perf-compare/bench.sh` min-of-N）
+
+> ⚠️ 单次微基准波动可达 ~50%（系统负载/频率），单次测量会误导。用 `bench.sh`（多次采样
+> 取最小值）得到可信对比。
+
+| 算子 | C++ -O3 native | Rust（取较快） | Rust/C++ |
+| --- | --- | --- | --- |
+| sobel_m | 0.246 ms | 0.21 ms | **0.85×（Rust 快）** |
+| sobel_n | 0.101 ms | 0.19 ms | ~1.9× 慢（真实差距） |
+| sobel_h | 0.103 ms | 0.20 ms | ~1.9× 慢（真实差距） |
+| aply_ess | 0.684 ms | 0.99 ms | ~1.45× 慢 |
+| aply_ecp | 4.441 ms | 3.39 ms | **0.76×（Rust 快）** |
+
+**结论（min-of-N）**：sobel_m / aply_ecp Rust 其实**快于** C++（之前单次测量的"慢"是方差
+假象）；sobel_n/h 稳定慢 ~1.9× —— 这是 **Rust `#[target_feature]` 跨 crate 不内联**的平台
+限制，不是算法差距（见下方"已知坑"）。同 crate 内联的 3-load AVX-512 可达 C++ 水平。
+
+### 已知坑
+
+- **C++ 基准必须用 `volatile g_sink` 累加结果**，否则 g++ `-O3` 死代码消除无副作用的循环
+  （`tools/perf-compare/perf_compare.cpp` 已处理）。
+- **AVX2 在 debug（`-O0`）构建下比标量慢**（load/widen 开销放大），必须用 release 测速。
+- u16 版 `load8` 须用 `_mm_loadu_si128`(16B=8 u16)，`_mm_loadl_epi64`(8B) 只加载 4 个 u16。
+- AVX2 无整数除法：8/16 个 i32/i16 累加值提取后标量 `/div`。
+- **`#[target_feature]` 函数跨 crate 不内联**（Rust issue #145574：`#[inline(always)]` 与
+  `#[target_feature]` 冲突，nightly 同禁）。运行时 `is_x86_feature_detected` 分派让 LLVM 无法
+  静态确定调用方 feature，故跨 crate 即使开 thin LTO 也不内联。sobel_n/h 的 3-load AVX-512
+  同 crate 达 C++ 水平（~0.11ms），但 subtitle-finder 跨 crate 调用仍 ~1.8× 慢。这是平台
+  约束，非算法问题。若想彻底解决：把 Sobel 内联进调用方，或等 Rust 支持跨 crate 内联。
+
+### 并行化 GetImFF / GetImNE / GetImHE（最大的一步）
+
+C++ 的 `GetTransformedImage` 里这 3 个算子用 `run_in_parallel`，我们之前**顺序执行**。
+改成 `std::thread::scope` 3 线程并行（共享只读 Y/U/V）后：
+- im_ff + im_ne_he 从串行 ~3.7s → 并行 ~1.3s（~2.8× 快）。
+- subtitle-finder 端到端 **~55ms/帧 → ~22ms/帧**（优化 62%），输出 10 关键帧不变。
+
+> 并行时 `get_im_ff` 传 `prof=None`（不记录子计时），thr_ms/im_ne_he_ms 并入 im_ff_ms。
+
+**剩余热点**（并行后）：filter(连通域 BFS) 与 im_ff(并行) 各 ~40%。连通域 BFS 是
+8 邻接逐像素串行，难进一步并行/SIMD，收益递减。

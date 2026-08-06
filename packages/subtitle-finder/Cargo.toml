@@ -24,3 +24,6 @@ anyhow.workspace = true
 opencv = { workspace = true }
 # 视频逐帧解码（30fps）。
 ffmpeg-next = { workspace = true }
+# 结构化调试日志（对齐项目约定：调试日志用 tracing）。
+tracing = { workspace = true }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }

@@ -14,3 +14,9 @@ tests/fixtures/.capture_token
 # 基准参考视频（34M）不入库；GT 标注 ref/ocr_manual.json 与抽好的
 # tests/.test-frames 仍然跟踪，视频来源见 tests/bench/subtitle-ocr/README。
 tests/bench/subtitle-ocr/ref/*.mp4
+
+# C++ 性能参照的编译产物。
+tools/perf-compare/perf_compare
+tools/perf-compare/isa_compare
+
+packages/subtitle-finder/out
