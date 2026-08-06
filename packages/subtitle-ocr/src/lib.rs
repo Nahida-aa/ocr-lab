@@ -52,19 +52,13 @@ impl Default for OcrOptions {
     }
 }
 
-/// 单帧里的一条识别行（已对齐 cpp 的 Segment：text / confidence / box）。
-#[derive(Clone, Debug, Serialize)]
-pub struct FrameLine {
-    /// 识别文本（已 `trim`）。
-    pub text: String,
-    /// 识别置信度（rec 分支平均字符概率）。
-    pub confidence: f32,
-    /// 四点框 `[[x,y];4]`（原图像素坐标，已加回 ROI 偏移）。
-    #[serde(rename = "box")]
-    pub box_: [[f32; 2]; 4],
-    /// 四点几何中心 y（用于 subtitle_only 过滤与排序）。
-    pub y_center: f32,
-}
+/// 单帧里的一条识别行（`rapidocr_ort::OcrResult` 的类型别名）。
+///
+/// 原本是自定义结构体，字段几乎与 `OcrResult` 相同（text/confidence/box_），
+/// 仅多了 `y_center`（= `center[1]`）。改为类型别名避免重复定义。
+/// ⚠️ 坐标语义：`ocr_image` 返回前会把 box/center 的 y 加回 `y_offset`，
+/// 还原成原图坐标（与旧 FrameLine 一致）。
+pub type FrameLine = rapidocr_ort::OcrResult;
 
 /// 单帧聚合结果（供 `merge_frames` 消费）：每帧一条文本。
 #[derive(Clone, Debug)]
@@ -163,26 +157,21 @@ impl SubtitleOcr {
         // ---- 3. 后处理：还原坐标 / y 过滤 / NMS / trim / 排序 ----
         let mut lines: Vec<FrameLine> = results
             .into_iter()
-            .map(|r| {
-                let mut box_ = r.box_;
-                let mut y_center = 0.0f32;
-                for p in &mut box_ {
-                    p[1] += y_offset as f32; // ROI 坐标还原回原图
-                    y_center += p[1];
+            .map(|mut r| {
+                // ROI 坐标还原回原图：box 每点 y 与 center.y 都加 y_offset。
+                if y_offset > 0 {
+                    for p in &mut r.box_ {
+                        p[1] += y_offset as f32;
+                    }
+                    r.center[1] += y_offset as f32;
                 }
-                y_center /= 4.0;
-                let text = r.text.trim().to_string();
-                FrameLine {
-                    text,
-                    confidence: r.confidence,
-                    box_,
-                    y_center,
-                }
+                r.text = r.text.trim().to_string();
+                r
             })
             .filter(|l| {
                 // subtitle_only：y 中心须落在画面底部 [0.85, 0.99]（cpp 比值口径）。
                 if self.opts.subtitle_only {
-                    let ratio = l.y_center / (h as f32);
+                    let ratio = l.center[1] / (h as f32);
                     if !(0.85..=0.99).contains(&ratio) {
                         return false;
                     }
@@ -197,8 +186,8 @@ impl SubtitleOcr {
 
         // 排序：先按 y 中心，差 ≤20px 再按 x 中心（cpp 的 TL/BR 排序等价）。
         lines.sort_by(|a, b| {
-            let ya = a.y_center;
-            let yb = b.y_center;
+            let ya = a.center[1];
+            let yb = b.center[1];
             if (ya - yb).abs() > 20.0 {
                 ya.partial_cmp(&yb).unwrap_or(std::cmp::Ordering::Equal)
             } else {
@@ -312,7 +301,7 @@ fn nms(mut lines: Vec<FrameLine>) -> Vec<FrameLine> {
         .map(|(_, l)| l)
         .collect();
     // 维持原顺序（按 y 排序在 ocr_image 末尾统一做；此处仅 NMS 过滤，先按输入序）。
-    out.sort_by_key(|l| (l.y_center * 1000.0) as i64);
+    out.sort_by_key(|l| (l.center[1] * 1000.0) as i64);
     out
 }
 
@@ -585,13 +574,19 @@ mod tests {
             text: "A".into(),
             confidence: 0.9,
             box_: [[0.0, 0.0], [100.0, 0.0], [100.0, 100.0], [0.0, 100.0]],
-            y_center: 50.0,
+            score: 0.9,
+            x_range: [0.0, 100.0],
+            y_range: [0.0, 100.0],
+            center: [50.0, 50.0],
         };
         let small = FrameLine {
             text: "B".into(),
             confidence: 0.8,
             box_: [[10.0, 10.0], [20.0, 10.0], [20.0, 20.0], [10.0, 20.0]],
-            y_center: 15.0,
+            score: 0.8,
+            x_range: [10.0, 20.0],
+            y_range: [10.0, 20.0],
+            center: [15.0, 15.0],
         };
         let out = nms(vec![big.clone(), small]);
         assert_eq!(out.len(), 1);
@@ -604,13 +599,19 @@ mod tests {
             text: "A".into(),
             confidence: 0.9,
             box_: [[0.0, 0.0], [10.0, 0.0], [10.0, 10.0], [0.0, 10.0]],
-            y_center: 5.0,
+            score: 0.9,
+            x_range: [0.0, 10.0],
+            y_range: [0.0, 10.0],
+            center: [5.0, 5.0],
         };
         let b = FrameLine {
             text: "B".into(),
             confidence: 0.9,
             box_: [[100.0, 100.0], [110.0, 100.0], [110.0, 110.0], [100.0, 110.0]],
-            y_center: 105.0,
+            score: 0.9,
+            x_range: [100.0, 110.0],
+            y_range: [100.0, 110.0],
+            center: [105.0, 105.0],
         };
         let out = nms(vec![a, b]);
         assert_eq!(out.len(), 2);
