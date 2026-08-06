@@ -70,7 +70,7 @@ static float boxThreshFromEnv() {
     return BOX_THRESH;
 }
 
-struct OCRResult {
+struct OcrImgResult {
     std::string text;
     struct OcrBoxResult {
         std::string text;
@@ -586,7 +586,7 @@ static Image warpPerspectiveCrop(const Image& img, const Polygon& pts) {
 }
 
 // --- Run full OCR pipeline ---
-static OCRResult runOcr(
+static OcrImgResult runOcr(
     const std::string& imagePath,
     const std::vector<std::string>& charList,
     Ort::Session& detSession,
@@ -599,7 +599,7 @@ static OCRResult runOcr(
 {
     using clock = std::chrono::high_resolution_clock;
 
-    OCRResult result;
+    OcrImgResult result;
     result.charListLoadMs = result.imageLoadMs = result.modelLoadMs = 0;
     result.detMs = result.postMs = result.recMs = 0;
 
@@ -805,7 +805,7 @@ static OCRResult runOcr(
 }
 
 // --- JSON output ---
-static std::string toJson(const OCRResult& r, const std::string& filename = "") {
+static std::string toJson(const OcrImgResult& r, const std::string& filename = "") {
     std::ostringstream ss;
     ss << std::fixed << std::setprecision(2);
     ss << "{\"text\": " << std::quoted(r.text);
