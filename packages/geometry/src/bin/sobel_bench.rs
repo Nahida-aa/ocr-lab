@@ -11,7 +11,6 @@
 use std::time::Instant;
 
 use geometry::imgproc::{sobel_h_edge, sobel_m_edge, sobel_n_edge};
-
 const W: usize = 1280;
 const H: usize = 720;
 
@@ -64,4 +63,25 @@ fn main() {
     }
     let per = t0.elapsed().as_secs_f64() / 2000.0;
     println!("sobel_m_edge_into (crate内,无分配)  {:>8.3} ms/次", per * 1e3);
+
+    // aply_ess / aply_ecp（im_ff 里 thr1/thr2 各调一次，是 im_ff 最大头 43%）。
+    let u16_src = make_u16();
+    println!("\n=== geometry 内部 aply_ess / aply_ecp（720p，release，crate 内）===");
+    bench("aply_ess (crate内)", 2000, || {
+        geometry::imgproc::aply_ess(&u16_src, W, H)
+    });
+    bench("aply_ecp (crate内)", 2000, || {
+        geometry::imgproc::aply_ecp(&u16_src, W, H)
+    });
+}
+
+/// 合成 u16 边缘图（有大量非 0，模拟 CMOE 输出，让 ess/ecp 全核跑）。
+fn make_u16() -> Vec<u16> {
+    let mut im = vec![0u16; W * H];
+    let mut seed = 42u32;
+    for i in 0..W * H {
+        seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+        im[i] = ((seed >> 16) % 600) as u16; // 0..600 边缘强度
+    }
+    im
 }
