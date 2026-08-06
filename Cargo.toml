@@ -46,6 +46,7 @@ topics = [
 
 [workspace.dependencies]
 anyhow = "1.0"
+serde_json = "1"
 tracing = "0.1"
 rust-embed = { version = "8.11", features = ["include-exclude"] }
 # 通用图像转换工具（rgba→rgb 等），与业务解耦。
@@ -64,6 +65,8 @@ ffmpeg-next = "9.0.0"
 # PP-OCR det/rec/cls 引擎（onnxruntime 推理 + DB 后处理）。
 # 跨包共享，统一走 workspace，改 path/版本只动这一处。
 rapidocr-ort = { path = "packages/rapidocr-ort" }
+subtitle-finder = { path = "packages/subtitle-finder" }
+subtitle-ocr = { path = "packages/subtitle-ocr" }
 # 纯 Rust 二维多边形几何（凸包 / 旋转卡尺最小外接矩形 / 框角点 / 多边形偏移）。
 # 供 rapidocr-ort 的 det 后处理复刻 cpp 的 minAreaRect + unclip 几何。
 geometry = { path = "packages/geometry" }

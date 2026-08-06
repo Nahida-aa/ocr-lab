@@ -7,9 +7,14 @@ publish.workspace = true
 description = "subtitle-ocr 三实现（cpp/py/rust）的准确性与速度基准测试驱动"
 
 [dependencies]
-serde_json = "1"
+serde_json = { workspace = true }
+# 跨包流程例子（sf_ocr bin）：subtitle-finder 提关键帧 → subtitle-ocr 识别。
+subtitle-finder = { workspace = true }
+subtitle-ocr = { workspace = true }
+# ModelProfile（subtitle-ocr 的 from_profile 入参）。
+rapidocr-ort = { workspace = true }
+anyhow.workspace = true
 
 [lib]
 name = "bench_subtitle_ocr"
 path = "src/lib.rs"
-

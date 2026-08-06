@@ -36,6 +36,11 @@ default:
 build:
     cargo build -p bench-subtitle-ocr
 
+# ---- 跨包流程例子：subtitle-finder 提关键帧 → subtitle-ocr 识别 → 带时间轴字幕 ----
+# 用法：just sf-ocr <video.mp4>（默认 /tmp/clip5s.mp4）
+sf-ocr video="/tmp/clip5s.mp4":
+    cargo run -p bench-subtitle-ocr --release --bin sf_ocr -- {{video}}
+
 # ---- 正确性灰盒测试 ----
 test:
     cargo run -p bench-subtitle-ocr --bin test -- --impl {{impl}}
