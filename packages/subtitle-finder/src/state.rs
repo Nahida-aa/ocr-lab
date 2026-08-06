@@ -32,19 +32,44 @@ pub(crate) struct FrameData {
     pub has_text: bool,
 }
 
-/// 顺序解码 + 变换的帧缓存（对应 C++ `ImForward`/`ImYForward`/`ImNEForward` 窗口）。
+/// 顺序解码 + 变换的滑动窗口缓存（对应 C++ `RunSearch` 的环形缓冲）。
+///
+/// 用 [`frame::FrameStepper`] 流式解码：状态机 `fn` 单调推进时按需 `advance_to`，
+/// 窗口只保留最近若干帧（对齐 C++ `m_N ≈ DL+threads`），避免全量驻留内存
+/// （否则 170s/5100 帧 ≈ 30GB 会 OOM）。
 pub struct FrameCache<'a> {
     path: &'a Path,
     p: &'a Params,
     w: usize,
     h: usize,
-    frames: Vec<Option<FrameData>>,
     prof: Option<imgops::Profiler>,
+    stepper: Option<frame::FrameStepper>,
+    /// 滑动窗口内容；索引 = fn - window_start。
+    window: std::collections::VecDeque<FrameData>,
+    window_start: i32,
+    /// 累计解码帧数（EOF 后固定 = 视频总帧数）。
+    decoded_total: i32,
 }
+
+/// 窗口保留的最大帧数（覆盖状态机访问 [fn-1, fn+3*DL]，DL=6 → ~20 帧）。
+const MAX_WINDOW: i32 = 3 * 6 + 2;
+
+/// 状态机每次推进 `fn` 时的前瞻解码帧数（覆盖 get_intersect_images 的 [fn, fn+DL-1]）。
+const FORWARD: i32 = 3 * 6; // = 18
 
 impl<'a> FrameCache<'a> {
     pub fn new(path: &'a Path, p: &'a Params) -> Self {
-        Self { path, p, w: 0, h: 0, frames: Vec::new(), prof: None }
+        Self {
+            path,
+            p,
+            w: 0,
+            h: 0,
+            prof: None,
+            stepper: None,
+            window: std::collections::VecDeque::new(),
+            window_start: 0,
+            decoded_total: 0,
+        }
     }
 
     /// 开启分阶段计时（性能剖析）。
@@ -60,61 +85,75 @@ impl<'a> FrameCache<'a> {
         self.prof.as_ref()
     }
 
-    /// 一次性解码并转换全部帧。返回帧总数。
-    pub fn decode_all(&mut self) -> Result<usize> {
-        let p = self.p;
-        let mut count = 0usize;
-        frame::for_each_frame(self.path, |bgr| {
-            let (ch, cw) = (bgr.dim().0 as usize, bgr.dim().1 as usize);
-            if self.w == 0 {
-                self.w = cw;
-                self.h = ch;
-            }
-            let (w, h) = (self.w, self.h);
-            let mut flat = Vec::with_capacity(w * h * 3);
-            for y in 0..h {
-                for x in 0..w {
-                    flat.push(bgr[[y, x, 0]]);
-                    flat.push(bgr[[y, x, 1]]);
-                    flat.push(bgr[[y, x, 2]]);
-                }
-            }
-            let (_ff, _sf, im_tf, im_ne, im_y, _lb, _le, _n, has_text) =
-                imgops::get_transformed_image(&flat, w, h, p, self.prof.as_mut());
-            // ImY = (Y 灰度 + 255) as u16；无文字则全 0（对齐 TaskConvertImage）。
-            let y: Vec<u16> = if has_text == 1 {
-                im_y.iter().map(|&v| v as u16 + 255).collect()
-            } else {
-                vec![0; w * h]
-            };
-            trace!(
-                frame = count,
-                pos = count as i64 * 1000 / 30,
-                has_text,
-                isa_wc = im_tf.iter().filter(|&&v| v == 255).count(),
-                "decode frame"
-            );
-            self.frames.push(Some(FrameData {
-                bgr: flat,
-                im: im_tf,
-                ne: im_ne,
-                y,
-                pos: count as i64 * 1000 / 30, // 30fps：帧号 → ms（TODO：用真实 pts）
-                has_text: has_text == 1,
-            }));
-            count += 1;
-            Ok(true)
-        })?;
-        Ok(count)
+    /// 惰性打开流式解码器。
+    fn open_stepper(&mut self) -> Result<()> {
+        if self.stepper.is_none() {
+            self.stepper = Some(frame::FrameStepper::open(self.path)?);
+        }
+        Ok(())
     }
 
-    /// 获取帧 `fn` 的产物（需先 `decode_all`）。
-    #[allow(dead_code)]
-    pub(crate) fn frame(&self, fn_: usize) -> Result<&FrameData> {
-        self.frames
-            .get(fn_)
-            .and_then(|o| o.as_ref())
-            .ok_or_else(|| anyhow::anyhow!("帧 {} 未解码", fn_))
+    /// 推进解码窗口，确保 [window_start, target] 已解码，并丢弃窗口外的旧帧。
+    /// EOF 后 `decoded_total` 固定为视频总帧数。
+    pub fn advance_to(&mut self, target: i32) -> Result<()> {
+        self.open_stepper()?;
+        let stepper = self.stepper.as_mut().expect("stepper 已打开");
+        // 逐步解码到 target（或 EOF）。
+        while self.decoded_total <= target {
+            match stepper.next()? {
+                Some(bgr) => {
+                    let (ch, cw) = (bgr.dim().0 as usize, bgr.dim().1 as usize);
+                    if self.w == 0 {
+                        self.w = cw;
+                        self.h = ch;
+                    }
+                    let (w, h) = (self.w, self.h);
+                    let mut flat = Vec::with_capacity(w * h * 3);
+                    for y in 0..h {
+                        for x in 0..w {
+                            flat.push(bgr[[y, x, 0]]);
+                            flat.push(bgr[[y, x, 1]]);
+                            flat.push(bgr[[y, x, 2]]);
+                        }
+                    }
+                    let n = self.decoded_total as usize;
+                    let (_ff, _sf, im_tf, im_ne, im_y, _lb, _le, _n, has_text) =
+                        imgops::get_transformed_image(&flat, w, h, self.p, self.prof.as_mut());
+                    let y: Vec<u16> = if has_text == 1 {
+                        im_y.iter().map(|&v| v as u16 + 255).collect()
+                    } else {
+                        vec![0; w * h]
+                    };
+                    trace!(
+                        frame = n,
+                        pos = n as i64 * 1000 / 30,
+                        has_text,
+                        isa_wc = im_tf.iter().filter(|&&v| v == 255).count(),
+                        "decode frame"
+                    );
+                    self.window.push_back(FrameData {
+                        bgr: flat,
+                        im: im_tf,
+                        ne: im_ne,
+                        y,
+                        pos: n as i64 * 1000 / 30, // 30fps：帧号 → ms（TODO：用真实 pts）
+                        has_text: has_text == 1,
+                    });
+                    self.decoded_total += 1;
+                }
+                None => {
+                    // EOF：decoded_total 固定，不再推进。
+                    break;
+                }
+            }
+        }
+        // 清理窗口：只保留 [target - MAX_WINDOW, target]。
+        let keep_from = target - MAX_WINDOW;
+        while !self.window.is_empty() && self.window_start < keep_from {
+            self.window.pop_front();
+            self.window_start += 1;
+        }
+        Ok(())
     }
 
     pub fn w(&self) -> usize {
@@ -126,21 +165,25 @@ impl<'a> FrameCache<'a> {
     pub fn params(&self) -> &Params {
         self.p
     }
-    /// 已解码帧数（最大可访问帧号 = len - 1）。
+    /// 累计解码帧数（EOF 后 = 视频总帧数）。
     pub fn len(&self) -> usize {
-        self.frames.len()
+        self.decoded_total as usize
     }
     pub fn is_empty(&self) -> bool {
-        self.frames.is_empty()
+        self.decoded_total == 0
     }
 }
 
-/// 取帧，越界返回 `None`（对应 C++ 帧不可得，状态机据此优雅结束）。
+/// 取帧，越界/已被窗口丢弃返回 `None`（对应 C++ 帧不可得，状态机据此优雅结束）。
 fn try_frame<'a>(cache: &'a FrameCache<'a>, fn_: i32) -> Option<&'a FrameData> {
-    if fn_ < 0 {
+    if fn_ < 0 || fn_ < cache.window_start {
         return None;
     }
-    cache.frames.get(fn_ as usize).and_then(|o| o.as_ref())
+    let idx = (fn_ - cache.window_start) as usize;
+    if idx >= cache.window.len() {
+        return None;
+    }
+    cache.window.get(idx)
 }
 
 fn get_frame<'a>(cache: &'a FrameCache<'a>, fn_: i32) -> Result<&'a FrameData> {
@@ -341,21 +384,24 @@ pub fn find_keyframes(video: &Path, params: &Params) -> Result<Vec<Keyframe>> {
 }
 
 /// 用已构造的缓存跑状态机。
+///
+/// 不再全量解码：先解码第一帧确定维度，再由 [`run_state_machine`] 在推进 `fn`
+/// 时按需 `advance_to` 逐帧解码（滑动窗口）。
 pub fn find_keyframes_with_cache(
     cache: &mut FrameCache,
     params: &Params,
 ) -> Result<Vec<Keyframe>> {
-    let count = cache.decode_all()?;
+    // 先解码首批帧，从而 `cache.w()/h()` 已确定（维度在首次解码时填入）。
+    cache.advance_to(FORWARD)?;
     let w = cache.w();
     let h = cache.h();
-    run_state_machine(cache, count, w, h, params, "")
+    run_state_machine(cache, w, h, params, "")
 }
 
-/// 状态机本体：对已解码的 `cache` 逐帧筛选，输出关键帧。
+/// 状态机本体：对 `cache` 逐帧筛选（按需 `advance_to` 流式解码），输出关键帧。
 #[allow(unused_assignments)]
 fn run_state_machine(
-    cache: &FrameCache,
-    count: usize,
+    cache: &mut FrameCache,
     w: usize,
     h: usize,
     p: &Params,
@@ -368,7 +414,7 @@ fn run_state_machine(
     let size = w * h;
 
     if !video_label.is_empty() {
-        eprintln!("subtitle-finder: 解码 {} 帧，{}x{}", count, w, h);
+        eprintln!("subtitle-finder: 解码 {} 帧，{}x{}", cache.len(), w, h);
     }
 
     // 存储图像（对应 C++ 的状态变量）。
@@ -412,6 +458,8 @@ fn run_state_machine(
 
     // 检测阶段：找字幕起始。
     'outer: loop {
+        // 流式推进：确保 [fn_start, fn_start+FORWARD] 已解码（fn_start 单调推进）。
+        cache.advance_to(fn_start + FORWARD)?;
         // 内部搜索循环：仅当未找到字幕时运行（C++ `while(found_sub == 0)`）。
         if found_sub == 0 {
             loop {
@@ -465,7 +513,7 @@ fn run_state_machine(
                     } else {
                         fn_start += ddl as i32;
                     }
-                    if fn_start >= count as i32 {
+                    if fn_start >= cache.len() as i32 {
                         break 'outer;
                     }
                 }
@@ -749,7 +797,9 @@ fn run_state_machine(
         if found_sub != 0 {
             prev_im_ne = get_frame(&cache, fn_)?.ne.clone();
             fn_ += 1;
-            if fn_ >= count as i32 {
+            // 流式推进：确保 [fn_+1, fn_+FORWARD] 已解码（追踪阶段 fn_ 单调递增）。
+            cache.advance_to(fn_ + FORWARD)?;
+            if fn_ >= cache.len() as i32 {
                 // EOF：保存当前进行中的字幕段（否则末尾段丢失）。
                 if bf != -2 {
                     let last = cache.len().saturating_sub(1) as i32;
