@@ -60,13 +60,17 @@ impl Default for OcrOptions {
 /// 还原成原图坐标。
 pub use rapidocr_ort::OcrBoxResult;
 
-/// 单图聚合结果（无时间）：把一张图里识别出的多框聚合成一条文本 + 值域 + 明细。
+/// 单图聚合结果（可携带单时刻时间戳）。
 ///
-/// 这是「纯感知」产物——本库只吃一张图、不知道图片来源（视频帧/截图/扫描件），
-/// 故不携带任何时间/帧信息。带时间的封装（`FrameResult`）在独立合并层
-/// `subtitle-ocr-merge` 负责，由「知道视频结构」的上游补时间戳后调用。
+/// 把一张图里识别出的多框聚合成一条文本 + 值域 + 明细。`timestamp_ms` 为
+/// 单时刻（毫秒）：默认 `0` 表示「无时间」；当上游按文件名（`ms` / `ms_ms`）
+/// 或帧序号代入时携带该图对应时刻。`ms_ms` 文件名会让同一张图被识别一次、
+/// 产出两个 `FrameResult`（各自带 start/end 时刻、内容相同）。
+///
+/// 本库仍只吃一张图、不知道图片整体来源结构；把多个 `FrameResult` 合并成
+/// 带时间轴的字幕段由独立合并层 `subtitle-ocr-merge` 负责。
 #[derive(Clone, Debug)]
-pub struct OcrImgResult {
+pub struct FrameResult {
     /// 该图识别文本（多行按出现顺序拼接，用空格分隔）。
     pub text: String,
     /// 该图最高置信度（取各框 `text_confidence` 最大）。
@@ -77,6 +81,9 @@ pub struct OcrImgResult {
     pub x_range: [f32; 2],
     /// 纵向值域 `[min_y, max_y]`（像素坐标），无字幕时为 `[0,0]`。
     pub y_range: [f32; 2],
+    /// 该图对应时刻（毫秒）。`0` 表示无时间（如单图 `<image>` 调用、或
+    /// `aggregate_img` 纯聚合）。由上游按文件名 / 帧序号提供。
+    pub timestamp_ms: u64,
 }
 
 // ===========================================================================
@@ -183,12 +190,12 @@ impl SubtitleOcr {
 
 }
 
-/// 把一图识别出的多框聚合成单图结果（无时间，纯感知后处理）。
+/// 把一图识别出的多框聚合成单图结果（纯感知后处理，时间戳默认 0）。
 ///
 /// 过滤 / 坐标还原 / NMS / 排序已在 [`SubtitleOcr::ocr_image`] 完成，这里只做
-/// 「多行拼接成一条文本 + 取最高置信度 + 算几何值域」。不接收 `&self`（无需选项）、
-/// 不接收时间戳（本库不知道图片来源/帧信息）。带时间的封装在 `subtitle-ocr-merge` 层。
-pub fn aggregate_img(lines: &[OcrBoxResult]) -> OcrImgResult {
+/// 「多行拼接成一条文本 + 取最高置信度 + 算几何值域」。`timestamp_ms` 置 0
+/// （无时间）；携带时间的场景由调用方在 [`FrameResult`] 上赋值（如按文件名 / 帧序号）。
+pub fn aggregate_img(lines: &[OcrBoxResult]) -> FrameResult {
     let text: Vec<&str> = lines.iter().map(|l| l.text.as_str()).collect();
     let text = text.join(" ");
     let confidence = lines
@@ -211,12 +218,13 @@ pub fn aggregate_img(lines: &[OcrBoxResult]) -> OcrImgResult {
     } else {
         (x_range, y_range)
     };
-    OcrImgResult {
+    FrameResult {
         text,
         confidence,
         boxes: lines.to_vec(),
         x_range,
         y_range,
+        timestamp_ms: 0,
     }
 }
 

@@ -4,14 +4,14 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 publish.workspace = true
-description = "字幕 OCR 帧合并层：把逐帧（带时间戳）的 OcrImgResult 聚合成带时间轴的字幕段。独立于视频/截图来源，供多项目复用。"
+description = "字幕 OCR 帧合并层：把逐帧（带时间戳 timestamp_ms）的 FrameResult 聚合成带时间轴的字幕段。独立于视频/截图来源，供多项目复用。"
 
 [lib]
 name = "subtitle_ocr_merge"
 path = "src/lib.rs"
 
 [dependencies]
-# 取 OcrImgResult / aggregate_img / OcrBoxResult（单图聚合结果与单框结果）。
+# 取 FrameResult / aggregate_img / OcrBoxResult（单图聚合结果与单框结果）。
 # 依赖方向：本层 → subtitle-ocr（感知层），subtitle-ocr 不反向依赖本层，
 # 以保持 subtitle-ocr 作为纯感知库、不耦合合并逻辑。
 subtitle-ocr = { workspace = true }

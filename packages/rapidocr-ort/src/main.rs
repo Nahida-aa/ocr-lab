@@ -25,7 +25,7 @@ struct Cli {
 }
 
 #[derive(Serialize)]
-struct Output {
+struct OcrImgResult {
     /// 使用的模型套件。
     model: String,
     /// 输入图片路径（解析为基于仓库根的绝对路径）。
@@ -84,7 +84,7 @@ fn main() -> Result<()> {
 
     let results = engine.detect(&arr).context("OCR 推理失败")?;
 
-    let out = Output {
+    let out = OcrImgResult {
         model: format!("{:?}", cli.model),
         image: image_path.display().to_string(),
         width: w,

@@ -3,13 +3,15 @@
 //! 用法：
 //!   cargo run -p subtitle-finder --release -- <video.mp4>
 //!   cargo run -p subtitle-finder --release -- --profile <video.mp4>  # 附性能剖析
-//!   cargo run -p subtitle-finder --release -- --output timeline <video.mp4>  # 只写 timeline.txt，不写关键帧图
+//!   cargo run -p subtitle-finder --release -- --output timeline <video.mp4>  # 只写 timeline.txt
+//!   cargo run -p subtitle-finder --release -- --output frames <video.mp4>    # 仅原始关键帧 PNG
 //!
 //! 输出（由 `--output` 控制）：
 //!   - `full`（默认）：关键帧 PNG（RGB，H×W，文件名 `{start_ms}_{end_ms}_{i}.png`）、
 //!     去背景掩码 PNG（`{...}_mask.png`）、`timeline.txt`（每行 `start_ms,end_ms`）、
 //!     `keyframes.json`（结构化列表）。
 //!   - `timeline`：只写 `timeline.txt`，跳过 PNG / keyframes.json（纯算法计时用）。
+//!   - `frames`：仅写原始关键帧 PNG（含背景），不写掩码 / json / timeline。
 
 use clap::{Parser, ValueEnum};
 use std::path::PathBuf;
@@ -21,6 +23,8 @@ enum OutputMode {
     Full,
     /// 只写 timeline.txt（纯算法计时，不落盘图片）。
     Timeline,
+    /// 仅写原始关键帧 PNG（RGB，含背景），不写掩码 / json / timeline。
+    Frames,
 }
 
 #[derive(Parser, Debug)]
@@ -30,7 +34,7 @@ struct Cli {
     #[arg(long)]
     profile: bool,
 
-    /// 输出模式：full=全量产物，timeline=只写时间轴。
+    /// 输出模式：full=全量产物，timeline=只写时间轴，frames=仅原始关键帧 PNG。
     #[arg(long, value_enum, default_value_t = OutputMode::Full)]
     output: OutputMode,
 
@@ -54,7 +58,11 @@ fn main() -> anyhow::Result<()> {
 
     let cli = Cli::parse();
     let profile = cli.profile;
-    let no_save = cli.output == OutputMode::Timeline;
+    // 各产物是否落盘（由 --output 决定）。
+    let write_frames = cli.output == OutputMode::Full || cli.output == OutputMode::Frames;
+    let write_mask = cli.output == OutputMode::Full;
+    let write_json = cli.output == OutputMode::Full;
+    let write_timeline = cli.output == OutputMode::Full || cli.output == OutputMode::Timeline;
     let video = PathBuf::from(&cli.video);
     if !video.exists() {
         anyhow::bail!("视频不存在: {}", video.display());
@@ -90,10 +98,12 @@ fn main() -> anyhow::Result<()> {
         let name = format!("{}_{}_{}", kf.start_ms, kf.end_ms, i);
         println!("  [{}] {}ms - {}ms", i, kf.start_ms, kf.end_ms);
 
-        if !no_save {
+        if write_frames {
             // 保存原始帧 PNG（BGR → RGB，含背景）。
             let path = out_dir.join(format!("{}.png", name));
             save_png(&path, &kf.frame)?;
+        }
+        if write_mask {
             // 保存去背景字幕前景 PNG（黑底白字，对应 VideoSubFinder 的 ISA 图）。
             let mask_path = out_dir.join(format!("{}_mask.png", name));
             save_mask_png(&mask_path, &kf.mask)?;
@@ -104,12 +114,15 @@ fn main() -> anyhow::Result<()> {
             ));
         }
 
-        // 时间轴（timeline 模式也写，是纯计时也要的最小产物）。
-        timeline.push_str(&format!("{},{}\n", kf.start_ms, kf.end_ms));
+        if write_timeline {
+            timeline.push_str(&format!("{},{}\n", kf.start_ms, kf.end_ms));
+        }
     }
 
-    std::fs::write(out_dir.join("timeline.txt"), timeline)?;
-    if !no_save {
+    if write_timeline {
+        std::fs::write(out_dir.join("timeline.txt"), timeline)?;
+    }
+    if write_json {
         std::fs::write(
             out_dir.join("keyframes.json"),
             format!("[{}]\n", json.join(",")),

@@ -1,54 +1,22 @@
 //! 字幕 OCR 帧合并层。
 //!
-//! 把「逐帧（带时间戳）的 [`OcrImgResult`]」聚合成「带时间轴的字幕段 [`Segment`]」。
+//! 把「逐帧（带时间戳）的 [`FrameResult`]」聚合成「带时间轴的字幕段 [`Segment`]」。
 //!
-//! 设计边界：[`subtitle_ocr`] 库只吃一张图、不知道图片来源（视频帧/截图/扫描件），
-//! 因而只产出**无时间**的 [`OcrImgResult`]。**带时间的封装是本层的职责**——只有
-//! 「知道视频结构（帧率/帧索引/文件名时间戳）」的上游才该在这里把单图结果包成
-//! [`FrameResult`]（`OcrImgResult` + `timestamp_ms`）并调用 [`merge_frames`]。
+//! [`FrameResult`] 由 [`subtitle_ocr`] 库产出——它携带单时刻 `timestamp_ms`
+//! （由上游按文件名 `ms`/`ms_ms` 或帧序号代入）。本层不关心时间从哪来，只负责
+//! 把多个 `FrameResult` 合并成段。`ms_ms` 文件名会让同一张图产出两个 `FrameResult`
+//! （start/end 时刻、内容相同），本层照常按两帧处理。
 //!
 //! 该层与具体 OCR 引擎、视频来源完全解耦，可被多个项目复用（这也是独立于
 //! `subtitle-ocr` 单独成 crate 的原因）。
 
 use serde::Serialize;
-use subtitle_ocr::{OcrBoxResult, OcrImgResult};
 
 // aggregate_img 是感知层（subtitle-ocr）的类型/函数，本层仅转发重导出，
-// 供上游「先 aggregate_img 得 OcrImgResult → 包成 FrameResult → merge_frames」统一取用。
+// 供上游「先 aggregate_img 得 FrameResult → 代入 timestamp_ms → merge_frames」统一取用。
 pub use subtitle_ocr::aggregate_img;
-
-/// 单帧结果（带时间戳）：`OcrImgResult` + 该帧的时间信息。
-///
-/// 字段平铺展开自 [`OcrImgResult`]，故访问 `fr.text` / `fr.boxes` 等与单图结果一致；
-/// 仅多一个 `timestamp_ms`（毫秒）。由上游用 [`FrameResult::from((img, ts))`] 构造。
-#[derive(Clone, Debug)]
-pub struct FrameResult {
-    /// 该帧识别文本（多行拼接）。
-    pub text: String,
-    /// 该帧最高置信度（取各框 `text_confidence` 最大）。
-    pub confidence: f64,
-    /// 该帧所有识别区域明细。
-    pub boxes: Vec<OcrBoxResult>,
-    /// 横向值域 `[min_x, max_x]`（像素坐标）。
-    pub x_range: [f32; 2],
-    /// 纵向值域 `[min_y, max_y]`（像素坐标）。
-    pub y_range: [f32; 2],
-    /// 时间戳（毫秒），由上游（帧序号 × 帧间隔 / 文件名解析）提供。
-    pub timestamp_ms: u64,
-}
-
-impl From<(OcrImgResult, u64)> for FrameResult {
-    fn from((img, timestamp_ms): (OcrImgResult, u64)) -> Self {
-        Self {
-            text: img.text,
-            confidence: img.confidence,
-            boxes: img.boxes,
-            x_range: img.x_range,
-            y_range: img.y_range,
-            timestamp_ms,
-        }
-    }
-}
+// FrameResult 现在直接复用感知层的类型（已带 timestamp_ms），本层不再另定义。
+pub use subtitle_ocr::FrameResult;
 
 /// 合并后的字幕段（对齐 LocalDub 的 Segment）。
 #[derive(Clone, Debug, Serialize)]
