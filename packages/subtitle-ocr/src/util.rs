@@ -124,12 +124,14 @@ mod tests {
     }
 
     /// 在临时目录放若干图片，验证 list_frames 的解析/排序/双产出/skip。
-    fn make_tmp_dir(files: &[&str]) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "sf_ocr_list_{}_{}",
-            std::process::id(),
-            files.len()
-        ));
+    ///
+    /// `tag` 须各测试唯一：cargo test 默认多线程并行，若两个测试算出同一目录，
+    /// 一方的 remove_dir_all/create_dir_all 会在另一方扫描目录时抽走文件，
+    /// 造成随机失败（曾用 files.len() 作后缀，bad_name_error 与 bad_name_skip
+    /// 都是 2 个文件而撞名）。
+    fn make_tmp_dir(tag: &str, files: &[&str]) -> PathBuf {
+        let dir = std::env::temp_dir()
+            .join(format!("sf_ocr_list_{}_{}", std::process::id(), tag));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         for f in files {
@@ -140,7 +142,7 @@ mod tests {
 
     #[test]
     fn list_frames_parses_and_sorts() {
-        let dir = make_tmp_dir(&[
+        let dir = make_tmp_dir("parses_and_sorts", &[
             "00500.png",
             "00100.png",
             "00300_00350.png", // ms_ms：双时刻
@@ -157,7 +159,7 @@ mod tests {
 
     #[test]
     fn list_frames_bad_name_error() {
-        let dir = make_tmp_dir(&["00100_00150.png", "badname.png"]);
+        let dir = make_tmp_dir("bad_name_error", &["00100_00150.png", "badname.png"]);
         let r = list_frames(&dir, BadNameAction::Error);
         assert!(r.is_err());
         let _ = std::fs::remove_dir_all(&dir);
@@ -165,7 +167,7 @@ mod tests {
 
     #[test]
     fn list_frames_bad_name_skip() {
-        let dir = make_tmp_dir(&["00100_00150.png", "badname.png"]);
+        let dir = make_tmp_dir("bad_name_skip", &["00100_00150.png", "badname.png"]);
         let entries = list_frames(&dir, BadNameAction::Skip).unwrap();
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].times, FrameTimes::Range(100, 150));

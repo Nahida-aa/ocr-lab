@@ -19,13 +19,18 @@ use anyhow::Result;
 use ndarray::{Array3, s};
 use rapidocr_ort::{ModelProfile, OcrEngine};
 use serde::Serialize;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
+pub(crate) mod alg_util;
 pub(crate) mod ocr_util;
 
-// ===========================================================================
+// 模块保持 pub(crate)（内部分层是实现细节），仅把对外 API 提到 crate 根，
+// 使用方路径仍是 `subtitle_ocr::aggregate_boxes`，不随内部拆分而变。
+pub use crate::ocr_util::aggregate_boxes;
+
+// ==========================================================
 // 选项与结果类型
-// ===========================================================================
+// ==========================================================
 
 /// 字幕 OCR 的行为开关（对齐 cpp 的 CLI 参数）。
 #[derive(Clone, Debug)]
@@ -118,7 +123,7 @@ impl SubtitleOcr {
         Ok(Self { engine, opts })
     }
 
-    /// 对一帧 BGR 图像（H×W×3，0-255 u8，读图见 [`load_rgb`]）做字幕 OCR，返回排序后的识别行。
+    /// 对一帧 BGR 图像（H×W×3，0-255 u8，读图见 [`rapidocr_ort::load_image`]）做字幕 OCR，返回排序后的识别行。
     ///
     /// 流程对齐 cpp `runOcr`：bottom_only ROI → subtitle_only y 过滤 → NMS。
     pub fn ocr_image(&mut self, rgb: &Array3<u8>) -> Result<Vec<OcrBoxResult>> {
@@ -167,7 +172,7 @@ impl SubtitleOcr {
             .collect();
 
         if self.opts.use_nms && boxes.len() > 1 {
-            boxes = ocr_util::nms(boxes);
+            boxes = alg_util::nms(boxes);
         }
 
         // 排序：先按 y 中心，差 ≤20px 再按 x 中心（cpp 的 TL/BR 排序等价）。
@@ -187,51 +192,6 @@ impl SubtitleOcr {
     }
 }
 
-/// 把一图识别出的多框聚合成单图结果（纯感知后处理，`timestamp_ms` 置 0）。
-///
-/// 过滤 / 坐标还原 / NMS / 排序已在 [`SubtitleOcr::ocr_image`] 完成，这里只做
-/// 「多行拼接成一条文本 + 各框置信度取均值 + 算几何值域」。
-///
-/// `timestamp_ms` 故意不在此处填入（置 0），原因：同一张图可能对应多个时刻
-/// （文件名 `ms_ms` 时间区间图片，start/end 两个时刻、内容相同）。保持单参数、
-/// 不接 timestamp，调用方就能**先聚合一次**得到无时间的 [`FrameResult`]，再按
-/// `entry.times` 展开——对每个时刻 `clone` 后仅改 `timestamp_ms`，避免对同一
-/// boxes 重复聚合。携带时间的场景由调用方在 [`FrameResult`] 上赋值（如按文件名
-/// `ms`/`ms_ms` 解析、或帧序号 / 视频 PTS）。
-pub fn aggregate_boxes(boxes: &[OcrBoxResult]) -> FrameResult {
-    let text: Vec<&str> = boxes.iter().map(|l| l.text.as_str()).collect();
-    let text = text.join(" ");
-    let confidence = if boxes.is_empty() {
-        0.0
-    } else {
-        boxes.iter().map(|l| l.text_confidence as f64).sum::<f64>() / boxes.len() as f64
-    };
-    // 聚合所有行的四点坐标，取 x / y 值域（无字幕 → [0,0]）。
-    let mut x_range = [f32::INFINITY, f32::NEG_INFINITY];
-    let mut y_range = [f32::INFINITY, f32::NEG_INFINITY];
-    for l in boxes {
-        for p in &l.box_ {
-            x_range[0] = x_range[0].min(p[0]);
-            x_range[1] = x_range[1].max(p[0]);
-            y_range[0] = y_range[0].min(p[1]);
-            y_range[1] = y_range[1].max(p[1]);
-        }
-    }
-    let (x_range, y_range) = if boxes.is_empty() {
-        ([0.0, 0.0], [0.0, 0.0])
-    } else {
-        (x_range, y_range)
-    };
-    FrameResult {
-        text,
-        confidence,
-        boxes: boxes.to_vec(),
-        x_range,
-        y_range,
-        timestamp_ms: 0,
-    }
-}
-
 // ===========================================================================
 // 批量入口：把「图片路径 + 时刻」列表跑完 OCR 并聚合
 // ===========================================================================
@@ -240,8 +200,8 @@ pub fn aggregate_boxes(boxes: &[OcrBoxResult]) -> FrameResult {
 ///
 /// - [`FrameTimes::None`]：无时间（单图 `<image>` 调用，或尚待赋值）；
 ///   展开为单个 `0` 时刻，产出一个 `FrameResult`。
-/// - [`FrameTimes::Single(t)`]：单时刻（`ms` 文件名）。
-/// - [`FrameTimes::Range(s, e)`]：时间区间（`ms_ms` 文件名）；同一张图仅识别一次，
+/// - [`FrameTimes::Single`]`(t)`：单时刻（`ms` 文件名）。
+/// - [`FrameTimes::Range`]`(s, e)`：时间区间（`ms_ms` 文件名）；同一张图仅识别一次，
 ///   展开为 `[s, e]` 两个 `FrameResult`（内容相同、仅 `timestamp_ms` 不同）。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FrameTimes {
@@ -287,7 +247,7 @@ pub struct OcrEntry {
 pub fn ocr_entries(ocr: &mut SubtitleOcr, entries: &[OcrEntry]) -> Result<Vec<FrameResult>> {
     let mut out = Vec::with_capacity(entries.len());
     for e in entries {
-        let rgb = load_rgb(&e.path)?;
+        let rgb = rapidocr_ort::load_image(&e.path)?;
         let boxes = ocr.ocr_image(&rgb)?;
         let aggregated = aggregate_boxes(&boxes);
         for ts in e.times.timestamps() {
@@ -297,12 +257,4 @@ pub fn ocr_entries(ocr: &mut SubtitleOcr, entries: &[OcrEntry]) -> Result<Vec<Fr
         }
     }
     Ok(out)
-}
-
-/// 读图为 BGR HWC u8 的 `Array3`。
-///
-/// 复用 [`rapidocr_ort::load_image`]（统一 BGR 通道约定，对齐 cpp `cv::imread` /
-/// subtitle-ocr 生产路径，避免各包各写一份转换）。
-fn load_rgb(path: &Path) -> Result<Array3<u8>> {
-    rapidocr_ort::load_image(path)
 }

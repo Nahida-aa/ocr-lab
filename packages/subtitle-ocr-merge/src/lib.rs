@@ -12,10 +12,9 @@
 
 use serde::Serialize;
 
-// aggregate_boxes 是感知层（subtitle-ocr）的类型/函数，本层仅转发重导出，
-// 供上游「先 aggregate_boxes 得 FrameResult → 代入 timestamp_ms → merge_frames」统一取用。
-pub use subtitle_ocr::aggregate_boxes;
 // FrameResult 现在直接复用感知层的类型（已带 timestamp_ms），本层不再另定义。
+// 注：aggregate_boxes 不在本层转发，调用方直接用 subtitle_ocr::aggregate_boxes
+// （本层只管「FrameResult → Segment」，不代理感知层 API）。
 pub use subtitle_ocr::FrameResult;
 
 /// 合并后的字幕段（对齐 LocalDub 的 Segment）。
@@ -157,11 +156,17 @@ pub fn merge_frames(frames: &[FrameResult], args: &MergeArgs) -> Vec<Segment> {
                 c.text = f.text.clone();
             }
             cur_count += 1;
-            c.confidence = (c.confidence * (cur_count - 1) as f64 + f.confidence)
-                / cur_count as f64;
+            c.confidence =
+                (c.confidence * (cur_count - 1) as f64 + f.confidence) / cur_count as f64;
             c.end_ms = f.timestamp_ms;
-            c.x_range = [c.x_range[0].min(f.x_range[0]), c.x_range[1].max(f.x_range[1])];
-            c.y_range = [c.y_range[0].min(f.y_range[0]), c.y_range[1].max(f.y_range[1])];
+            c.x_range = [
+                c.x_range[0].min(f.x_range[0]),
+                c.x_range[1].max(f.x_range[1]),
+            ];
+            c.y_range = [
+                c.y_range[0].min(f.y_range[0]),
+                c.y_range[1].max(f.y_range[1]),
+            ];
             cur_last_text = f.text.clone();
         }
     }
@@ -270,10 +275,7 @@ mod tests {
     fn merge_text_change_splits_segment() {
         // 文本差异超 levenshtein 阈值（"你好世界" vs "天气真好" lev=4 > 2）
         // → 即便间隔很小也拆段。
-        let frames = vec![
-            fr("你好世界", 0, 0.9, None),
-            fr("天气真好", 500, 0.9, None),
-        ];
+        let frames = vec![fr("你好世界", 0, 0.9, None), fr("天气真好", 500, 0.9, None)];
         let segs = merge_frames(&frames, &MergeArgs::default());
         assert_eq!(segs.len(), 2);
     }
