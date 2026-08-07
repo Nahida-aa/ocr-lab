@@ -211,15 +211,6 @@ pub enum FrameTimes {
 }
 
 impl FrameTimes {
-    /// 展开为本次应产出的时刻列表（见 [`FrameTimes`] 各变体语义）。
-    pub fn timestamps(&self) -> Vec<u64> {
-        match self {
-            FrameTimes::None => vec![0],
-            FrameTimes::Single(t) => vec![*t],
-            FrameTimes::Range(s, e) => vec![*s, *e],
-        }
-    }
-
     /// 排序 / 去重用的主时刻（区间取起点）。
     pub fn sort_key(&self) -> u64 {
         match self {
@@ -250,10 +241,24 @@ pub fn ocr_entries(ocr: &mut SubtitleOcr, entries: &[OcrEntry]) -> Result<Vec<Fr
         let rgb = rapidocr_ort::load_image(&e.path)?;
         let boxes = ocr.ocr_image(&rgb)?;
         let aggregated = aggregate_boxes(&boxes);
-        for ts in e.times.timestamps() {
-            let mut fr = aggregated.clone();
-            fr.timestamp_ms = ts;
-            out.push(fr);
+        // 按 times 的形态展开：直接 match 枚举，无时刻 / 单时刻都只产出一个
+        // FrameResult 且无需 clone；只有 Range 才复制一份（内容相同、仅时刻不同）。
+        match e.times {
+            FrameTimes::None => out.push(aggregated),
+            FrameTimes::Single(t) => out.push(FrameResult {
+                timestamp_ms: t,
+                ..aggregated
+            }),
+            FrameTimes::Range(s, end) => {
+                out.push(FrameResult {
+                    timestamp_ms: s,
+                    ..aggregated.clone()
+                });
+                out.push(FrameResult {
+                    timestamp_ms: end,
+                    ..aggregated
+                });
+            }
         }
     }
     Ok(out)
