@@ -28,6 +28,7 @@ pub struct FrameStepper {
     video_stream_index: usize,
     next_packet: Option<Packet>, // 预取的一包，跨越续接边界
     sent_eof: bool,
+    decoded_count: i32, // 已产出帧数（用于无 PTS 兜底估算）
 }
 
 impl FrameStepper {
@@ -65,11 +66,16 @@ impl FrameStepper {
             video_stream_index,
             next_packet: None,
             sent_eof: false,
+            decoded_count: 0,
         })
     }
 
     /// 拉下一帧（BGR `Array3`），EOF 返回 `None`。
-    pub fn next(&mut self) -> Result<Option<Array3<u8>>> {
+    ///
+    /// 返回 `(帧像素, pts_ms)`：`pts_ms` 为该帧真实呈现时间戳（毫秒），由
+    /// 解码帧的 `pts` 配合视频流 `time_base` 换算（不再假定固定 30fps）。
+    /// 无 pts 时兜底用帧号 × 1000/30 估算（保持旧行为）。
+    pub fn next(&mut self) -> Result<Option<(Array3<u8>, i64)>> {
         loop {
             // 若无预取包且未 EOF，从 demuxer 取下一视频包。
             // packets() 迭代器借用 ictx，仅在块内使用（取完即 drop），
@@ -101,7 +107,25 @@ impl FrameStepper {
                 Ok(_) => {
                     let mut bgr = Video::empty();
                     self.scaler.run(&decoded, &mut bgr).context("帧转换失败")?;
-                    return Ok(Some(frame_to_array3(&bgr)));
+                    // 真实 PTS → 毫秒（time_base 是帧时长倒数，pts × num/den × 1000）。
+                    let pts_ms = decoded
+                        .pts()
+                        .map(|pts| {
+                            let tb = self
+                                .ictx
+                                .stream(self.video_stream_index)
+                                .expect("视频流存在")
+                                .time_base();
+                            (pts as f64 * tb.numerator() as f64 / tb.denominator() as f64
+                                * 1000.0)
+                                .round() as i64
+                        })
+                        .unwrap_or_else(|| {
+                            // 兜底：无 PTS 时用帧号估算（保持旧 30fps 假设）。
+                            self.decoded_count as i64 * 1000 / 30
+                        });
+                    self.decoded_count += 1;
+                    return Ok(Some((frame_to_array3(&bgr), pts_ms)));
                 }
                 Err(ffmpeg_next::Error::Eof) => {
                     // EOF：若还没发完包（可能下一个包还有帧），继续循环取包；
@@ -120,22 +144,6 @@ impl FrameStepper {
     }
 }
 
-/// 一次性全量回调解码（基于 `FrameStepper`）。`f` 返回 `false` 可提前停止。
-///
-/// `f` 收到一帧 BGR `Array3<u8>`（H×W×3，0-255）。
-pub fn for_each_frame(
-    video: &std::path::Path,
-    mut f: impl FnMut(Array3<u8>) -> Result<bool>,
-) -> Result<()> {
-    let mut stepper = FrameStepper::open(video)?;
-    while let Some(arr) = stepper.next()? {
-        if !f(arr)? {
-            break;
-        }
-    }
-    Ok(())
-}
-
 /// 把 BGR24 参考帧（`frame.data(0)` 行优先，stride 可能带 padding）转成连续 `Array3`。
 fn frame_to_array3(frame: &Video) -> Array3<u8> {
     let h = frame.height() as usize;
@@ -151,4 +159,21 @@ fn frame_to_array3(frame: &Video) -> Array3<u8> {
         }
     }
     out
+}
+
+/// 一次性全量回调解码（基于 `FrameStepper`）。`f` 返回 `false` 可提前停止。
+///
+/// `f` 收到 `(BGR Array3<u8>, pts_ms)`：帧像素（H×W×3，0-255）与该帧真实
+/// 呈现时间戳（毫秒）。
+pub fn for_each_frame(
+    video: &std::path::Path,
+    mut f: impl FnMut(Array3<u8>, i64) -> Result<bool>,
+) -> Result<()> {
+    let mut stepper = FrameStepper::open(video)?;
+    while let Some((arr, pts_ms)) = stepper.next()? {
+        if !f(arr, pts_ms)? {
+            break;
+        }
+    }
+    Ok(())
 }

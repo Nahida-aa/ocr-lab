@@ -101,7 +101,7 @@ impl<'a> FrameCache<'a> {
         // 逐步解码到 target（或 EOF）。
         while self.decoded_total <= target {
             match stepper.next()? {
-                Some(bgr) => {
+                Some((bgr, pts_ms)) => {
                     let (ch, cw) = (bgr.dim().0 as usize, bgr.dim().1 as usize);
                     if self.w == 0 {
                         self.w = cw;
@@ -126,7 +126,7 @@ impl<'a> FrameCache<'a> {
                     };
                     trace!(
                         frame = n,
-                        pos = n as i64 * 1000 / 30,
+                        pos = pts_ms,
                         has_text,
                         isa_wc = im_tf.iter().filter(|&&v| v == 255).count(),
                         "decode frame"
@@ -136,7 +136,7 @@ impl<'a> FrameCache<'a> {
                         im: im_tf,
                         ne: im_ne,
                         y,
-                        pos: n as i64 * 1000 / 30, // 30fps：帧号 → ms（TODO：用真实 pts）
+                        pos: pts_ms, // 真实 PTS（毫秒），由 FrameStepper 换算。
                         has_text: has_text == 1,
                     });
                     self.decoded_total += 1;

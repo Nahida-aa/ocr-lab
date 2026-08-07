@@ -73,7 +73,7 @@ mod tests {
 
         let mut count = 0usize;
         let mut dims = None;
-        frame::for_each_frame(&video, |arr| {
+        frame::for_each_frame(&video, |arr, _pts_ms| {
             count += 1;
             if dims.is_none() {
                 let (h, w, _) = arr.dim();
