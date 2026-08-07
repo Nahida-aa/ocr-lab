@@ -7,6 +7,8 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <cstdint>
+#include <cctype>
 #include <chrono>
 #include <sstream>
 #include <iomanip>
@@ -80,6 +82,8 @@ struct OcrImgResult {
     };
     std::vector<OcrBoxResult> boxes;
     double charListLoadMs, imageLoadMs, modelLoadMs, detMs, postMs, recMs, totalMs;
+    uint64_t timestamp_ms = 0;  // 对齐 Rust FrameResult：单时刻（ms），0=无时间。
+                                // 文件名 ms/ms_ms 解析后填入；ms_ms 同一张图产出两个结果。
 };
 
 // --- Load char list from JSON ---
@@ -825,6 +829,7 @@ static std::string toJson(const OcrImgResult& r, const std::string& filename = "
         if (i + 1 < r.boxes.size()) ss << ",";
     }
     ss << "]";
+    ss << ", \"timestamp_ms\": " << r.timestamp_ms;
     ss << ", \"charListLoadMs\": " << r.charListLoadMs
        << ", \"imageLoadMs\": " << r.imageLoadMs
        << ", \"modelLoadMs\": " << r.modelLoadMs
@@ -877,6 +882,40 @@ static std::vector<std::string> listFrames(const std::string& dir) {
 static std::string extractFilename(const std::string& path) {
     auto pos = path.find_last_of("/\\");
     return (pos == std::string::npos) ? path : path.substr(pos + 1);
+}
+
+// 解析文件名 stem 里的时刻：支持 `ms` 或 `ms_ms`（可前置多余 0），对齐 Rust
+// subtitle-ocr 的 parse_name_times。
+//   "001234"      → {1234}
+//   "001234_1250" → {1234, 1250}
+// 仅接受纯十进制数字、1~2 段（'_' 分隔），空段/非数字/超 2 段 → 返回空 vector。
+static std::vector<uint64_t> parseNameTimes(const std::string& stem) {
+    std::vector<uint64_t> times;
+    size_t start = 0;
+    int segs = 0;
+    for (size_t i = 0; i <= stem.size(); ++i) {
+        if (i == stem.size() || stem[i] == '_') {
+            ++segs;
+            if (segs > 2) return {};          // 超过两段非法
+            std::string part = stem.substr(start, i - start);
+            if (part.empty()) return {};       // 空段（如 "__"）非法
+            for (char c : part) {
+                if (!std::isdigit((unsigned char)c)) return {};  // 非纯数字非法
+            }
+            times.push_back(std::stoull(part));
+            start = i + 1;
+        }
+    }
+    if (times.empty()) return {};
+    return times;
+}
+
+// 取文件名（不含扩展名）的 stem。
+static std::string stemOf(const std::string& path) {
+    std::string fname = extractFilename(path);
+    auto dot = fname.rfind('.');
+    if (dot == std::string::npos) return fname;
+    return fname.substr(0, dot);
 }
 
 static int runMain(int argc, char* argv[]) {
@@ -1012,10 +1051,14 @@ static int runMain(int argc, char* argv[]) {
             framePaths.push_back(target);
         }
 
-        // Output: JSON array, one element per frame
+        // Output: JSON array, one element per frame (or per 文件名时刻).
+        // 文件名约定对齐 Rust FrameResult：
+        //   `ms`    → 单结果，timestampMs = 该值
+        //   `ms_ms` → 同一张图仅 OCR 一次，产出两个结果（start/end 不同时刻）
+        //   其他文件名（单图模式或不符合格式）→ timestampMs = 0
         std::cout << "[";
+        bool first = true;
         for (size_t fi = 0; fi < framePaths.size(); ++fi) {
-            if (fi > 0) std::cout << ",";
             const auto& fp = framePaths[fi];
             auto result = runOcr(fp, charList, detSession, clsSession, recSession, memInfo,
                                  textScore, subtitleOnly, useNms);
@@ -1023,7 +1066,25 @@ static int runMain(int argc, char* argv[]) {
             result.modelLoadMs = modelLoadMs;
             result.totalMs = result.charListLoadMs + result.imageLoadMs + result.modelLoadMs +
                              result.detMs + result.postMs + result.recMs;
-            std::cout << "\n  " << toJson(result, extractFilename(fp));
+
+            std::vector<uint64_t> times;
+            if (dirMode) times = parseNameTimes(stemOf(fp));
+
+            if (times.empty()) {
+                // 无时刻信息：单结果，timestampMs = 0。
+                if (!first) std::cout << ",";
+                first = false;
+                std::cout << "\n  " << toJson(result, extractFilename(fp));
+            } else {
+                // 每个时刻产出一个结果（内容相同，仅 timestampMs 不同）；
+                // ms_ms 时同一张图 OCR 一次、复制成两个 FrameResult。
+                for (uint64_t t : times) {
+                    result.timestamp_ms = t;
+                    if (!first) std::cout << ",";
+                    first = false;
+                    std::cout << "\n  " << toJson(result, extractFilename(fp));
+                }
+            }
         }
         std::cout << "\n]\n";
 
