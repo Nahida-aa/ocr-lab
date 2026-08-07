@@ -51,8 +51,10 @@ fn tmp_dir() -> PathBuf {
     repo_root().join("packages").join("tmp").join("ocr-bench")
 }
 
-/// 对齐 ocrFrameCpp：单帧模式调用 cpp 二进制，取 segments 里最高 confidence 的
-/// 一个作为该帧文本（丢弃 box，对齐原版行为）。
+/// 单帧模式调用 cpp 二进制，读帧级 `text` / 各框 `text_confidence` 均值。
+///
+/// cpp 与 rust 的输出形状现已一致（都是顶层 `text` + `boxes[]`，框内字段
+/// `text_confidence` / `box_confidence` / `box`），故两侧解析口径统一。
 ///
 /// 只保留 `total_ms`——推理耗时由 benchmark 自己在调用前后 `Instant::now()`
 /// 测量（不依赖二进制把计时塞进 JSON；计时是旁路观测数据）。
@@ -61,6 +63,34 @@ struct CppFrame {
     text: String,
     confidence: f64,
     total_ms: f64,
+}
+
+/// 从一个帧对象（cpp / rust 同形状）取帧级文本与置信度。
+///
+/// `text` 直接读顶层；`confidence` 取 `boxes[]` 内各框 `text_confidence` 的均值
+/// （cpp 顶层不输出帧级 confidence，rust 的顶层 confidence 也正是同一口径的均值，
+/// 这样两侧数值可比）。无框时置信度为 0。
+fn frame_text_conf(data: &serde_json::Value) -> (String, f64) {
+    let text = data
+        .get("text")
+        .and_then(|x| x.as_str())
+        .unwrap_or_default()
+        .to_string();
+    let confs: Vec<f64> = data
+        .get("boxes")
+        .and_then(|b| b.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|b| b.get("text_confidence").and_then(|x| x.as_f64()))
+                .collect()
+        })
+        .unwrap_or_default();
+    let confidence = if confs.is_empty() {
+        0.0
+    } else {
+        confs.iter().sum::<f64>() / confs.len() as f64
+    };
+    (text, confidence)
 }
 
 fn ocr_frame_cpp(
@@ -97,16 +127,7 @@ fn ocr_frame_cpp(
             } else {
                 parsed
             };
-            let segs = data.get("segments").and_then(|s| s.as_array()).cloned().unwrap_or_default();
-            let best = segs
-                .iter()
-                .filter_map(|s| {
-                    let t = s.get("text").and_then(|x| x.as_str())?.to_string();
-                    let c = s.get("confidence").and_then(|x| x.as_f64()).unwrap_or(0.0);
-                    Some((t, c))
-                })
-                .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
-            let (text, confidence) = best.unwrap_or_default();
+            let (text, confidence) = frame_text_conf(&data);
             // 耗时由 benchmark 自身测量（子进程 wall time），不读 JSON 计时字段。
             CppFrame {
                 text,
@@ -158,16 +179,7 @@ fn ocr_dir_cpp(
             let per = if arr.is_empty() { 0.0 } else { wall_ms / arr.len() as f64 };
             arr.iter()
                 .map(|data| {
-                    let segs = data.get("segments").and_then(|s| s.as_array()).cloned().unwrap_or_default();
-                    let best = segs
-                        .iter()
-                        .filter_map(|s| {
-                            let t = s.get("text").and_then(|x| x.as_str())?.to_string();
-                            let c = s.get("confidence").and_then(|x| x.as_f64()).unwrap_or(0.0);
-                            Some((t, c))
-                        })
-                        .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
-                    let (text, confidence) = best.unwrap_or_default();
+                    let (text, confidence) = frame_text_conf(data);
                     CppFrame {
                         text,
                         confidence,
@@ -285,13 +297,9 @@ fn ocr_dir_rust(
 
 /// 解析 rust 二进制输出（JSON 数组，每元素是一个 `FrameResult`）。
 ///
-/// rust 与 cpp 的形状**不同**，故不能照搬 cpp 的解析：
-/// - cpp：帧对象下挂 `segments[]`，需取其中 confidence 最高的一条当帧文本；
-/// - rust：`FrameResult` 已在 `aggregate_boxes` 里把多框拼成单条 `text`
-///   （空格连接）、`confidence` 取各框均值，直接放在帧顶层；明细在 `boxes[]`。
-///
-/// 因此这里直接读顶层 `text` / `confidence`。（早前此处沿用 cpp 的 `segments`
-/// 取法，而 rust 从未输出该字段，导致解析恒为空、rust 侧 CER 全错。）
+/// 与 cpp 共用 [`frame_text_conf`]：两侧输出形状已统一为顶层 `text` + `boxes[]`
+/// （框内 `text_confidence`）。早前此处照搬 cpp 去取 `segments`，而两侧其实都
+/// 已改用 `boxes`，导致解析恒为空、CER 拿空文本跟 GT 比。
 ///
 /// `per_ms` 为 benchmark 自身测量的每帧耗时（调用方在 `Command::output()` 前后
 /// 计 wall time 后平摊传入），不依赖二进制把计时塞进 JSON。
@@ -307,17 +315,13 @@ fn parse_rust_json(
             // --dir 模式下为数组；单帧模式也是单元素数组（与 cpp 对齐）。
             let arr = parsed.as_array().cloned().unwrap_or_default();
             arr.iter()
-                .map(|data| CppFrame {
-                    text: data
-                        .get("text")
-                        .and_then(|x| x.as_str())
-                        .unwrap_or_default()
-                        .to_string(),
-                    confidence: data
-                        .get("confidence")
-                        .and_then(|x| x.as_f64())
-                        .unwrap_or(0.0),
-                    total_ms: per_ms,
+                .map(|data| {
+                    let (text, confidence) = frame_text_conf(data);
+                    CppFrame {
+                        text,
+                        confidence,
+                        total_ms: per_ms,
+                    }
                 })
                 .collect()
         }

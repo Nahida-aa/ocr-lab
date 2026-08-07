@@ -42,7 +42,10 @@ fn count_frames() -> usize {
     names.len()
 }
 
-/// 校验 cpp --dir 输出的 JSON 结构（数组，每项含 file/segments，segment 含字段）。
+/// 校验 cpp --dir 输出的 JSON 结构（数组，每项含 file + 帧级 text + boxes[]）。
+///
+/// cpp 与 rust 的框数组现已统一为 `boxes`（框内 `text_confidence` / `box`），
+/// 差别只剩 cpp 多一个 `file` 字段、rust 多一个帧级 `confidence`。
 fn check_cpp_output(stdout: &str) {
     let v: serde_json::Value = serde_json::from_str(stdout).expect("cpp 输出不是合法 JSON");
     let arr = v.as_array().expect("cpp 输出应为 JSON 数组");
@@ -50,14 +53,27 @@ fn check_cpp_output(stdout: &str) {
     assert_eq!(arr.len(), n, "应处理 {n} 帧，实际 {}", arr.len());
     for item in arr {
         assert!(item.get("file").is_some(), "缺 file 字段");
-        let segs = item.get("segments").and_then(|s| s.as_array()).expect("segments 应为数组");
-        for seg in segs {
-            let _text = seg.get("text").and_then(|t| t.as_str()).expect("text 应为字符串");
-            let conf = seg.get("confidence").and_then(|c| c.as_f64()).expect("confidence 应为数字");
+        let _text = item
+            .get("text")
+            .and_then(|t| t.as_str())
+            .expect("帧级 text 应为字符串");
+        let boxes = item
+            .get("boxes")
+            .and_then(|b| b.as_array())
+            .expect("boxes 应为数组");
+        for b in boxes {
+            let _text = b
+                .get("text")
+                .and_then(|t| t.as_str())
+                .expect("box.text 应为字符串");
+            let conf = b
+                .get("text_confidence")
+                .and_then(|c| c.as_f64())
+                .expect("box.text_confidence 应为数字");
             assert!((0.0..=1.0).contains(&conf), "confidence 越界: {conf}");
-            let box_ = seg.get("box").and_then(|b| b.as_array()).expect("box 应为数组");
-            if !box_.is_empty() {
-                assert_eq!(box_.len(), 4, "box 应为 4 点");
+            let pts = b.get("box").and_then(|x| x.as_array()).expect("box 应为数组");
+            if !pts.is_empty() {
+                assert_eq!(pts.len(), 4, "box 应为 4 点");
             }
         }
     }
