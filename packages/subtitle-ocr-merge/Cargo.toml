@@ -11,7 +11,7 @@ name = "subtitle_ocr_merge"
 path = "src/lib.rs"
 
 [dependencies]
-# 取 FrameResult / aggregate_img / OcrBoxResult（单图聚合结果与单框结果）。
+# 取 FrameResult / aggregate_boxes / OcrBoxResult（单图聚合结果与单框结果）。
 # 依赖方向：本层 → subtitle-ocr（感知层），subtitle-ocr 不反向依赖本层，
 # 以保持 subtitle-ocr 作为纯感知库、不耦合合并逻辑。
 subtitle-ocr = { workspace = true }

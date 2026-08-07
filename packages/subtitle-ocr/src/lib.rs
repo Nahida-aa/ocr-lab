@@ -73,7 +73,8 @@ pub use rapidocr_ort::OcrBoxResult;
 pub struct FrameResult {
     /// 该图识别文本（多行按出现顺序拼接，用空格分隔）。
     pub text: String,
-    /// 该图最高置信度（取各框 `text_confidence` 最大）。
+    /// 该图聚合置信度：各框 `text_confidence` 的均值（对齐下游 TS `aggregate_boxes`，
+    /// 多框取平均而非最大）。
     pub confidence: f64,
     /// 该图所有识别区域明细（每行文本/框/score，含坐标还原）。
     pub boxes: Vec<OcrBoxResult>,
@@ -82,7 +83,7 @@ pub struct FrameResult {
     /// 纵向值域 `[min_y, max_y]`（像素坐标），无字幕时为 `[0,0]`。
     pub y_range: [f32; 2],
     /// 该图对应时刻（毫秒）。`0` 表示无时间（如单图 `<image>` 调用、或
-    /// `aggregate_img` 纯聚合）。由上游按文件名 / 帧序号提供。
+    /// `aggregate_boxes` 纯聚合）。由上游按文件名 / 帧序号提供。
     pub timestamp_ms: u64,
 }
 
@@ -193,15 +194,20 @@ impl SubtitleOcr {
 /// 把一图识别出的多框聚合成单图结果（纯感知后处理，时间戳默认 0）。
 ///
 /// 过滤 / 坐标还原 / NMS / 排序已在 [`SubtitleOcr::ocr_image`] 完成，这里只做
-/// 「多行拼接成一条文本 + 取最高置信度 + 算几何值域」。`timestamp_ms` 置 0
+/// 「多行拼接成一条文本 + 各框置信度取均值 + 算几何值域」。`timestamp_ms` 置 0
 /// （无时间）；携带时间的场景由调用方在 [`FrameResult`] 上赋值（如按文件名 / 帧序号）。
-pub fn aggregate_img(lines: &[OcrBoxResult]) -> FrameResult {
+pub fn aggregate_boxes(lines: &[OcrBoxResult]) -> FrameResult {
     let text: Vec<&str> = lines.iter().map(|l| l.text.as_str()).collect();
     let text = text.join(" ");
-    let confidence = lines
-        .iter()
-        .map(|l| l.text_confidence as f64)
-        .fold(0.0f64, f64::max);
+    let confidence = if lines.is_empty() {
+        0.0
+    } else {
+        lines
+            .iter()
+            .map(|l| l.text_confidence as f64)
+            .sum::<f64>()
+            / lines.len() as f64
+    };
     // 聚合所有行的四点坐标，取 x / y 值域（无字幕 → [0,0]）。
     let mut x_range = [f32::INFINITY, f32::NEG_INFINITY];
     let mut y_range = [f32::INFINITY, f32::NEG_INFINITY];

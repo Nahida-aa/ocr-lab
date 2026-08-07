@@ -12,9 +12,9 @@
 
 use serde::Serialize;
 
-// aggregate_img 是感知层（subtitle-ocr）的类型/函数，本层仅转发重导出，
-// 供上游「先 aggregate_img 得 FrameResult → 代入 timestamp_ms → merge_frames」统一取用。
-pub use subtitle_ocr::aggregate_img;
+// aggregate_boxes 是感知层（subtitle-ocr）的类型/函数，本层仅转发重导出，
+// 供上游「先 aggregate_boxes 得 FrameResult → 代入 timestamp_ms → merge_frames」统一取用。
+pub use subtitle_ocr::aggregate_boxes;
 // FrameResult 现在直接复用感知层的类型（已带 timestamp_ms），本层不再另定义。
 pub use subtitle_ocr::FrameResult;
 
