@@ -22,7 +22,7 @@ use std::ffi::c_void;
 
 use geometry::{box_points, min_area_rect, offset_polygon, polygon_area, polygon_length};
 use glam::Vec2;
-use opencv::core::{Mat, Point as CvPoint, Point2f, Scalar, Size, Vector};
+use opencv::core::{Mat, Point as CvPoint, Scalar, Size, Vector};
 use opencv::imgproc;
 
 const DET_THRESH: f32 = 0.3;
@@ -32,10 +32,11 @@ const MAX_CANDIDATES: usize = 1000;
 /// 单个检测结果：四点多边形（窗口/文本框的四个顶点）与检测得分。
 ///
 /// 与 `subtitle-rust` 的 `DetBox { polygon: [Point; 4], score }` 对齐，
-/// 区别仅在于这里用 opencv 的 `Point2f` 表示顶点。
+/// 区别仅在于这里用 `glam::Vec2` 表示顶点（geometry 的同一类型，避免在
+/// opencv `Point2f` 与几何层之间反复转换）。
 pub struct DetBox {
     /// 四个顶点（顺时针：左上、右上、右下、左下），原图像素坐标。
-    pub polygon: [Point2f; 4],
+    pub polygon: [Vec2; 4],
     /// 检测得分：框内平均概率（DB 后处理里对框内像素的 prob 取均值）。
     pub score: f32,
 }
@@ -137,9 +138,9 @@ pub fn db_postprocess(
         // ---- scale to ROI size ----
         let scale_w = orig_w as f32 / hm_w as f32;
         let scale_h = orig_h as f32 / hm_h as f32;
-        let mut pts = [Point2f::new(0.0, 0.0); 4];
+        let mut pts = [Vec2::ZERO; 4];
         for (i, p) in final4.iter().enumerate() {
-            pts[i] = Point2f::new(
+            pts[i] = Vec2::new(
                 (p.x * scale_w).round().clamp(0.0, (orig_w - 1) as f32),
                 (p.y * scale_h).round().clamp(0.0, (orig_h - 1) as f32),
             );

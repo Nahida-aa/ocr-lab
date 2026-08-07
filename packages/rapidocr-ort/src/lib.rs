@@ -171,7 +171,7 @@ impl OcrEngine {
             .try_extract_array::<f32>()?
             .to_owned();
         // DB 后处理：sigmoid + 二值化 + 连通域 + minAreaRect + unclip + score。
-        // 返回原图坐标系下的四点框（[Point2f;4]）。
+        // 返回原图坐标系下的四点框（[Vec2;4]）。
         let hm_shape = det_map.shape();
         let (hm_h, hm_w) = (hm_shape[2], hm_shape[3]);
         let heatmap: Vec<f32> = det_map.into_raw_vec_and_offset().0;

@@ -4,8 +4,8 @@
 //! 包围盒裁剪；`crop_for_rec_warp` 提供 cpp 同款的透视矫正裁剪（用 faer 求解
 //! getPerspectiveTransform），用于让 rust 与 cpp 的 rec 输入逐位一致。
 
+use glam::Vec2;
 use ndarray::Array3;
-use opencv::core::Point2f;
 use opencv::imgproc;
 use opencv::prelude::*;
 use ort::session::Session;
@@ -20,7 +20,7 @@ use crate::rec::ctc_greedy_decode;
 /// 8×8 线性系统，faer 的 `partial_piv_lu().solve()` 求解。
 ///
 /// 返回 `[[f64;3];3]`（行优先的 3×3 H）。
-fn get_perspective_transform(src: &[Point2f; 4], dst: &[Point2f; 4]) -> [[f64; 3]; 3] {
+fn get_perspective_transform(src: &[Vec2; 4], dst: &[Vec2; 4]) -> [[f64; 3]; 3] {
     use faer::prelude::*;
 
     // DLT: 对每对点 (x,y)->(u,v) 贡献两行。
@@ -60,19 +60,19 @@ fn get_perspective_transform(src: &[Point2f; 4], dst: &[Point2f; 4]) -> [[f64; 3
 /// OpenCV 的 `cv::warpPerspective`（`INTER_CUBIC` + `BORDER_REPLICATE`），与 cpp
 /// 的 rec 输入**逐位一致**（OpenCV 内部 invert M 后做定点插值，rust 手写无法逐位
 /// 复刻，故这里直接调 OpenCV 绑定）。
-fn warp_perspective(img: &Array3<u8>, polygon: &[Point2f; 4], dst_w: usize, dst_h: usize) -> Array3<u8> {
+fn warp_perspective(img: &Array3<u8>, polygon: &[Vec2; 4], dst_w: usize, dst_h: usize) -> Array3<u8> {
     let (h, w, c) = img.dim();
     let src = [
-        Point2f::new(polygon[0].x, polygon[0].y),
-        Point2f::new(polygon[1].x, polygon[1].y),
-        Point2f::new(polygon[2].x, polygon[2].y),
-        Point2f::new(polygon[3].x, polygon[3].y),
+        Vec2::new(polygon[0].x, polygon[0].y),
+        Vec2::new(polygon[1].x, polygon[1].y),
+        Vec2::new(polygon[2].x, polygon[2].y),
+        Vec2::new(polygon[3].x, polygon[3].y),
     ];
     let dst = [
-        Point2f::new(0.0, 0.0),
-        Point2f::new((dst_w - 1) as f32, 0.0),
-        Point2f::new((dst_w - 1) as f32, (dst_h - 1) as f32),
-        Point2f::new(0.0, (dst_h - 1) as f32),
+        Vec2::new(0.0, 0.0),
+        Vec2::new((dst_w - 1) as f32, 0.0),
+        Vec2::new((dst_w - 1) as f32, (dst_h - 1) as f32),
+        Vec2::new(0.0, (dst_h - 1) as f32),
     ];
     // 正向 H（src→dst），OpenCV warpPerspective 内部会 invert（非 WARP_INVERSE_MAP）。
     let fwd = get_perspective_transform(&src, &dst);
@@ -139,7 +139,7 @@ fn cubic_coeffs(x: f64) -> [f64; 4] {
 /// 按四点 bbox 从原图裁剪（包围盒 crop，不做透视变换；对近水平文本足够）。
 /// `polygon` 为四个顶点（顺时针），这里取其 x/y 的极值作为包围盒，向四周外扩
 /// 5% 避免裁掉字形上下缘。对任意四边形（含旋转框）都取正确包围盒。
-pub fn crop_for_rec(img: &Array3<u8>, polygon: &[Point2f; 4]) -> Array3<u8> {
+pub fn crop_for_rec(img: &Array3<u8>, polygon: &[Vec2; 4]) -> Array3<u8> {
     let (h, w, c) = img.dim();
     let minx_f = polygon.iter().map(|p| p.x).fold(f32::INFINITY, f32::min);
     let maxx_f = polygon
@@ -179,7 +179,7 @@ pub fn crop_for_rec(img: &Array3<u8>, polygon: &[Point2f; 4]) -> Array3<u8> {
 ///   dstW/H 由四边长度取 max 后 round 得到（min 4）；若 dstH/dstW ≥ 1.5 则转置
 ///   90°（高瘦框）；getPerspectiveTransform(polygon, 矩形角) → warpPerspective。
 /// 用于与 cpp 的 rec 输入逐位对齐（配合 det 几何 minAreaRect 一起用）。
-pub fn crop_for_rec_warp(img: &Array3<u8>, polygon: &[Point2f; 4]) -> Array3<u8> {
+pub fn crop_for_rec_warp(img: &Array3<u8>, polygon: &[Vec2; 4]) -> Array3<u8> {
     let (x0, y0) = (polygon[0].x, polygon[0].y);
     let (x1, y1) = (polygon[1].x, polygon[1].y);
     let (x2, y2) = (polygon[2].x, polygon[2].y);
@@ -268,8 +268,8 @@ pub fn recognize(
 mod tests {
     use super::*;
 
-    fn pt(x: f32, y: f32) -> Point2f {
-        Point2f::new(x, y)
+    fn pt(x: f32, y: f32) -> Vec2 {
+        Vec2::new(x, y)
     }
 
     #[test]
@@ -291,7 +291,7 @@ mod tests {
         let dst = [pt(0.0, 0.0), pt(20.0, 0.0), pt(20.0, 10.0), pt(0.0, 10.0)];
         let h = get_perspective_transform(&src, &dst);
         // 验证 H 把 src 角点映射到 dst：src[0]=(0,0) → dst[0]=(0,0)。
-        let apply = |p: Point2f| -> (f64, f64) {
+        let apply = |p: Vec2| -> (f64, f64) {
             let (x, y) = (p.x as f64, p.y as f64);
             let denom = h[2][0] * x + h[2][1] * y + h[2][2];
             let u = (h[0][0] * x + h[0][1] * y + h[0][2]) / denom;
