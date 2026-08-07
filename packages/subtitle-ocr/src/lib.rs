@@ -139,7 +139,7 @@ impl SubtitleOcr {
         let results: Vec<OcrBoxResult> = self.engine.detect(&roi)?;
 
         // ---- 3. 后处理：还原坐标 / y 过滤 / NMS / trim / 排序 ----
-        let mut lines: Vec<OcrBoxResult> = results
+        let mut boxes: Vec<OcrBoxResult> = results
             .into_iter()
             .map(|mut r| {
                 // ROI 坐标还原回原图：box 每点 y 与 center.y 都加 y_offset。
@@ -164,12 +164,12 @@ impl SubtitleOcr {
             })
             .collect();
 
-        if self.opts.use_nms && lines.len() > 1 {
-            lines = nms(lines);
+        if self.opts.use_nms && boxes.len() > 1 {
+            boxes = nms(boxes);
         }
 
         // 排序：先按 y 中心，差 ≤20px 再按 x 中心（cpp 的 TL/BR 排序等价）。
-        lines.sort_by(|a, b| {
+        boxes.sort_by(|a, b| {
             let ya = a.center[1];
             let yb = b.center[1];
             if (ya - yb).abs() > 20.0 {
@@ -181,7 +181,7 @@ impl SubtitleOcr {
             }
         });
 
-        Ok(lines)
+        Ok(boxes)
     }
 }
 
@@ -234,15 +234,44 @@ pub fn aggregate_boxes(lines: &[OcrBoxResult]) -> FrameResult {
 // 批量入口：把「图片路径 + 时刻」列表跑完 OCR 并聚合
 // ===========================================================================
 
-/// 一张待识别图片及其对应时刻（批量入口 [`ocr_entries`] 的输入单元）。
+/// 一张图对应的时刻，固化 `ms` / `ms_ms` 文件名约定（取代裸 `Vec<u64>`）。
 ///
-/// `times` 约定见 [`aggregate_boxes`] 的单参数设计：
-/// - `ms` 文件名 → `[t]`
-/// - `ms_ms` 文件名 → `[start, end]`（同一张图仅识别一次，产出两个 `FrameResult`）
-/// - 单图无时间 → `[0]`
+/// - [`FrameTimes::None`]：无时间（单图 `<image>` 调用，或尚待赋值）；
+///   展开为单个 `0` 时刻，产出一个 `FrameResult`。
+/// - [`FrameTimes::Single(t)`]：单时刻（`ms` 文件名）。
+/// - [`FrameTimes::Range(s, e)`]：时间区间（`ms_ms` 文件名）；同一张图仅识别一次，
+///   展开为 `[s, e]` 两个 `FrameResult`（内容相同、仅 `timestamp_ms` 不同）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FrameTimes {
+    None,
+    Single(u64),
+    Range(u64, u64),
+}
+
+impl FrameTimes {
+    /// 展开为本次应产出的时刻列表（见 [`FrameTimes`] 各变体语义）。
+    pub fn timestamps(&self) -> Vec<u64> {
+        match self {
+            FrameTimes::None => vec![0],
+            FrameTimes::Single(t) => vec![*t],
+            FrameTimes::Range(s, e) => vec![*s, *e],
+        }
+    }
+
+    /// 排序 / 去重用的主时刻（区间取起点）。
+    pub fn sort_key(&self) -> u64 {
+        match self {
+            FrameTimes::None => 0,
+            FrameTimes::Single(t) => *t,
+            FrameTimes::Range(s, _) => *s,
+        }
+    }
+}
+
+/// 一张待识别图片及其对应时刻（批量入口 [`ocr_entries`] 的输入单元）。
 pub struct OcrEntry {
     pub path: PathBuf,
-    pub times: Vec<u64>,
+    pub times: FrameTimes,
 }
 
 /// 对一组 [`OcrEntry`] 跑 OCR 并聚合，返回按时刻展开的 [`FrameResult`] 列表。
@@ -252,14 +281,14 @@ pub struct OcrEntry {
 /// `FrameResult`，内容相同、仅 `timestamp_ms` 不同（避免对同一 boxes 重复聚合）。
 ///
 /// 本函数不含：耗时测量（调用方在 `ocr_image` 前后自行 `Instant`）、JSON 序列化、
-/// 目录扫描 / 文件名解析（这些留给调用方，CLI 用 [`crate::`] 的 `list_frames` 风格）。
+/// 目录扫描 / 文件名解析（这些留给调用方；CLI 见 `subtitle_ocr::util::list_frames`）。
 pub fn ocr_entries(ocr: &mut SubtitleOcr, entries: &[OcrEntry]) -> Result<Vec<FrameResult>> {
     let mut out = Vec::with_capacity(entries.len());
     for e in entries {
         let rgb = load_rgb(&e.path)?;
         let boxes = ocr.ocr_image(&rgb)?;
         let aggregated = aggregate_boxes(&boxes);
-        for &ts in &e.times {
+        for ts in e.times.timestamps() {
             let mut fr = aggregated.clone();
             fr.timestamp_ms = ts;
             out.push(fr);
