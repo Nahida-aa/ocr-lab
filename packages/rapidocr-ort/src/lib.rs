@@ -115,6 +115,31 @@ pub struct OcrEngine {
     use_warp_crop: bool,
 }
 
+/// 由四边形顶点算 `x_range` / `y_range` 与几何中心（四点平均）。
+///
+/// 值域口径对齐 cpp/ts 的 `polygonToXyRange`（`min/max` 各分量），中心用于点击回灌。
+/// 单遍 `fold`（每个识别框都会调用，故避免多次扫描），无堆分配、无 `mut`。
+///
+/// 借 `glam::Vec2` 的按分量 `min`/`max`/`add`（底层 SSE）把 x/y 两路同构运算合并成
+/// 宽向量指令：一次 `Vec2::min` 同时得到 `min_x` 与 `min_y`，比逐标量写 4 个 `min` 更
+/// 紧凑；输入变大时也能真正跑出向量化收益。固定 4 点由 LLVM 完全展开，fold 与手写
+/// `for` 生成等价机器码。
+fn polygon_metrics(polygon: &[glam::Vec2; 4]) -> ([f32; 2], [f32; 2], [f32; 2]) {
+    let (min_xy, max_xy, sum) = polygon.iter().fold(
+        (
+            glam::Vec2::splat(f32::INFINITY),
+            glam::Vec2::splat(f32::NEG_INFINITY),
+            glam::Vec2::ZERO,
+        ),
+        |(min_xy, max_xy, sum), &p| (min_xy.min(p), max_xy.max(p), sum + p),
+    );
+    (
+        [min_xy.x, max_xy.x],
+        [min_xy.y, max_xy.y],
+        [sum.x / 4.0, sum.y / 4.0],
+    )
+}
+
 impl OcrEngine {
     /// 按预设套件构建引擎。
     ///
@@ -197,22 +222,9 @@ impl OcrEngine {
             if text.is_empty() {
                 continue;
             }
-            // 由四点算 x/y 值域与几何中心。
-            let (mut minx, mut maxx, mut miny, mut maxy) = (
-                f32::INFINITY,
-                f32::NEG_INFINITY,
-                f32::INFINITY,
-                f32::NEG_INFINITY,
-            );
-            let (mut sx, mut sy) = (0.0f32, 0.0f32);
-            for p in &b.polygon {
-                minx = minx.min(p.x);
-                maxx = maxx.max(p.x);
-                miny = miny.min(p.y);
-                maxy = maxy.max(p.y);
-                sx += p.x;
-                sy += p.y;
-            }
+            // 由四点算 x/y 值域与几何中心（对齐 cpp/ts 的 polygonToXyRange 口径，
+            // 这里额外返回几何中心用于点击回灌）。
+            let (x_range, y_range, center) = polygon_metrics(&b.polygon);
             results.push(OcrBoxResult {
                 text,
                 // 文字置信度（rec 分支平均字符概率）。
@@ -222,10 +234,10 @@ impl OcrEngine {
                 // 四个顶点转 [[x,y];4]。
                 box_: b.polygon.map(|p| [p.x, p.y]),
                 // 几何中心（四点平均），便于点击回灌。
-                center: [sx / 4.0, sy / 4.0],
+                center,
                 // 横/纵值域，便于按区域过滤。
-                x_range: [minx, maxx],
-                y_range: [miny, maxy],
+                x_range,
+                y_range,
             });
         }
         Ok(results)
