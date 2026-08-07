@@ -11,12 +11,13 @@
 //! - **多帧合并 + 计时**：相邻帧同文本合并成带 `start/end` 的段（LocalDub
 //!   `mergeFrames` 风格）。
 //!
-//! 计时口径与 cpp 一致：模型只加载一次，`--dir` 循环内仅对每帧累加推理耗时
-//! （cpp 的 `total = det + post + rec`；rapidocr-ort 的 `detect` 把 det/rec 合成一次
-//! 调用，故本包把整段 `detect` 计为 `detInferenceMs`，post/rec 记为 0，总和即 RTF 口径）。
+//! 计时口径：模型只加载一次，推理耗时由调用方自行测量（[`SubtitleOcr::ocr_image_timed`]
+//! 返回 `det_ms`，或 benchmark 在调用前后 `Instant::now()`）。rapidocr-ort 的 `detect`
+//! 把 det/rec 合成一次调用，无法单独计时，故本包只报整段 `detect` 的 `det_ms`。
+//! 这些耗时是旁路观测数据，不进入 JSON 输出（由 tracing 或调用方自行消费）。
 
 use anyhow::Result;
-use ndarray::{s, Array3};
+use ndarray::{Array3, s};
 use rapidocr_ort::{ModelProfile, OcrEngine};
 
 // ===========================================================================
@@ -109,8 +110,8 @@ impl SubtitleOcr {
         model_dir: &std::path::Path,
         opts: OcrOptions,
     ) -> Result<Self> {
-        let engine = OcrEngine::from_profile(profile, model_dir)?
-            .with_warp_crop(opts.use_warp_crop);
+        let engine =
+            OcrEngine::from_profile(profile, model_dir)?.with_warp_crop(opts.use_warp_crop);
         Ok(Self { engine, opts })
     }
 
@@ -185,15 +186,15 @@ impl SubtitleOcr {
     /// 同 [`ocr_image`]，但返回每帧推理耗时（毫秒）。
     ///
     /// rapidocr-ort 的 `detect` 把 det/rec 合成一次调用，无法单独计时；
-    /// 故把整段 `detect` 计为 `det_ms`，`post_ms`/`rec_ms` 记 0，三者之和即
-    /// cpp 的 `totalMs` 口径（post 在 rapidocr 内部极小，近似 0）。
+    /// 故把整段 `detect` 计为 `det_ms` 一并返回。调用方（benchmark / CLI）自行
+    /// 决定如何消费该耗时——bench 直接累加，CLI 经 `RUST_LOG=subtitle_ocr=debug`
+    /// 由 tracing 打印；它不进入 JSON 输出结构。
     pub fn ocr_image_timed(&mut self, rgb: &Array3<u8>) -> Result<(Vec<OcrBoxResult>, f64)> {
         let t0 = std::time::Instant::now();
-        let lines = self.ocr_image(rgb)?;
+        let boxes = self.ocr_image(rgb)?;
         let det_ms = t0.elapsed().as_secs_f64() * 1000.0;
-        Ok((lines, det_ms))
+        Ok((boxes, det_ms))
     }
-
 }
 
 /// 把一图识别出的多框聚合成单图结果（纯感知后处理，`timestamp_ms` 置 0）。
@@ -213,11 +214,7 @@ pub fn aggregate_boxes(lines: &[OcrBoxResult]) -> FrameResult {
     let confidence = if lines.is_empty() {
         0.0
     } else {
-        lines
-            .iter()
-            .map(|l| l.text_confidence as f64)
-            .sum::<f64>()
-            / lines.len() as f64
+        lines.iter().map(|l| l.text_confidence as f64).sum::<f64>() / lines.len() as f64
     };
     // 聚合所有行的四点坐标，取 x / y 值域（无字幕 → [0,0]）。
     let mut x_range = [f32::INFINITY, f32::NEG_INFINITY];
@@ -264,7 +261,12 @@ fn nms(mut lines: Vec<OcrBoxResult>) -> Vec<OcrBoxResult> {
         .iter()
         .enumerate()
         .map(|(idx, l)| {
-            let (mut x0, mut y0, mut x1, mut y1) = (f32::INFINITY, f32::INFINITY, f32::NEG_INFINITY, f32::NEG_INFINITY);
+            let (mut x0, mut y0, mut x1, mut y1) = (
+                f32::INFINITY,
+                f32::INFINITY,
+                f32::NEG_INFINITY,
+                f32::NEG_INFINITY,
+            );
             for p in &l.box_ {
                 x0 = x0.min(p[0]);
                 x1 = x1.max(p[0]);
@@ -272,11 +274,22 @@ fn nms(mut lines: Vec<OcrBoxResult>) -> Vec<OcrBoxResult> {
                 y1 = y1.max(p[1]);
             }
             let area = (x1 - x0).max(1.0) * (y1 - y0).max(1.0);
-            B { idx, x0, y0, x1, y1, area }
+            B {
+                idx,
+                x0,
+                y0,
+                x1,
+                y1,
+                area,
+            }
         })
         .collect();
     // 面积大的优先保留。
-    boxes.sort_by(|a, b| b.area.partial_cmp(&a.area).unwrap_or(std::cmp::Ordering::Equal));
+    boxes.sort_by(|a, b| {
+        b.area
+            .partial_cmp(&a.area)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
 
     let mut keep = vec![true; lines.len()];
     for i in 0..boxes.len() {
@@ -362,7 +375,12 @@ mod tests {
         let b = OcrBoxResult {
             text: "B".into(),
             text_confidence: 0.9,
-            box_: [[100.0, 100.0], [110.0, 100.0], [110.0, 110.0], [100.0, 110.0]],
+            box_: [
+                [100.0, 100.0],
+                [110.0, 100.0],
+                [110.0, 110.0],
+                [100.0, 110.0],
+            ],
             box_confidence: 0.9,
             x_range: [100.0, 110.0],
             y_range: [100.0, 110.0],

@@ -830,14 +830,17 @@ static std::string toJson(const OcrImgResult& r, const std::string& filename = "
     }
     ss << "]";
     ss << ", \"timestamp_ms\": " << r.timestamp_ms;
-    ss << ", \"charListLoadMs\": " << r.charListLoadMs
-       << ", \"imageLoadMs\": " << r.imageLoadMs
-       << ", \"modelLoadMs\": " << r.modelLoadMs
-       << ", \"detInferenceMs\": " << r.detMs
-       << ", \"postprocessMs\": " << r.postMs
-       << ", \"recInferenceMs\": " << r.recMs
-       << ", \"totalMs\": " << r.totalMs;
     ss << "}";
+    // 耗时是旁路观测数据，不进 JSON（对齐 Rust：由调用方 / tracing 消费）。
+    // 这里打到 stderr，方便单图调试，且不污染 stdout 的 JSON 数组。
+    std::cerr << "[ocr] file=" << filename
+              << " detMs=" << r.detMs
+              << " postMs=" << r.postMs
+              << " recMs=" << r.recMs
+              << " totalMs=" << r.totalMs
+              << " (load: charList=" << r.charListLoadMs
+              << " image=" << r.imageLoadMs
+              << " model=" << r.modelLoadMs << ")\n";
     return ss.str();
 }
 

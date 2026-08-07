@@ -1,8 +1,12 @@
 //! 命令行：`subtitle-ocr <image> [text_score]` 或 `subtitle-ocr --dir <dir> ...`
 //!
-//! 纯感知 OCR 工具，对标 cpp 的 `ocr_pipeline.cpp`：输出与 cpp 同形状的 JSON 数组，
-//! 每个元素含 `file` / `text` / `segments`（`text`/`confidence`/`box`）/
-//! `detInferenceMs` / `postprocessMs` / `recInferenceMs` / `totalMs`。
+//! 纯感知 OCR 工具，对标 cpp 的 `ocr_pipeline.cpp`：输出 JSON 数组，
+//! 每个元素含 `file` / `text` / `confidence` / `boxes` / `timestamp_ms`。
+//!
+//! 不含任何耗时字段——推理耗时是旁路观测数据，由调用方自行计时（
+//! [`subtitle_ocr::SubtitleOcr::ocr_image_timed`] 返回 `det_ms`，或 benchmark
+//! 自己在调用前后 `Instant::now()` 测量），CLI 同时把每图 `det_ms` 打到 stderr
+//! （`[ocr] ... det=...ms`），不污染 stdout 的 JSON 数组。
 //!
 //! 本 CLI 只做「逐图/批量 OCR」，不输出时间轴、不做帧合并——带时间戳的字幕段
 //! 由知道视频结构的上游（自行补 `start`/`end` 后调用 `subtitle-ocr-merge`）负责。
@@ -191,17 +195,17 @@ fn list_frames(dir: &Path, on_bad: BadNameAction) -> Result<Vec<DirEntry>> {
     Ok(entries)
 }
 
-/// 单帧输出（与 cpp toJson 对齐，字段统一蛇形）。
+/// 单帧输出：纯感知结果（文件名 / 文本 / 聚合置信度 / 各框 / 对应时刻）。
+///
+/// 不含任何耗时字段——推理耗时是旁路观测数据，由调用方自行计时
+/// （[`subtitle_ocr::SubtitleOcr::ocr_image_timed`] 返回 `det_ms`，或 benchmark
+/// 自己在调用前后 `Instant::now()` 测量），不污染 JSON 结构。
 #[derive(Serialize)]
 struct FrameOut {
     file: String,
     text: String,
     confidence: f64,
     boxes: Vec<subtitle_ocr::OcrBoxResult>,
-    det_inference_ms: f64,
-    postprocess_ms: f64,
-    rec_inference_ms: f64,
-    total_ms: f64,
     /// 该图对应时刻（毫秒）；0 表示无时间（单图 `<image>`）。
     timestamp_ms: u64,
 }
@@ -243,6 +247,8 @@ fn main() -> Result<()> {
         // 仅识别一次：ms_ms 的同一张图读图 + OCR 一次。
         let rgb = load_rgb(&entry.path)?;
         let (boxes, det_ms) = ocr.ocr_image_timed(&rgb)?;
+        // 耗时是旁路观测数据，不进 JSON；打到 stderr 便于调试，不污染 stdout 的 JSON 数组。
+        eprintln!("[ocr] {} det={:.1}ms", entry.path.display(), det_ms);
         // 聚合一次（text 拼接 / confidence 取均值 / 值域），timestamp 先置 0。
         let aggregated = subtitle_ocr::aggregate_boxes(&boxes);
 
@@ -262,10 +268,6 @@ fn main() -> Result<()> {
                 text: fr.text.clone(),
                 confidence: fr.confidence,
                 boxes: fr.boxes.clone(),
-                det_inference_ms: det_ms,
-                postprocess_ms: 0.0, // rapidocr-ort detect 内部不单独计时
-                rec_inference_ms: 0.0,
-                total_ms: det_ms,
                 timestamp_ms: ts,
             });
         }

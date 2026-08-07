@@ -53,14 +53,14 @@ fn tmp_dir() -> PathBuf {
 
 /// 对齐 ocrFrameCpp：单帧模式调用 cpp 二进制，取 segments 里最高 confidence 的
 /// 一个作为该帧文本（丢弃 box，对齐原版行为）。
+///
+/// 只保留 `total_ms`——推理耗时由 benchmark 自己在调用前后 `Instant::now()`
+/// 测量（不依赖二进制把计时塞进 JSON；计时是旁路观测数据）。
 #[derive(Default)]
 struct CppFrame {
     text: String,
     confidence: f64,
     total_ms: f64,
-    det_ms: f64,
-    post_ms: f64,
-    rec_ms: f64,
 }
 
 fn ocr_frame_cpp(
@@ -82,11 +82,13 @@ fn ocr_frame_cpp(
         args.push("--threads".to_string());
         args.push(n.to_string());
     }
+    let t0 = std::time::Instant::now();
     let out = Command::new(&bin)
         .args(&args)
         .env("OCR_MODELS_DIR", &md)
         .env("OCR_KEYS_PATH", md.join("ppocr_keys.json"))
         .output();
+    let wall_ms = t0.elapsed().as_secs_f64() * 1000.0;
     match out {
         Ok(o) if o.status.success() => {
             let parsed: serde_json::Value = serde_json::from_slice(&o.stdout).unwrap_or(serde_json::Value::Null);
@@ -105,18 +107,11 @@ fn ocr_frame_cpp(
                 })
                 .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
             let (text, confidence) = best.unwrap_or_default();
-            // 纯推理耗时 = det + post + rec，排除模型/字符表加载（单帧模式每进程
-            // 重加载，若计入 totalMs 会把 RTF 放大 N 倍，无法与 --dir 批量模式横比）。
-            let det = data.get("detInferenceMs").and_then(|x| x.as_f64()).unwrap_or(0.0);
-            let post = data.get("postprocessMs").and_then(|x| x.as_f64()).unwrap_or(0.0);
-            let rec = data.get("recInferenceMs").and_then(|x| x.as_f64()).unwrap_or(0.0);
+            // 耗时由 benchmark 自身测量（子进程 wall time），不读 JSON 计时字段。
             CppFrame {
                 text,
                 confidence,
-                total_ms: det + post + rec,
-                det_ms: det,
-                post_ms: post,
-                rec_ms: rec,
+                total_ms: wall_ms,
             }
         }
         _ => {
@@ -147,16 +142,20 @@ fn ocr_dir_cpp(
         args.push("--threads".to_string());
         args.push(n.to_string());
     }
+    let t0 = std::time::Instant::now();
     let out = Command::new(&bin)
         .args(&args)
         .env("OCR_MODELS_DIR", &md)
         .env("OCR_KEYS_PATH", md.join("ppocr_keys.json"))
         .output();
+    let wall_ms = t0.elapsed().as_secs_f64() * 1000.0;
     match out {
         Ok(o) if o.status.success() => {
             let parsed: serde_json::Value =
                 serde_json::from_slice(&o.stdout).unwrap_or(serde_json::Value::Null);
             let arr = parsed.as_array().cloned().unwrap_or_default();
+            // 批量模式模型只加载一次，wall time 平摊到每帧作为 per-frame total_ms。
+            let per = if arr.is_empty() { 0.0 } else { wall_ms / arr.len() as f64 };
             arr.iter()
                 .map(|data| {
                     let segs = data.get("segments").and_then(|s| s.as_array()).cloned().unwrap_or_default();
@@ -169,16 +168,10 @@ fn ocr_dir_cpp(
                         })
                         .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
                     let (text, confidence) = best.unwrap_or_default();
-                    let det = data.get("detInferenceMs").and_then(|x| x.as_f64()).unwrap_or(0.0);
-                    let post = data.get("postprocessMs").and_then(|x| x.as_f64()).unwrap_or(0.0);
-                    let rec = data.get("recInferenceMs").and_then(|x| x.as_f64()).unwrap_or(0.0);
                     CppFrame {
                         text,
                         confidence,
-                        total_ms: det + post + rec,
-                        det_ms: det,
-                        post_ms: post,
-                        rec_ms: rec,
+                        total_ms: per,
                     }
                 })
                 .collect()
@@ -211,12 +204,10 @@ struct Summary {
     timings: Option<Timings>,
 }
 
+/// OCR 推理耗时汇总（由 benchmark 自身测量，单位 ms）。
 struct Timings {
     total: f64,
     avg_per_frame: f64,
-    det: f64,
-    post: f64,
-    rec: f64,
 }
 
 /// rust 实现二进制路径（与 cpp 对称，在 packages/subtitle-ocr 下构建）。
@@ -249,9 +240,11 @@ fn ocr_frame_rust(
     if subtitle_only {
         args.push("--subtitle-only".to_string());
     }
+    let t0 = std::time::Instant::now();
     let out = Command::new(&bin).args(&args).output();
+    let wall_ms = t0.elapsed().as_secs_f64() * 1000.0;
     // 单帧模式：rust 仍输出单元素数组，取首个。
-    parse_rust_json(out, "single-frame")
+    parse_rust_json(out, "single-frame", wall_ms)
         .into_iter()
         .next()
         .unwrap_or_default()
@@ -277,13 +270,29 @@ fn ocr_dir_rust(
     if warp_crop {
         args.push("--warp-crop".to_string());
     }
+    let t0 = std::time::Instant::now();
     let out = Command::new(&bin).args(&args).output();
-    parse_rust_json(out, "dir")
+    let wall_ms = t0.elapsed().as_secs_f64() * 1000.0;
+    // 批量模式模型只加载一次，wall time 平摊到每帧。
+    let n = out.as_ref().ok().and_then(|o| {
+        serde_json::from_slice::<serde_json::Value>(&o.stdout)
+            .ok()
+            .and_then(|v| v.as_array().map(|a| a.len()))
+    }).unwrap_or(0);
+    let per = if n == 0 { 0.0 } else { wall_ms / n as f64 };
+    parse_rust_json(out, "dir", per)
 }
 
-/// 解析 rust 二进制输出（JSON 数组，每元素含 segments / detInferenceMs 等），
+/// 解析 rust 二进制输出（JSON 数组，每元素含 segments / text / confidence / boxes）。
 /// 形状与 cpp 一致，故直接复用 CppFrame。
-fn parse_rust_json(out: Result<std::process::Output, std::io::Error>, mode: &str) -> Vec<CppFrame> {
+///
+/// `per_ms` 为 benchmark 自身测量的每帧耗时（调用方在 `Command::output()` 前后
+/// 计 wall time 后平摊传入），不依赖二进制把计时塞进 JSON。
+fn parse_rust_json(
+    out: Result<std::process::Output, std::io::Error>,
+    mode: &str,
+    per_ms: f64,
+) -> Vec<CppFrame> {
     match out {
         Ok(o) if o.status.success() => {
             let parsed: serde_json::Value =
@@ -306,18 +315,10 @@ fn parse_rust_json(out: Result<std::process::Output, std::io::Error>, mode: &str
                         })
                         .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
                     let (text, confidence) = best.unwrap_or_default();
-                    // rust 的 det/rec 在 rapidocr-ort detect 内 fused：整段 detect 计为
-                    // detInferenceMs，post/rec 记 0，三者之和即 cpp 的 totalMs 口径。
-                    let det = data.get("detInferenceMs").and_then(|x| x.as_f64()).unwrap_or(0.0);
-                    let post = data.get("postprocessMs").and_then(|x| x.as_f64()).unwrap_or(0.0);
-                    let rec = data.get("recInferenceMs").and_then(|x| x.as_f64()).unwrap_or(0.0);
                     CppFrame {
                         text,
                         confidence,
-                        total_ms: det + post + rec,
-                        det_ms: det,
-                        post_ms: post,
-                        rec_ms: rec,
+                        total_ms: per_ms,
                     }
                 })
                 .collect()
@@ -354,9 +355,6 @@ fn run_benchmark_cpp(
     // 调用 cpp：--dir 批量 or 逐帧单帧（由 use_dir 控制，而非拆成两个 runner）
     let mut frame_results: Vec<FrameResult> = Vec::new();
     let mut total_ms = 0.0f64;
-    let mut total_det = 0.0f64;
-    let mut total_post = 0.0f64;
-    let mut total_rec = 0.0f64;
 
     if use_dir {
         // 批量模式：一次喂整个目录，按其返回顺序对应帧文件
@@ -370,9 +368,6 @@ fn run_benchmark_cpp(
                 bbox: None,
             });
             total_ms += r.total_ms;
-            total_det += r.det_ms;
-            total_post += r.post_ms;
-            total_rec += r.rec_ms;
         }
     } else {
         // 逐帧单帧模式（对齐 ocrFrameCpp）
@@ -386,9 +381,6 @@ fn run_benchmark_cpp(
                 bbox: None, // 对齐 ocrFrameCpp 丢弃 box
             });
             total_ms += r.total_ms;
-            total_det += r.det_ms;
-            total_post += r.post_ms;
-            total_rec += r.rec_ms;
         }
     }
 
@@ -400,7 +392,7 @@ fn run_benchmark_cpp(
     } else {
         0.0
     };
-    let has_timings = total_det > 0.0 || total_post > 0.0 || total_rec > 0.0;
+    let has_timings = total_ms > 0.0;
 
     // 写 ocr.json（对齐 runBenchmarkCommon 的 ocrOutput 结构）
     let ocr_output = serde_json::json!({
@@ -426,9 +418,6 @@ fn run_benchmark_cpp(
             serde_json::json!({
                 "total": total_ms.round() as u64,
                 "averagePerFrame": (total_ms / frame_results.len().max(1) as f64).round() as u64,
-                "det": total_det.round() as u64,
-                "post": total_post.round() as u64,
-                "rec": total_rec.round() as u64,
             })
         } else {
             serde_json::Value::Null
@@ -469,9 +458,6 @@ fn run_benchmark_cpp(
             Some(Timings {
                 total: total_ms,
                 avg_per_frame: total_ms / frame_results.len().max(1) as f64,
-                det: total_det,
-                post: total_post,
-                rec: total_rec,
             })
         } else {
             None
@@ -521,9 +507,6 @@ fn run_benchmark_cpp(
         "ocr_timings_ms": summary.timings.as_ref().map(|t| serde_json::json!({
             "total": t.total.round() as u64,
             "avgPerFrame": t.avg_per_frame.round() as u64,
-            "det": t.det.round() as u64,
-            "post": t.post.round() as u64,
-            "rec": t.rec.round() as u64,
         })),
     });
     std::fs::write(
@@ -541,14 +524,8 @@ fn run_benchmark_cpp(
     println!("  segs={} dur={:.1}s", segments.len(), duration_s);
     if has_timings {
         println!(
-            "  det={}ms post={}ms rec={}ms total={}ms",
-            total_det.round() as u64,
-            total_post.round() as u64,
-            total_rec.round() as u64,
-            total_ms.round() as u64
-        );
-        println!(
-            "  avg/frame={}ms  inference={:.3}s RTF={:.4}",
+            "  total={}ms  avg/frame={}ms  inference={:.3}s RTF={:.4}",
+            total_ms.round() as u64,
             (total_ms / frame_results.len().max(1) as f64).round() as u64,
             inference_s,
             rtf
@@ -594,9 +571,6 @@ fn run_benchmark_rust(
 
     let mut frame_results: Vec<FrameResult> = Vec::new();
     let mut total_ms = 0.0f64;
-    let mut total_det = 0.0f64;
-    let mut total_post = 0.0f64;
-    let mut total_rec = 0.0f64;
 
     if use_dir {
         let results = ocr_dir_rust(&out_dir, Some(text_score), subtitle_only, threads, warp_crop);
@@ -609,9 +583,6 @@ fn run_benchmark_rust(
                 bbox: None,
             });
             total_ms += r.total_ms;
-            total_det += r.det_ms;
-            total_post += r.post_ms;
-            total_rec += r.rec_ms;
         }
     } else {
         for (i, f) in frame_files.iter().enumerate() {
@@ -624,9 +595,6 @@ fn run_benchmark_rust(
                 bbox: None,
             });
             total_ms += r.total_ms;
-            total_post += r.post_ms;
-            total_rec += r.rec_ms;
-            total_det += r.det_ms;
         }
     }
 
@@ -637,7 +605,7 @@ fn run_benchmark_rust(
     } else {
         0.0
     };
-    let has_timings = total_det > 0.0 || total_post > 0.0 || total_rec > 0.0;
+    let has_timings = total_ms > 0.0;
 
     let ocr_output = serde_json::json!({
         "audio_info": {
@@ -662,9 +630,6 @@ fn run_benchmark_rust(
             serde_json::json!({
                 "total": total_ms.round() as u64,
                 "averagePerFrame": (total_ms / frame_results.len().max(1) as f64).round() as u64,
-                "det": total_det.round() as u64,
-                "post": total_post.round() as u64,
-                "rec": total_rec.round() as u64,
             })
         } else {
             serde_json::Value::Null
@@ -703,9 +668,6 @@ fn run_benchmark_rust(
             Some(Timings {
                 total: total_ms,
                 avg_per_frame: total_ms / frame_results.len().max(1) as f64,
-                det: total_det,
-                post: total_post,
-                rec: total_rec,
             })
         } else {
             None
@@ -752,9 +714,6 @@ fn run_benchmark_rust(
         "ocr_timings_ms": summary.timings.as_ref().map(|t| serde_json::json!({
             "total": t.total.round() as u64,
             "avgPerFrame": t.avg_per_frame.round() as u64,
-            "det": t.det.round() as u64,
-            "post": t.post.round() as u64,
-            "rec": t.rec.round() as u64,
         })),
     });
     std::fs::write(
@@ -771,14 +730,8 @@ fn run_benchmark_rust(
     println!("  segs={} dur={:.1}s", segments.len(), duration_s);
     if has_timings {
         println!(
-            "  det={}ms post={}ms rec={}ms total={}ms",
-            total_det.round() as u64,
-            total_post.round() as u64,
-            total_rec.round() as u64,
-            total_ms.round() as u64
-        );
-        println!(
-            "  avg/frame={}ms  inference={:.3}s RTF={:.4}",
+            "  total={}ms  avg/frame={}ms  inference={:.3}s RTF={:.4}",
+            total_ms.round() as u64,
             (total_ms / frame_results.len().max(1) as f64).round() as u64,
             inference_s,
             rtf
@@ -833,14 +786,8 @@ fn run_benchmark_sf(
     // 批量 OCR。
     let results = ocr_dir_rust(&out_dir, Some(text_score), subtitle_only, threads, warp_crop);
     let mut total_ms = 0.0f64;
-    let mut total_det = 0.0f64;
-    let mut total_post = 0.0f64;
-    let mut total_rec = 0.0f64;
     for r in &results {
         total_ms += r.total_ms;
-        total_det += r.det_ms;
-        total_post += r.post_ms;
-        total_rec += r.rec_ms;
     }
 
     // 每个关键帧 = 一个字幕段（用关键帧自带时间轴）。
@@ -889,7 +836,7 @@ fn run_benchmark_sf(
     let cer = eval_cer(&ocr_path, &gt_path());
     let align = align_segments(&load_timed_segments(&gt_path()), &load_timed_segments(&ocr_path));
     let inference_s = total_ms / 1000.0;
-    let has_timings = total_det > 0.0 || total_post > 0.0 || total_rec > 0.0;
+    let has_timings = total_ms > 0.0;
 
     let summary_json = serde_json::json!({
         "label": label,
@@ -928,9 +875,6 @@ fn run_benchmark_sf(
             serde_json::json!({
                 "total": total_ms.round() as u64,
                 "avgPerFrame": (total_ms / results.len().max(1) as f64).round() as u64,
-                "det": total_det.round() as u64,
-                "post": total_post.round() as u64,
-                "rec": total_rec.round() as u64,
             })
         } else {
             serde_json::Value::Null
