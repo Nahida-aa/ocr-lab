@@ -18,6 +18,7 @@
 use anyhow::Result;
 use ndarray::{Array3, s};
 use rapidocr_ort::{ModelProfile, OcrEngine};
+use serde::Serialize;
 
 // ===========================================================================
 // 选项与结果类型
@@ -69,7 +70,7 @@ pub use rapidocr_ort::OcrBoxResult;
 ///
 /// 本库仍只吃一张图、不知道图片整体来源结构；把多个 `FrameResult` 合并成
 /// 带时间轴的字幕段由独立合并层 `subtitle-ocr-merge` 负责。
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize)]
 pub struct FrameResult {
     /// 该图识别文本（多行按出现顺序拼接，用空格分隔）。
     pub text: String,

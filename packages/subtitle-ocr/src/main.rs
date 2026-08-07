@@ -13,7 +13,6 @@
 use anyhow::{Context, Result};
 use clap::{Parser, ValueEnum};
 use ndarray::Array3;
-use serde::Serialize;
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 use subtitle_ocr::{OcrOptions, SubtitleOcr};
@@ -197,20 +196,12 @@ fn list_frames(dir: &Path, on_bad: BadNameAction) -> Result<Vec<DirEntry>> {
     Ok(entries)
 }
 
-/// 单帧输出：纯感知结果（文本 / 聚合置信度 / 各框 / 对应时刻）。
+/// 单帧输出直接复用库里的 [`subtitle_ocr::FrameResult`]（文本 / 聚合置信度 /
+/// 各框明细 / 几何值域 / 对应时刻），不再另定义输出结构。
 ///
 /// 不含输入文件名——调用方本就知道自己喂了哪张图，批量模式下时刻信息已体现在
 /// `timestamp_ms`；也不含耗时字段——推理耗时是旁路观测数据，由调用方自行计时
 /// （在 `ocr_image` 调用前后 `Instant::now()` 测量），不污染 JSON 结构。
-#[derive(Serialize)]
-struct FrameOut {
-    text: String,
-    confidence: f64,
-    boxes: Vec<subtitle_ocr::OcrBoxResult>,
-    /// 该图对应时刻（毫秒）；0 表示无时间（单图 `<image>`）。
-    timestamp_ms: u64,
-}
-
 fn main() -> Result<()> {
     let cli = Cli::parse();
 
@@ -242,7 +233,7 @@ fn main() -> Result<()> {
         anyhow::bail!("必须提供 <image> 或 --dir <dir>");
     };
 
-    let mut frame_outs: Vec<FrameOut> = Vec::with_capacity(entries.len());
+    let mut frame_outs: Vec<subtitle_ocr::FrameResult> = Vec::with_capacity(entries.len());
 
     for entry in entries.iter() {
         // 仅识别一次：ms_ms 的同一张图读图 + OCR 一次。
@@ -256,12 +247,7 @@ fn main() -> Result<()> {
         for &ts in &entry.times {
             let mut fr = aggregated.clone();
             fr.timestamp_ms = ts;
-            frame_outs.push(FrameOut {
-                text: fr.text.clone(),
-                confidence: fr.confidence,
-                boxes: fr.boxes.clone(),
-                timestamp_ms: ts,
-            });
+            frame_outs.push(fr);
         }
     }
 
