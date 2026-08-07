@@ -7,6 +7,6 @@ publish.workspace = true
 
 [dependencies]
 # 图像类型与转换（rgba → rgb 等）。
-image = "0.25"
+image.workspace = true
 # 错误链。
 anyhow = { workspace = true }

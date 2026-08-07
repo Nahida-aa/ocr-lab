@@ -14,16 +14,18 @@ path = "src/lib.rs"
 # 几何 / SIMD 像素算子（交集、投影等）。
 geometry = { workspace = true }
 # 图像读取（RGB HWC u8）。
-image = "0.25"
+image.workspace = true
 # 张量 / 序列化 / 错误链。
-ndarray = "0.17"
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+ndarray.workspace = true
+serde.workspace = true
+serde_json.workspace = true
 anyhow.workspace = true
+# CLI 参数解析（--output 枚举控制输出模式）。
+clap.workspace = true
 # 连通域（文字块检测），替代手写 CMyClosedFigure。
 opencv = { workspace = true }
 # 视频逐帧解码（30fps）。
 ffmpeg-next = { workspace = true }
 # 结构化调试日志（对齐项目约定：调试日志用 tracing）。
 tracing = { workspace = true }
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-subscriber.workspace = true

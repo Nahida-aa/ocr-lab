@@ -15,9 +15,9 @@ subtitle-ocr = { workspace = true }
 rapidocr-ort = { workspace = true }
 anyhow.workspace = true
 # sf 基准：把 subtitle-finder 关键帧原始帧存 PNG。
-image = "0.25"
+image.workspace = true
 # sf 基准：关键帧 frame 是 ndarray Array3。
-ndarray = "0.17"
+ndarray.workspace = true
 
 [lib]
 name = "bench_subtitle_ocr"

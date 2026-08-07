@@ -47,8 +47,14 @@ topics = [
 
 [workspace.dependencies]
 anyhow = "1.0"
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tracing = "0.1"
+# 结构化日志订阅端（RUST_LOG 过滤），各 CLI / dev-dependencies 共用。
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+# 张量/HWC u8 图像缓冲：版本须统一（ort rc.13 内部锁定 ndarray 0.17）。
+ndarray = "0.17"
 rust-embed = { version = "8.11", features = ["include-exclude"] }
 # 通用图像转换工具（rgba→rgb 等），与业务解耦。
 image-util = { path = "crates/image_util" }

@@ -15,7 +15,7 @@ publish.workspace = true
 # （与 oo7 对齐）+ screenshot。调用方用 async_io::block_on 驱动其 future。
 ashpd = { version = "0.13", default-features = false, features = ["screenshot", "screencast", "async-io"] }
 # 图像读取/裁切/保存。
-image = "0.25"
+image.workspace = true
 anyhow = { workspace = true }
 # 异步运行时：ashpd 走 async-io 后端，CLI 用 async_io::block_on 驱动其 future。
 async-io = "2"

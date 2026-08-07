@@ -16,5 +16,5 @@ path = "src/lib.rs"
 # 以保持 subtitle-ocr 作为纯感知库、不耦合合并逻辑。
 subtitle-ocr = { workspace = true }
 # Segment 需要序列化；levenshtein/merge 纯算法无外部依赖。
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+serde.workspace = true
+serde_json.workspace = true

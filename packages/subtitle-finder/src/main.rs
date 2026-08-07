@@ -3,15 +3,45 @@
 //! 用法：
 //!   cargo run -p subtitle-finder --release -- <video.mp4>
 //!   cargo run -p subtitle-finder --release -- --profile <video.mp4>  # 附性能剖析
-//!   cargo run -p subtitle-finder --release -- --no-save <video.mp4>   # 只写 timeline.txt，不写关键帧图
+//!   cargo run -p subtitle-finder --release -- --output timeline <video.mp4>  # 只写 timeline.txt，不写关键帧图
 //!
-//! 输出：
-//!   - 关键帧 PNG 图（RGB，H×W）到 `out/` 目录，文件名 `{start_ms}_{end_ms}_{i}.png`
-//!   - `out/timeline.txt`：每行 `start_ms,end_ms`（字幕段时间轴）
-//!   - `out/keyframes.json`：结构化列表 { start_ms, end_ms, image }
-//!   - `--no-save` 时只写 `timeline.txt`，跳过 PNG / keyframes.json（纯算法计时用）。
+//! 输出（由 `--output` 控制）：
+//!   - `full`（默认）：关键帧 PNG（RGB，H×W，文件名 `{start_ms}_{end_ms}_{i}.png`）、
+//!     去背景掩码 PNG（`{...}_mask.png`）、`timeline.txt`（每行 `start_ms,end_ms`）、
+//!     `keyframes.json`（结构化列表）。
+//!   - `timeline`：只写 `timeline.txt`，跳过 PNG / keyframes.json（纯算法计时用）。
 
+use clap::{Parser, ValueEnum};
 use std::path::PathBuf;
+
+/// 输出模式：控制落盘哪些产物。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
+enum OutputMode {
+    /// 写关键帧 PNG + 掩码 PNG + timeline.txt + keyframes.json（默认）。
+    Full,
+    /// 只写 timeline.txt（纯算法计时，不落盘图片）。
+    Timeline,
+}
+
+#[derive(Parser, Debug)]
+#[command(name = "subtitle-finder", about = "对视频跑字幕关键帧筛选，输出关键帧 + 时间轴")]
+struct Cli {
+    /// 附性能剖析（分阶段耗时统计）。
+    #[arg(long)]
+    profile: bool,
+
+    /// 输出模式：full=全量产物，timeline=只写时间轴。
+    #[arg(long, value_enum, default_value_t = OutputMode::Full)]
+    output: OutputMode,
+
+    /// 输出目录（相对当前工作目录）；默认包内 out/。
+    #[arg(long)]
+    out: Option<String>,
+
+    /// 输入视频路径。
+    #[arg(required = true)]
+    video: String,
+}
 
 fn main() -> anyhow::Result<()> {
     // 初始化结构化日志（`RUST_LOG=subtitle_finder=debug` 可开调试日志）。
@@ -22,29 +52,10 @@ fn main() -> anyhow::Result<()> {
         )
         .init();
 
-    let args: Vec<String> = std::env::args().collect();
-    if args.len() < 2 {
-        anyhow::bail!("用法: subtitle-finder [--profile] [--no-save] [--out <dir>] <video.mp4>");
-    }
-    let mut profile = false;
-    let mut no_save = false;
-    let mut video_path: Option<String> = None;
-    let mut out_dir_arg: Option<String> = None;
-    let mut i = 1;
-    while i < args.len() {
-        match args[i].as_str() {
-            "--profile" => profile = true,
-            "--no-save" => no_save = true,
-            "--out" => {
-                i += 1;
-                out_dir_arg = args.get(i).cloned();
-            }
-            _ => video_path = Some(args[i].clone()),
-        }
-        i += 1;
-    }
-    let video_path = video_path.ok_or_else(|| anyhow::anyhow!("缺少视频路径"))?;
-    let video = PathBuf::from(&video_path);
+    let cli = Cli::parse();
+    let profile = cli.profile;
+    let no_save = cli.output == OutputMode::Timeline;
+    let video = PathBuf::from(&cli.video);
     if !video.exists() {
         anyhow::bail!("视频不存在: {}", video.display());
     }
@@ -67,7 +78,7 @@ fn main() -> anyhow::Result<()> {
     println!("找到 {} 个关键帧", kfs.len());
 
     // 输出目录：默认包内 out/；--out 指定（相对当前工作目录）。
-    let out_dir = match out_dir_arg {
+    let out_dir = match cli.out {
         Some(d) => PathBuf::from(d),
         None => PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("out"),
     };
@@ -93,7 +104,7 @@ fn main() -> anyhow::Result<()> {
             ));
         }
 
-        // 时间轴（--no-save 也写，是纯计时也要的最小产物）。
+        // 时间轴（timeline 模式也写，是纯计时也要的最小产物）。
         timeline.push_str(&format!("{},{}\n", kf.start_ms, kf.end_ms));
     }
 

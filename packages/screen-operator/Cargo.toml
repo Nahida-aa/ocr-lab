@@ -19,4 +19,4 @@ dbus = "0.9"
 # 示例侧依赖（examples 可用 dev-dependencies）。
 [dev-dependencies]
 # 日志/追踪：用 RUST_LOG=debug 开启 screen-operator 的移动每步调试。
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-subscriber.workspace = true

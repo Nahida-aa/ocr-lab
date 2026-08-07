@@ -21,8 +21,8 @@ path = "src/main.rs"
 rapidocr-ort = { workspace = true }
 # 错误链 / 图像读取（RGB HWC u8）/ 张量 / 序列化 / CLI。
 anyhow.workspace = true
-image = "0.25"
-ndarray = "0.17"
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-clap = { version = "4", features = ["derive"] }
+image.workspace = true
+ndarray.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+clap.workspace = true

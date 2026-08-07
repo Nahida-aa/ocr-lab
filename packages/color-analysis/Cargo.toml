@@ -11,6 +11,6 @@ path = "src/lib.rs"
 
 [dependencies]
 # 图像读取与像素访问（RgbImage / RgbaImage）。
-image = "0.25"
+image.workspace = true
 # 错误链。
 anyhow.workspace = true

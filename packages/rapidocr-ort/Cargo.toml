@@ -20,12 +20,12 @@ path = "src/main.rs"
 # 时参数选择，不条件编译。
 ort = { workspace = true, features = ["ndarray"] }
 # 图像读取 + 预处理（Resize/Normalize/CHW 排列）。
-image = "0.25"
+image.workspace = true
 # 矩阵/张量：版本必须与 ort(rc.13) 内部锁定的 ndarray 0.17 一致，否则 Array
 # 类型不匹配（ort 的 OwnedTensorArrayData 只对其锁定的那份 ndarray 实现）。
-ndarray = "0.17"
+ndarray.workspace = true
 # 字典解析：v3 的 ppocr_keys.json 是 JSON 数组，v6 的 .txt 按行。
-serde_json = "1"
+serde_json.workspace = true
 # 错误链。
 anyhow.workspace = true
 opencv = { workspace = true }
@@ -37,5 +37,5 @@ glam = { workspace = true }
 faer = { workspace = true }
 
 # 二进制侧依赖
-clap = { version = "4", features = ["derive"] }
-serde = { version = "1", features = ["derive"] }
+clap.workspace = true
+serde.workspace = true
