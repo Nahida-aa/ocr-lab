@@ -15,10 +15,11 @@
 //! `Instant::now()` 即可）。rapidocr-ort 的 `detect` 把 det/rec 合成一次调用，无法
 //! 单独计时，故本包不内置计时。这些耗时是旁路观测数据，不进入 JSON 输出。
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use ndarray::{Array3, s};
 use rapidocr_ort::{ModelProfile, OcrEngine};
 use serde::Serialize;
+use std::path::{Path, PathBuf};
 
 // ===========================================================================
 // 选项与结果类型
@@ -227,6 +228,61 @@ pub fn aggregate_boxes(lines: &[OcrBoxResult]) -> FrameResult {
         y_range,
         timestamp_ms: 0,
     }
+}
+
+// ===========================================================================
+// 批量入口：把「图片路径 + 时刻」列表跑完 OCR 并聚合
+// ===========================================================================
+
+/// 一张待识别图片及其对应时刻（批量入口 [`ocr_entries`] 的输入单元）。
+///
+/// `times` 约定见 [`aggregate_boxes`] 的单参数设计：
+/// - `ms` 文件名 → `[t]`
+/// - `ms_ms` 文件名 → `[start, end]`（同一张图仅识别一次，产出两个 `FrameResult`）
+/// - 单图无时间 → `[0]`
+pub struct OcrEntry {
+    pub path: PathBuf,
+    pub times: Vec<u64>,
+}
+
+/// 对一组 [`OcrEntry`] 跑 OCR 并聚合，返回按时刻展开的 [`FrameResult`] 列表。
+///
+/// 这是「读图 → 识别 → 聚合 → 按时刻展开」的核心流程，供 CLI / benchmark / 测试
+/// 直接复用，无需各自照抄。每张图**仅识别一次**：`ms_ms` 同一张图产出多个
+/// `FrameResult`，内容相同、仅 `timestamp_ms` 不同（避免对同一 boxes 重复聚合）。
+///
+/// 本函数不含：耗时测量（调用方在 `ocr_image` 前后自行 `Instant`）、JSON 序列化、
+/// 目录扫描 / 文件名解析（这些留给调用方，CLI 用 [`crate::`] 的 `list_frames` 风格）。
+pub fn ocr_entries(ocr: &mut SubtitleOcr, entries: &[OcrEntry]) -> Result<Vec<FrameResult>> {
+    let mut out = Vec::with_capacity(entries.len());
+    for e in entries {
+        let rgb = load_rgb(&e.path)?;
+        let boxes = ocr.ocr_image(&rgb)?;
+        let aggregated = aggregate_boxes(&boxes);
+        for &ts in &e.times {
+            let mut fr = aggregated.clone();
+            fr.timestamp_ms = ts;
+            out.push(fr);
+        }
+    }
+    Ok(out)
+}
+
+/// 读图为 BGR HWC u8 的 `Array3`。
+///
+/// 用 BGR 而非 RGB：PP-OCR/rapidocr 模型按 `cv2.imread`（BGR）训练（cpp 同款）。
+/// 用 RGB 会让彩色字幕出现漏检/误识，故这里统一转 BGR 对齐。
+fn load_rgb(path: &Path) -> Result<Array3<u8>> {
+    let img = image::open(path)
+        .with_context(|| format!("读取图片失败: {}", path.display()))?
+        .to_rgb8();
+    let (w, h) = (img.width() as usize, img.height() as usize);
+    let mut data = img.into_raw();
+    // RGB→BGR：image crate 给 RGB，模型要 BGR。
+    for px in data.chunks_mut(3) {
+        px.swap(0, 2);
+    }
+    Array3::from_shape_vec((h, w, 3), data).context("图像数据重塑失败（维度不匹配）")
 }
 
 // ===========================================================================

@@ -12,7 +12,6 @@
 
 use anyhow::{Context, Result};
 use clap::{Parser, ValueEnum};
-use ndarray::Array3;
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 use subtitle_ocr::{OcrOptions, SubtitleOcr};
@@ -26,15 +25,8 @@ enum BadNameAction {
     Error,
 }
 
-/// 目录里一张待识别图片的解析结果。
-///
-/// `times` 为该图对应的时刻列表：
-/// - `ms` 文件名 → 单元素 `[t]`
-/// - `ms_ms` 文件名 → 双元素 `[start, end]`（同一张图仅识别一次，产出两个 FrameResult）
-struct DirEntry {
-    path: PathBuf,
-    times: Vec<u64>,
-}
+/// 目录里一张待识别图片的解析结果（复用库里的 [`subtitle_ocr::OcrEntry`]）。
+type DirEntry = subtitle_ocr::OcrEntry;
 
 #[derive(Parser, Debug)]
 #[command(
@@ -112,23 +104,6 @@ fn resolve_path(repo_root: &Path, p: &str) -> PathBuf {
     } else {
         repo_root.join(path)
     }
-}
-
-/// 读图为 BGR HWC u8 的 `Array3`。
-///
-/// 用 BGR 而非 RGB：PP-OCR/rapidocr 模型按 `cv2.imread`（BGR）训练（cpp 同款）。
-/// 用 RGB 会让彩色字幕（如本视频的 '啊'）出现漏检/误识，故这里统一转 BGR 对齐。
-fn load_rgb(path: &Path) -> Result<Array3<u8>> {
-    let img = image::open(path)
-        .with_context(|| format!("读取图片失败: {}", path.display()))?
-        .to_rgb8();
-    let (w, h) = (img.width() as usize, img.height() as usize);
-    let mut data = img.into_raw();
-    // RGB→BGR：image crate 给 RGB，模型要 BGR。
-    for px in data.chunks_mut(3) {
-        px.swap(0, 2);
-    }
-    Array3::from_shape_vec((h, w, 3), data).context("图像数据重塑失败（维度不匹配）")
 }
 
 /// 解析文件名里的时刻：支持 `ms` 或 `ms_ms`，可前置多余 0。
@@ -233,23 +208,8 @@ fn main() -> Result<()> {
         anyhow::bail!("必须提供 <image> 或 --dir <dir>");
     };
 
-    let mut frame_outs: Vec<subtitle_ocr::FrameResult> = Vec::with_capacity(entries.len());
-
-    for entry in entries.iter() {
-        // 仅识别一次：ms_ms 的同一张图读图 + OCR 一次。
-        let rgb = load_rgb(&entry.path)?;
-        let boxes = ocr.ocr_image(&rgb)?;
-        // 聚合一次（text 拼接 / confidence 取均值 / 值域），timestamp 先置 0。
-        let aggregated = subtitle_ocr::aggregate_boxes(&boxes);
-
-        // 按文件名时刻展开：ms_ms 同一张图产生多个 FrameResult，仅覆写 timestamp_ms，
-        // 不再重复聚合。
-        for &ts in &entry.times {
-            let mut fr = aggregated.clone();
-            fr.timestamp_ms = ts;
-            frame_outs.push(fr);
-        }
-    }
+    // 核心流程（读图 → 识别 → 聚合 → 按时刻展开）复用库函数，避免各处照抄。
+    let frame_outs: Vec<subtitle_ocr::FrameResult> = subtitle_ocr::ocr_entries(&mut ocr, &entries)?;
 
     // 主输出：与 cpp 同形状的 JSON 数组（逐图/批量，不带时间轴）。
     let arr: Vec<Value> = frame_outs
