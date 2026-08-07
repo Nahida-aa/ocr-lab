@@ -3,10 +3,9 @@
 //! 纯感知 OCR 工具，对标 cpp 的 `ocr_pipeline.cpp`：输出 JSON 数组，
 //! 每个元素含 `file` / `text` / `confidence` / `boxes` / `timestamp_ms`。
 //!
-//! 不含任何耗时字段——推理耗时是旁路观测数据，由调用方自行计时（
-//! [`subtitle_ocr::SubtitleOcr::ocr_image_timed`] 返回 `det_ms`，或 benchmark
-//! 自己在调用前后 `Instant::now()` 测量），CLI 同时把每图 `det_ms` 打到 stderr
-//! （`[ocr] ... det=...ms`），不污染 stdout 的 JSON 数组。
+//! 不含任何耗时字段——推理耗时是旁路观测数据，由调用方自行计时（CLI 在
+//! `ocr_image` 调用前后 `Instant::now()` 测量，打到 stderr 的 `[ocr] ... det=...ms`；
+//! benchmark 同理）。不污染 stdout 的 JSON 数组。
 //!
 //! 本 CLI 只做「逐图/批量 OCR」，不输出时间轴、不做帧合并——带时间戳的字幕段
 //! 由知道视频结构的上游（自行补 `start`/`end` 后调用 `subtitle-ocr-merge`）负责。
@@ -198,8 +197,7 @@ fn list_frames(dir: &Path, on_bad: BadNameAction) -> Result<Vec<DirEntry>> {
 /// 单帧输出：纯感知结果（文件名 / 文本 / 聚合置信度 / 各框 / 对应时刻）。
 ///
 /// 不含任何耗时字段——推理耗时是旁路观测数据，由调用方自行计时
-/// （[`subtitle_ocr::SubtitleOcr::ocr_image_timed`] 返回 `det_ms`，或 benchmark
-/// 自己在调用前后 `Instant::now()` 测量），不污染 JSON 结构。
+/// （在 `ocr_image` 调用前后 `Instant::now()` 测量），不污染 JSON 结构。
 #[derive(Serialize)]
 struct FrameOut {
     file: String,
@@ -246,8 +244,10 @@ fn main() -> Result<()> {
     for entry in entries.iter() {
         // 仅识别一次：ms_ms 的同一张图读图 + OCR 一次。
         let rgb = load_rgb(&entry.path)?;
-        let (boxes, det_ms) = ocr.ocr_image_timed(&rgb)?;
-        // 耗时是旁路观测数据，不进 JSON；打到 stderr 便于调试，不污染 stdout 的 JSON 数组。
+        // 耗时是旁路观测数据，由调用方自行测量（不进 JSON）；打到 stderr 便于调试。
+        let t0 = std::time::Instant::now();
+        let boxes = ocr.ocr_image(&rgb)?;
+        let det_ms = t0.elapsed().as_secs_f64() * 1000.0;
         eprintln!("[ocr] {} det={:.1}ms", entry.path.display(), det_ms);
         // 聚合一次（text 拼接 / confidence 取均值 / 值域），timestamp 先置 0。
         let aggregated = subtitle_ocr::aggregate_boxes(&boxes);

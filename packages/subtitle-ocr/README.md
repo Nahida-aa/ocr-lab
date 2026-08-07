@@ -59,8 +59,8 @@ README，这里聚焦字幕专属层。
 ```
 帧目录 (frame_00001.jpg ...)
   │
-  ├─[1] 逐帧：load_rgb(BGR) → ocr_image_timed → 每帧得到 lines + det_ms
-  │     · det_ms = 整段 detect 的耗时（rapidocr-ort 不单独计时 det/rec）
+  ├─[1] 逐帧：load_rgb(BGR) → ocr_image → 每帧得到 boxes
+  │     · 推理耗时由调用方在 ocr_image 前后 Instant 自行测量（旁路观测，不进 JSON）
   │
   ├─[2] 每帧聚合：aggregate_frame → FrameResult { text, confidence, box_y, timestamp }
   │     · timestamp = 帧序号 × (1000/fps) ms

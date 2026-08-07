@@ -11,10 +11,9 @@
 //! - **多帧合并 + 计时**：相邻帧同文本合并成带 `start/end` 的段（LocalDub
 //!   `mergeFrames` 风格）。
 //!
-//! 计时口径：模型只加载一次，推理耗时由调用方自行测量（[`SubtitleOcr::ocr_image_timed`]
-//! 返回 `det_ms`，或 benchmark 在调用前后 `Instant::now()`）。rapidocr-ort 的 `detect`
-//! 把 det/rec 合成一次调用，无法单独计时，故本包只报整段 `detect` 的 `det_ms`。
-//! 这些耗时是旁路观测数据，不进入 JSON 输出（由 tracing 或调用方自行消费）。
+//! 计时口径：模型只加载一次，推理耗时由调用方自行测量（在 `ocr_image` 调用前后
+//! `Instant::now()` 即可）。rapidocr-ort 的 `detect` 把 det/rec 合成一次调用，无法
+//! 单独计时，故本包不内置计时。这些耗时是旁路观测数据，不进入 JSON 输出。
 
 use anyhow::Result;
 use ndarray::{Array3, s};
@@ -181,19 +180,6 @@ impl SubtitleOcr {
         });
 
         Ok(lines)
-    }
-
-    /// 同 [`ocr_image`]，但返回每帧推理耗时（毫秒）。
-    ///
-    /// rapidocr-ort 的 `detect` 把 det/rec 合成一次调用，无法单独计时；
-    /// 故把整段 `detect` 计为 `det_ms` 一并返回。调用方（benchmark / CLI）自行
-    /// 决定如何消费该耗时——bench 直接累加，CLI 经 `RUST_LOG=subtitle_ocr=debug`
-    /// 由 tracing 打印；它不进入 JSON 输出结构。
-    pub fn ocr_image_timed(&mut self, rgb: &Array3<u8>) -> Result<(Vec<OcrBoxResult>, f64)> {
-        let t0 = std::time::Instant::now();
-        let boxes = self.ocr_image(rgb)?;
-        let det_ms = t0.elapsed().as_secs_f64() * 1000.0;
-        Ok((boxes, det_ms))
     }
 }
 
