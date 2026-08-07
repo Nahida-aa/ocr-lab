@@ -152,15 +152,15 @@ impl SubtitleOcr {
                 r.text = r.text.trim().to_string();
                 r
             })
-            .filter(|l| {
+            .filter(|r| {
                 // subtitle_only：y 中心须落在画面底部 [0.85, 0.99]（cpp 比值口径）。
                 if self.opts.subtitle_only {
-                    let ratio = l.center[1] / (h as f32);
+                    let ratio = r.center[1] / (h as f32);
                     if !(0.85..=0.99).contains(&ratio) {
                         return false;
                     }
                 }
-                !l.text.is_empty() && l.text_confidence >= self.opts.text_score
+                !r.text.is_empty() && r.text_confidence >= self.opts.text_score
             })
             .collect();
 
@@ -319,7 +319,7 @@ fn load_rgb(path: &Path) -> Result<Array3<u8>> {
 // ===========================================================================
 
 /// 按面积降序，剔除被已保留大框覆盖超过 70% 的小框（IoU 口径）。
-fn nms(mut lines: Vec<OcrBoxResult>) -> Vec<OcrBoxResult> {
+fn nms(lines: Vec<OcrBoxResult>) -> Vec<OcrBoxResult> {
     // 计算外接框。
     struct B {
         idx: usize,
@@ -390,7 +390,7 @@ fn nms(mut lines: Vec<OcrBoxResult>) -> Vec<OcrBoxResult> {
     }
     let mut out: Vec<OcrBoxResult> = keep
         .iter()
-        .zip(lines.drain(..))
+        .zip(lines)
         .filter(|(k, _)| **k)
         .map(|(_, l)| l)
         .collect();
