@@ -45,10 +45,15 @@ struct Cli {
     #[arg(long, default_value = "models/rapidocr")]
     model_dir: String,
 
-    /// 输入图片路径（与 --dir 互斥）
+    /// 输入图片路径（单图模式，不携带时间戳，输出 timestampMs=0；与 --dir 互斥）
     image: Option<String>,
 
-    /// 批量模式：输入图片目录（jpg/jpeg/png/bmp，按文件名排序逐张识别，与 <image> 互斥）
+    /// 批量模式：输入图片目录（jpg/jpeg/png/bmp，按文件名排序逐张识别，与 <image> 互斥）。
+    ///
+    /// 文件名须为 `ms` 或 `ms_ms` 形式，编码该图对应的时刻（毫秒），可前置多余 0：
+    /// - `001234.png`        → 单时刻 1234
+    /// - `001234_001250.png` → 双时刻 [1234, 1250]（同一张图仅识别一次，产出两个结果）
+    /// 不符合格式时按 `--on-bad-name` 处理（`skip` 跳过 / `error` 报错）。
     #[arg(long)]
     dir: Option<String>,
 
@@ -302,7 +307,7 @@ fn main() -> Result<()> {
                 "postprocessMs": f.postprocess_ms,
                 "recInferenceMs": f.rec_inference_ms,
                 "totalMs": f.total_ms,
-                "timestampMs": f.timestamp_ms,
+                "timestamp_ms": f.timestamp_ms,
             })
         })
         .collect();
