@@ -196,6 +196,7 @@ fn list_frames(dir: &Path, on_bad: BadNameAction) -> Result<Vec<DirEntry>> {
 struct FrameOut {
     file: String,
     text: String,
+    confidence: f64,
     boxes: Vec<subtitle_ocr::OcrBoxResult>,
     det_inference_ms: f64,
     postprocess_ms: f64,
@@ -239,14 +240,11 @@ fn main() -> Result<()> {
     let mut frame_outs: Vec<FrameOut> = Vec::with_capacity(entries.len());
 
     for entry in entries.iter() {
-        // ⚠️ 仅识别一次：ms_ms 的同一张图读图 + OCR 一次，按 times 复制成多个 FrameResult。
+        // 仅识别一次：ms_ms 的同一张图读图 + OCR 一次。
         let rgb = load_rgb(&entry.path)?;
         let (boxes, det_ms) = ocr.ocr_image_timed(&rgb)?;
-        let text: String = boxes
-            .iter()
-            .map(|l| l.text.as_str())
-            .collect::<Vec<_>>()
-            .join("");
+        // 聚合一次（text 拼接 / confidence 取均值 / 值域），timestamp 先置 0。
+        let aggregated = subtitle_ocr::aggregate_boxes(&boxes);
 
         let file_name = entry
             .path
@@ -254,11 +252,16 @@ fn main() -> Result<()> {
             .map(|s| s.to_string_lossy().to_string())
             .unwrap_or_default();
 
+        // 按文件名时刻展开：ms_ms 同一张图产生多个 FrameResult，仅覆写 timestamp_ms，
+        // 不再重复聚合。
         for &ts in &entry.times {
+            let mut fr = aggregated.clone();
+            fr.timestamp_ms = ts;
             frame_outs.push(FrameOut {
                 file: file_name.clone(),
-                text: text.clone(),
-                boxes: boxes.clone(),
+                text: fr.text.clone(),
+                confidence: fr.confidence,
+                boxes: fr.boxes.clone(),
                 det_inference_ms: det_ms,
                 postprocess_ms: 0.0, // rapidocr-ort detect 内部不单独计时
                 rec_inference_ms: 0.0,

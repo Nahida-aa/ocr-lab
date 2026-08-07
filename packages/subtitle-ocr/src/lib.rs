@@ -83,7 +83,12 @@ pub struct FrameResult {
     /// 纵向值域 `[min_y, max_y]`（像素坐标），无字幕时为 `[0,0]`。
     pub y_range: [f32; 2],
     /// 该图对应时刻（毫秒）。`0` 表示无时间（如单图 `<image>` 调用、或
-    /// `aggregate_boxes` 纯聚合）。由上游按文件名 / 帧序号提供。
+    /// `aggregate_boxes` 纯聚合后尚未赋值）。
+    ///
+    /// 为何不交给 `aggregate_boxes` 填：同一张图可能对应多个时刻（`ms_ms` 文件名
+    /// 的 start/end），为避免对同一 boxes 重复聚合，聚合函数保持单参数、只产出
+    /// 无时间结果；调用方聚合一次后，按各时刻 `clone` 并覆写本字段。时间来源由
+    /// 上游按文件名 `ms`/`ms_ms` 解析、帧序号或视频 PTS 提供。
     pub timestamp_ms: u64,
 }
 
@@ -191,11 +196,17 @@ impl SubtitleOcr {
 
 }
 
-/// 把一图识别出的多框聚合成单图结果（纯感知后处理，时间戳默认 0）。
+/// 把一图识别出的多框聚合成单图结果（纯感知后处理，`timestamp_ms` 置 0）。
 ///
 /// 过滤 / 坐标还原 / NMS / 排序已在 [`SubtitleOcr::ocr_image`] 完成，这里只做
-/// 「多行拼接成一条文本 + 各框置信度取均值 + 算几何值域」。`timestamp_ms` 置 0
-/// （无时间）；携带时间的场景由调用方在 [`FrameResult`] 上赋值（如按文件名 / 帧序号）。
+/// 「多行拼接成一条文本 + 各框置信度取均值 + 算几何值域」。
+///
+/// `timestamp_ms` 故意不在此处填入（置 0），原因：同一张图可能对应多个时刻
+/// （文件名 `ms_ms` 时间区间图片，start/end 两个时刻、内容相同）。保持单参数、
+/// 不接 timestamp，调用方就能**先聚合一次**得到无时间的 [`FrameResult`]，再按
+/// `entry.times` 展开——对每个时刻 `clone` 后仅改 `timestamp_ms`，避免对同一
+/// boxes 重复聚合。携带时间的场景由调用方在 [`FrameResult`] 上赋值（如按文件名
+/// `ms`/`ms_ms` 解析、或帧序号 / 视频 PTS）。
 pub fn aggregate_boxes(lines: &[OcrBoxResult]) -> FrameResult {
     let text: Vec<&str> = lines.iter().map(|l| l.text.as_str()).collect();
     let text = text.join(" ");
