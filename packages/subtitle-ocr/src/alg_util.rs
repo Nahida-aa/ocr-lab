@@ -6,7 +6,7 @@
 use rapidocr_ort::OcrBoxResult;
 
 /// 按面积降序，剔除被已保留大框覆盖超过 70% 的小框（IoU 口径）。
-pub(crate) fn nms(boxes: Vec<OcrBoxResult>) -> Vec<OcrBoxResult> {
+pub fn nms(boxes: Vec<OcrBoxResult>) -> Vec<OcrBoxResult> {
     // 计算外接框 rect
     struct B {
         idx: usize,

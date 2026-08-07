@@ -25,7 +25,9 @@ pub(crate) mod alg_util;
 pub(crate) mod ocr_util;
 
 // 模块保持 pub(crate)（内部分层是实现细节），仅把对外 API 提到 crate 根，
-// 使用方路径仍是 `subtitle_ocr::aggregate_boxes`，不随内部拆分而变。
+// 使用方路径仍是 `subtitle_ocr::aggregate_boxes` / `subtitle_ocr::nms`，
+// 不随内部拆分而变。
+pub use crate::alg_util::nms;
 pub use crate::ocr_util::aggregate_boxes;
 
 // ==========================================================
