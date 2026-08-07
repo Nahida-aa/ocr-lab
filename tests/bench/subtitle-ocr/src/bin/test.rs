@@ -3,9 +3,13 @@
 //! 用法：
 //!   cargo run -p bench-subtitle-ocr --bin test [--impl cpp|py|rust]
 //!
-//! 行为：直接读 tests/.test-frames 下的帧，跑对应实现的 --dir 模式，
-//! 校验输出 JSON 结构（file / segments / text / confidence / box）。
-//! py / rust 尚未实现时优雅跳过（退出非 0）。
+//! 行为：直接读 tests/.test-frames 下的帧，跑对应实现并校验输出 JSON 结构。
+//! 各实现输出形状不同，校验逻辑分开：
+//! - cpp：`--dir` 批量，每项 `file` + `segments[]`（段内 text/confidence/box）；
+//! - rust：逐帧单图模式，每项是 `FrameResult`——帧级 `text`/`confidence`
+//!   + `boxes[]`（框内 text/text_confidence/box）；不走 `--dir`，因为该模式
+//!   要求文件名为 `ms`/`ms_ms`，而 .test-frames 是 `frame_0000260.jpg` 命名。
+//! py 未装依赖时优雅跳过（退出非 0）。
 
 use std::path::PathBuf;
 use std::process::Command;
@@ -122,20 +126,105 @@ fn run_py() -> bool {
     true
 }
 
+/// 校验 rust 输出的 JSON 结构（数组，每项一个 `FrameResult`）。
+///
+/// 与 cpp 形状**不同**（见 [`check_cpp_output`]）：rust 的 `FrameResult` 已把
+/// 多框聚合成帧级 `text` / `confidence`，明细放 `boxes[]`（框内字段是 `box`
+/// 与 `text_confidence`），且不含 `file` / `segments`。
+fn check_rust_output(stdout: &str, expect_len: usize) {
+    let v: serde_json::Value = serde_json::from_str(stdout).expect("rust 输出不是合法 JSON");
+    let arr = v.as_array().expect("rust 输出应为 JSON 数组");
+    assert_eq!(
+        arr.len(),
+        expect_len,
+        "应输出 {expect_len} 项，实际 {}",
+        arr.len()
+    );
+    for item in arr {
+        let _text = item
+            .get("text")
+            .and_then(|t| t.as_str())
+            .expect("帧级 text 应为字符串");
+        let conf = item
+            .get("confidence")
+            .and_then(|c| c.as_f64())
+            .expect("帧级 confidence 应为数字");
+        assert!((0.0..=1.0).contains(&conf), "confidence 越界: {conf}");
+        assert!(item.get("timestamp_ms").is_some(), "缺 timestamp_ms 字段");
+        let boxes = item
+            .get("boxes")
+            .and_then(|b| b.as_array())
+            .expect("boxes 应为数组");
+        for b in boxes {
+            let _t = b
+                .get("text")
+                .and_then(|t| t.as_str())
+                .expect("box.text 应为字符串");
+            let bc = b
+                .get("text_confidence")
+                .and_then(|c| c.as_f64())
+                .expect("box.text_confidence 应为数字");
+            assert!((0.0..=1.0).contains(&bc), "box confidence 越界: {bc}");
+            let pts = b
+                .get("box")
+                .and_then(|x| x.as_array())
+                .expect("box.box 应为数组");
+            assert_eq!(pts.len(), 4, "box 应为 4 点");
+        }
+    }
+}
+
 fn run_rust() -> bool {
-    let bin = repo_root()
-        .join("packages")
-        .join("subtitle-ocr")
-        .join("target")
-        .join("release")
-        .join("subtitle-ocr");
+    // 与 cpp 不同，rust 二进制产出在 workspace 根 target/（非包内 target/）。
+    let bin = repo_root().join("target").join("release").join("subtitle-ocr");
     if !bin.exists() {
-        eprintln!("[rust] 二进制不存在（subtitle-ocr 尚未实现），跳过");
+        eprintln!(
+            "[rust] 二进制不存在: {}，先 cargo build --release -p subtitle-ocr",
+            bin.display()
+        );
         return false;
     }
-    // TODO: rust 实现 CLI 定型后补充 --dir + JSON 结构校验
-    eprintln!("[rust] 实现已构建但正确性校验逻辑待补");
-    false
+    // 不用 --dir：该模式要求文件名是 ms / ms_ms（编码时刻），而 .test-frames 下是
+    // frame_0000260.jpg 这种命名，会被 --on-bad-name skip 全部跳过、输出空数组。
+    // 这里逐帧走单图模式（timestamp_ms 恒为 0），只校验结构。
+    let mut frames: Vec<PathBuf> = std::fs::read_dir(frames_dir())
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| {
+            matches!(
+                p.extension().and_then(|x| x.to_str()),
+                Some("jpg" | "jpeg" | "png" | "bmp")
+            )
+        })
+        .collect();
+    frames.sort();
+    assert_eq!(frames.len(), count_frames(), "帧数统计不一致");
+
+    for f in &frames {
+        // rust CLI 用 --model-dir 传模型目录（cpp 走 OCR_MODELS_DIR 环境变量）。
+        let out = Command::new(&bin)
+            .arg(f)
+            .arg("--model-dir")
+            .arg(models_dir())
+            .output()
+            .expect("spawn rust 失败");
+        if !out.status.success() {
+            eprintln!(
+                "[rust] 退出码非零 ({}):\n{}",
+                f.display(),
+                String::from_utf8_lossy(&out.stderr)
+            );
+            return false;
+        }
+        // 单图模式输出单元素数组。
+        check_rust_output(&String::from_utf8_lossy(&out.stdout), 1);
+    }
+    println!(
+        "[rust] 正确性测试通过（{} 帧，JSON 结构校验）",
+        frames.len()
+    );
+    true
 }
 
 fn main() {

@@ -283,8 +283,15 @@ fn ocr_dir_rust(
     parse_rust_json(out, "dir", per)
 }
 
-/// 解析 rust 二进制输出（JSON 数组，每元素含 segments / text / confidence / boxes）。
-/// 形状与 cpp 一致，故直接复用 CppFrame。
+/// 解析 rust 二进制输出（JSON 数组，每元素是一个 `FrameResult`）。
+///
+/// rust 与 cpp 的形状**不同**，故不能照搬 cpp 的解析：
+/// - cpp：帧对象下挂 `segments[]`，需取其中 confidence 最高的一条当帧文本；
+/// - rust：`FrameResult` 已在 `aggregate_boxes` 里把多框拼成单条 `text`
+///   （空格连接）、`confidence` 取各框均值，直接放在帧顶层；明细在 `boxes[]`。
+///
+/// 因此这里直接读顶层 `text` / `confidence`。（早前此处沿用 cpp 的 `segments`
+/// 取法，而 rust 从未输出该字段，导致解析恒为空、rust 侧 CER 全错。）
 ///
 /// `per_ms` 为 benchmark 自身测量的每帧耗时（调用方在 `Command::output()` 前后
 /// 计 wall time 后平摊传入），不依赖二进制把计时塞进 JSON。
@@ -300,26 +307,17 @@ fn parse_rust_json(
             // --dir 模式下为数组；单帧模式也是单元素数组（与 cpp 对齐）。
             let arr = parsed.as_array().cloned().unwrap_or_default();
             arr.iter()
-                .map(|data| {
-                    let segs = data
-                        .get("segments")
-                        .and_then(|s| s.as_array())
-                        .cloned()
-                        .unwrap_or_default();
-                    let best = segs
-                        .iter()
-                        .filter_map(|s| {
-                            let t = s.get("text").and_then(|x| x.as_str())?.to_string();
-                            let c = s.get("confidence").and_then(|x| x.as_f64()).unwrap_or(0.0);
-                            Some((t, c))
-                        })
-                        .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
-                    let (text, confidence) = best.unwrap_or_default();
-                    CppFrame {
-                        text,
-                        confidence,
-                        total_ms: per_ms,
-                    }
+                .map(|data| CppFrame {
+                    text: data
+                        .get("text")
+                        .and_then(|x| x.as_str())
+                        .unwrap_or_default()
+                        .to_string(),
+                    confidence: data
+                        .get("confidence")
+                        .and_then(|x| x.as_f64())
+                        .unwrap_or(0.0),
+                    total_ms: per_ms,
                 })
                 .collect()
         }
