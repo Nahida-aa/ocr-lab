@@ -6409,6 +6409,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "glam",
  "image",
  "ndarray",
  "rapidocr-ort",

@@ -21,13 +21,16 @@
 
 pub mod cls;
 pub mod det;
+pub mod geometry_util;
 pub mod pipeline;
 pub mod preprocess;
 pub mod rec;
 pub mod util;
 
+pub use geometry_util::points_range;
 pub use util::load_image;
 
+use crate::geometry_util::polygon_metrics;
 use anyhow::{Context, Result};
 use ndarray::Array3;
 use ort::session::Session;
@@ -113,31 +116,6 @@ pub struct OcrEngine {
     /// 是否用 cpp 同款的透视矫正裁剪（warpPerspective）替代轴对齐包围盒。
     /// 默认 false（轴对齐），对近水平文本足够；true 时与 cpp 的 rec 输入一致。
     use_warp_crop: bool,
-}
-
-/// 由四边形顶点算 `x_range` / `y_range` 与几何中心（四点平均）。
-///
-/// 值域口径对齐 cpp/ts 的 `polygonToXyRange`（`min/max` 各分量），中心用于点击回灌。
-/// 单遍 `fold`（每个识别框都会调用，故避免多次扫描），无堆分配、无 `mut`。
-///
-/// 借 `glam::Vec2` 的按分量 `min`/`max`/`add`（底层 SSE）把 x/y 两路同构运算合并成
-/// 宽向量指令：一次 `Vec2::min` 同时得到 `min_x` 与 `min_y`，比逐标量写 4 个 `min` 更
-/// 紧凑；输入变大时也能真正跑出向量化收益。固定 4 点由 LLVM 完全展开，fold 与手写
-/// `for` 生成等价机器码。
-fn polygon_metrics(polygon: &[glam::Vec2; 4]) -> ([f32; 2], [f32; 2], [f32; 2]) {
-    let (min_xy, max_xy, sum) = polygon.iter().fold(
-        (
-            glam::Vec2::splat(f32::INFINITY),
-            glam::Vec2::splat(f32::NEG_INFINITY),
-            glam::Vec2::ZERO,
-        ),
-        |(min_xy, max_xy, sum), &p| (min_xy.min(p), max_xy.max(p), sum + p),
-    );
-    (
-        [min_xy.x, max_xy.x],
-        [min_xy.y, max_xy.y],
-        [sum.x / 4.0, sum.y / 4.0],
-    )
 }
 
 impl OcrEngine {

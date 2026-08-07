@@ -22,20 +22,17 @@ pub fn aggregate_boxes(boxes: &[OcrBoxResult]) -> FrameResult {
         boxes.iter().map(|l| l.text_confidence as f64).sum::<f64>() / boxes.len() as f64
     };
     // 聚合所有行的四点坐标，取 x / y 值域（无字幕 → [0,0]）。
-    let mut x_range = [f32::INFINITY, f32::NEG_INFINITY];
-    let mut y_range = [f32::INFINITY, f32::NEG_INFINITY];
-    for l in boxes {
-        for p in &l.box_ {
-            x_range[0] = x_range[0].min(p[0]);
-            x_range[1] = x_range[1].max(p[0]);
-            y_range[0] = y_range[0].min(p[1]);
-            y_range[1] = y_range[1].max(p[1]);
-        }
-    }
+    // 复用 rapidocr-ort 的 points_range：把所有点展平成 Vec2 流，单遍 SSE fold 同时
+    // 算出 x/y 两路值域，与 polygon_metrics 同源、无 mut。
     let (x_range, y_range) = if boxes.is_empty() {
         ([0.0, 0.0], [0.0, 0.0])
     } else {
-        (x_range, y_range)
+        rapidocr_ort::points_range(
+            boxes
+                .iter()
+                .flat_map(|l| l.box_.iter().copied())
+                .map(glam::Vec2::from_array),
+        )
     };
     FrameResult {
         text,
