@@ -11,7 +11,7 @@ use anyhow::{Context, Result};
 use clap::{Parser, ValueEnum};
 use ndarray::Array3;
 use serde::Serialize;
-use serde_json::{json, Value};
+use serde_json::Value;
 use std::path::{Path, PathBuf};
 use subtitle_ocr::{OcrOptions, SubtitleOcr};
 
@@ -191,40 +191,18 @@ fn list_frames(dir: &Path, on_bad: BadNameAction) -> Result<Vec<DirEntry>> {
     Ok(entries)
 }
 
-/// 单帧输出（对齐 cpp toJson 的形状，额外带 timestamp_ms）。
+/// 单帧输出（与 cpp toJson 对齐，字段统一蛇形）。
 #[derive(Serialize)]
 struct FrameOut {
-    #[serde(rename = "file")]
     file: String,
     text: String,
-    segments: Vec<SegOut>,
-    #[serde(rename = "detInferenceMs")]
+    boxes: Vec<subtitle_ocr::OcrBoxResult>,
     det_inference_ms: f64,
-    #[serde(rename = "postprocessMs")]
     postprocess_ms: f64,
-    #[serde(rename = "recInferenceMs")]
     rec_inference_ms: f64,
-    #[serde(rename = "totalMs")]
     total_ms: f64,
     /// 该图对应时刻（毫秒）；0 表示无时间（单图 `<image>`）。
-    #[serde(rename = "timestampMs")]
     timestamp_ms: u64,
-}
-
-#[derive(Clone, Serialize)]
-struct SegOut {
-    text: String,
-    confidence: f64,
-    #[serde(rename = "box")]
-    box_: Vec<[f32; 2]>,
-}
-
-fn to_seg_out(line: &subtitle_ocr::OcrBoxResult) -> SegOut {
-    SegOut {
-        text: line.text.clone(),
-        confidence: line.text_confidence as f64,
-        box_: line.box_.iter().map(|p| [p[0], p[1]]).collect(),
-    }
 }
 
 fn main() -> Result<()> {
@@ -263,14 +241,13 @@ fn main() -> Result<()> {
     for entry in entries.iter() {
         // ⚠️ 仅识别一次：ms_ms 的同一张图读图 + OCR 一次，按 times 复制成多个 FrameResult。
         let rgb = load_rgb(&entry.path)?;
-        let (lines, det_ms) = ocr.ocr_image_timed(&rgb)?;
-        let text: String = lines
+        let (boxes, det_ms) = ocr.ocr_image_timed(&rgb)?;
+        let text: String = boxes
             .iter()
             .map(|l| l.text.as_str())
             .collect::<Vec<_>>()
             .join("");
 
-        let seg_outs: Vec<SegOut> = lines.iter().map(to_seg_out).collect();
         let file_name = entry
             .path
             .file_name()
@@ -281,7 +258,7 @@ fn main() -> Result<()> {
             frame_outs.push(FrameOut {
                 file: file_name.clone(),
                 text: text.clone(),
-                segments: seg_outs.clone(),
+                boxes: boxes.clone(),
                 det_inference_ms: det_ms,
                 postprocess_ms: 0.0, // rapidocr-ort detect 内部不单独计时
                 rec_inference_ms: 0.0,
@@ -294,22 +271,7 @@ fn main() -> Result<()> {
     // 主输出：与 cpp 同形状的 JSON 数组（逐图/批量，不带时间轴）。
     let arr: Vec<Value> = frame_outs
         .iter()
-        .map(|f| {
-            json!({
-                "file": f.file,
-                "text": f.text,
-                "segments": f.segments.iter().map(|s| json!({
-                    "text": s.text,
-                    "confidence": s.confidence,
-                    "box": s.box_,
-                })).collect::<Vec<_>>(),
-                "detInferenceMs": f.det_inference_ms,
-                "postprocessMs": f.postprocess_ms,
-                "recInferenceMs": f.rec_inference_ms,
-                "totalMs": f.total_ms,
-                "timestamp_ms": f.timestamp_ms,
-            })
-        })
+        .map(|f| serde_json::to_value(f).unwrap_or(Value::Null))
         .collect();
 
     println!("{}", serde_json::to_string_pretty(&Value::Array(arr))?);
