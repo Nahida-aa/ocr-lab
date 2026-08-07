@@ -1,7 +1,7 @@
 //! 命令行：`subtitle-ocr <image> [text_score]` 或 `subtitle-ocr --dir <dir> ...`
 //!
 //! 纯感知 OCR 工具，对标 cpp 的 `ocr_pipeline.cpp`：输出 JSON 数组，
-//! 每个元素含 `file` / `text` / `confidence` / `boxes` / `timestamp_ms`。
+//! 每个元素含 `text` / `confidence` / `boxes` / `timestamp_ms`。
 //!
 //! 不含任何耗时字段——推理耗时是旁路观测数据，由调用方自行计时（CLI 在
 //! `ocr_image` 调用前后 `Instant::now()` 测量，打到 stderr 的 `[ocr] ... det=...ms`；
@@ -38,7 +38,10 @@ struct DirEntry {
 }
 
 #[derive(Parser, Debug)]
-#[command(name = "subtitle-ocr", about = "字幕 OCR（基于 rapidocr-ort，PP-OCRv3）")]
+#[command(
+    name = "subtitle-ocr",
+    about = "字幕 OCR（基于 rapidocr-ort，PP-OCRv3）"
+)]
 struct Cli {
     /// 模型套件：v3 / v6-tiny / v6-medium
     #[arg(long, value_enum, default_value_t = rapidocr_ort::ModelProfile::V3)]
@@ -194,13 +197,13 @@ fn list_frames(dir: &Path, on_bad: BadNameAction) -> Result<Vec<DirEntry>> {
     Ok(entries)
 }
 
-/// 单帧输出：纯感知结果（文件名 / 文本 / 聚合置信度 / 各框 / 对应时刻）。
+/// 单帧输出：纯感知结果（文本 / 聚合置信度 / 各框 / 对应时刻）。
 ///
-/// 不含任何耗时字段——推理耗时是旁路观测数据，由调用方自行计时
+/// 不含输入文件名——调用方本就知道自己喂了哪张图，批量模式下时刻信息已体现在
+/// `timestamp_ms`；也不含耗时字段——推理耗时是旁路观测数据，由调用方自行计时
 /// （在 `ocr_image` 调用前后 `Instant::now()` 测量），不污染 JSON 结构。
 #[derive(Serialize)]
 struct FrameOut {
-    file: String,
     text: String,
     confidence: f64,
     boxes: Vec<subtitle_ocr::OcrBoxResult>,
@@ -244,19 +247,9 @@ fn main() -> Result<()> {
     for entry in entries.iter() {
         // 仅识别一次：ms_ms 的同一张图读图 + OCR 一次。
         let rgb = load_rgb(&entry.path)?;
-        // 耗时是旁路观测数据，由调用方自行测量（不进 JSON）；打到 stderr 便于调试。
-        let t0 = std::time::Instant::now();
         let boxes = ocr.ocr_image(&rgb)?;
-        let det_ms = t0.elapsed().as_secs_f64() * 1000.0;
-        eprintln!("[ocr] {} det={:.1}ms", entry.path.display(), det_ms);
         // 聚合一次（text 拼接 / confidence 取均值 / 值域），timestamp 先置 0。
         let aggregated = subtitle_ocr::aggregate_boxes(&boxes);
-
-        let file_name = entry
-            .path
-            .file_name()
-            .map(|s| s.to_string_lossy().to_string())
-            .unwrap_or_default();
 
         // 按文件名时刻展开：ms_ms 同一张图产生多个 FrameResult，仅覆写 timestamp_ms，
         // 不再重复聚合。
@@ -264,7 +257,6 @@ fn main() -> Result<()> {
             let mut fr = aggregated.clone();
             fr.timestamp_ms = ts;
             frame_outs.push(FrameOut {
-                file: file_name.clone(),
                 text: fr.text.clone(),
                 confidence: fr.confidence,
                 boxes: fr.boxes.clone(),
