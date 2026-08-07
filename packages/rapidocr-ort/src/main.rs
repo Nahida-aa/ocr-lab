@@ -4,7 +4,6 @@
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use ndarray::Array3;
 use rapidocr_ort::{ModelProfile, OcrBoxResult, OcrEngine};
 use serde::Serialize;
 use std::path::{Path, PathBuf};
@@ -74,13 +73,9 @@ fn main() -> Result<()> {
 
     let mut engine = OcrEngine::from_profile(cli.model, &model_dir).context("构建 OCR 引擎失败")?;
 
-    // 读图 -> RGB HWC u8
-    let img = image::open(&image_path)
-        .with_context(|| format!("读取图片失败: {}", image_path.display()))?
-        .to_rgb8();
-    let (w, h) = (img.width() as usize, img.height() as usize);
-    let data = img.into_raw();
-    let arr = Array3::from_shape_vec((h, w, 3), data).context("图像数据重塑失败（维度不匹配）")?;
+    // 读图 -> BGR HWC u8（对齐 cpp cv::imread / subtitle-ocr 约定，见 rapidocr_ort::load_image）。
+    let arr = rapidocr_ort::load_image(&image_path)?;
+    let (h, w, _) = arr.dim();
 
     let results = engine.detect(&arr).context("OCR 推理失败")?;
 

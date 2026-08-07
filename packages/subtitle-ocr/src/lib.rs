@@ -15,7 +15,7 @@
 //! `Instant::now()` 即可）。rapidocr-ort 的 `detect` 把 det/rec 合成一次调用，无法
 //! 单独计时，故本包不内置计时。这些耗时是旁路观测数据，不进入 JSON 输出。
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use ndarray::{Array3, s};
 use rapidocr_ort::{ModelProfile, OcrEngine};
 use serde::Serialize;
@@ -118,7 +118,7 @@ impl SubtitleOcr {
         Ok(Self { engine, opts })
     }
 
-    /// 对一帧 RGB 图像（H×W×3，0-255 u8）做字幕 OCR，返回排序后的识别行。
+    /// 对一帧 BGR 图像（H×W×3，0-255 u8，读图见 [`load_rgb`]）做字幕 OCR，返回排序后的识别行。
     ///
     /// 流程对齐 cpp `runOcr`：bottom_only ROI → subtitle_only y 过滤 → NMS。
     pub fn ocr_image(&mut self, rgb: &Array3<u8>) -> Result<Vec<OcrBoxResult>> {
@@ -301,17 +301,8 @@ pub fn ocr_entries(ocr: &mut SubtitleOcr, entries: &[OcrEntry]) -> Result<Vec<Fr
 
 /// 读图为 BGR HWC u8 的 `Array3`。
 ///
-/// 用 BGR 而非 RGB：PP-OCR/rapidocr 模型按 `cv2.imread`（BGR）训练（cpp 同款）。
-/// 用 RGB 会让彩色字幕出现漏检/误识，故这里统一转 BGR 对齐。
+/// 复用 [`rapidocr_ort::load_image`]（统一 BGR 通道约定，对齐 cpp `cv::imread` /
+/// subtitle-ocr 生产路径，避免各包各写一份转换）。
 fn load_rgb(path: &Path) -> Result<Array3<u8>> {
-    let img = image::open(path)
-        .with_context(|| format!("读取图片失败: {}", path.display()))?
-        .to_rgb8();
-    let (w, h) = (img.width() as usize, img.height() as usize);
-    let mut data = img.into_raw();
-    // RGB→BGR：image crate 给 RGB，模型要 BGR。
-    for px in data.chunks_mut(3) {
-        px.swap(0, 2);
-    }
-    Array3::from_shape_vec((h, w, 3), data).context("图像数据重塑失败（维度不匹配）")
+    rapidocr_ort::load_image(path)
 }
