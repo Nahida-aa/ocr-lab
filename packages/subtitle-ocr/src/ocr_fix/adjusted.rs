@@ -13,11 +13,11 @@ use serde::Serialize;
 /// `box_adjusted_threshold`：confidence 低于此值的框进行 box 调整；省略时取默认 0.5。
 /// 用 `Option<f32>` 保留「可省略」语义（对齐 zod 的 `.optional()` + `.default(0.5)`），
 /// 通过 [`BoxAdjustedArgs::threshold`] 取值即自动补默认。
-#[derive(Clone, Copy, Debug, Default, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize)]
 #[serde(default)]
 pub struct BoxAdjustedArgs {
     /// box 调整的置信度阈值。默认 0.5。
-    #[serde(default = "default_box_adjusted_threshold")]
+    #[serde(default = "default_box_adjusted_threshold", rename = "boxAdjustedThreshold")]
     pub box_adjusted_threshold: Option<f32>,
 }
 
@@ -67,18 +67,39 @@ pub struct OcrFramesBoxAdjustFrame {
     pub boxes: Vec<OcrFramesAdjustBox>,
 }
 
+/// `build_ocr_frames_box_adjust` 的返回结构（对齐 LocalDub `OcrBoxAdjustResult`）。
+#[derive(Clone, Debug, Serialize)]
+pub struct OcrBoxAdjustResult {
+    /// 各帧调整后的结果。
+    pub frames: Vec<OcrFramesBoxAdjustFrame>,
+    /// 溯源 / 生成参数。
+    pub meta: OcrBoxAdjustResultMeta,
+}
+
+/// `OcrBoxAdjustResult` 的 meta（对齐 LocalDub `OcrBoxAdjustResultMeta`）。
+#[derive(Clone, Debug, Serialize)]
+pub struct OcrBoxAdjustResultMeta {
+    /// 本次调整所用的纵向统计。
+    pub y_stats: YStats,
+    /// 帧数。
+    pub frame_count: usize,
+    /// 调整参数（原样回写，便于溯源）。
+    pub args: BoxAdjustedArgs,
+}
+
 /// 对一组帧做字幕框调整：依据 [`YStats`] 估算的典型位置/行高，给每个框算
 /// 上/下边界偏离比、框高比，按「偏离 >1 行高才罚」给噪声惩罚，得到调整后置信度；
 /// 低于 `box_adjusted_threshold` 的框标记为离群。
 ///
+/// 返回 [`OcrBoxAdjustResult`]（含 `meta`：`y_stats` / `frame_count` / `args`），
 /// 对齐 LocalDub `build_ocr_frames_box_adjust`。坐标保持 f32，不取整。
 pub fn build_ocr_frames_box_adjust(
     ocr_frames: &[FrameResult],
     y_stats: &YStats,
     args: &BoxAdjustedArgs,
-) -> Vec<OcrFramesBoxAdjustFrame> {
+) -> OcrBoxAdjustResult {
     let threshold = args.threshold();
-    ocr_frames
+    let frames: Vec<OcrFramesBoxAdjustFrame> = ocr_frames
         .iter()
         .map(|f| OcrFramesBoxAdjustFrame {
             text: f.text.clone(),
@@ -92,7 +113,15 @@ pub fn build_ocr_frames_box_adjust(
                 .map(|box_r| adjust_box(box_r, y_stats, threshold))
                 .collect(),
         })
-        .collect()
+        .collect();
+    OcrBoxAdjustResult {
+        meta: OcrBoxAdjustResultMeta {
+            y_stats: *y_stats,
+            frame_count: frames.len(),
+            args: *args,
+        },
+        frames,
+    }
 }
 
 /// 单个框的预处理调整（对齐 TS `build_ocr_frames_box_adjust` 内的 map 体）。
@@ -204,10 +233,11 @@ mod tests {
         let f = frame(vec![box_with("", [10.0, 20.0], 0.9)]);
         let y = YStats::default();
         let out = build_ocr_frames_box_adjust(&[f], &y, &BoxAdjustedArgs::default());
-        let b = &out[0].boxes[0];
+        let b = &out.frames[0].boxes[0];
         assert!(!b.is_outlier);
         assert_eq!(b.adjusted_text_confidence, 0.9);
         assert_eq!(b.height, 0.0);
+        assert_eq!(out.meta.frame_count, 1);
     }
 
     #[test]
@@ -223,9 +253,13 @@ mod tests {
         };
         let f = frame(vec![box_with("a", [400.0, 420.0], 0.9)]);
         let out = build_ocr_frames_box_adjust(&[f], &y, &BoxAdjustedArgs::default());
-        let b = &out[0].boxes[0];
+        let b = &out.frames[0].boxes[0];
         assert!(b.is_outlier, "偏离典型位置过远的框应标记为离群");
         assert!(b.adjusted_text_confidence < 0.9);
         assert_eq!(b.height, 20.0);
+        // meta 溯源字段正确回填。
+        assert_eq!(out.meta.frame_count, 1);
+        assert_eq!(out.meta.y_stats.median_height, 20.0);
+        assert_eq!(out.meta.args.threshold(), 0.5);
     }
 }

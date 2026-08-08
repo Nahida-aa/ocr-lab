@@ -5,17 +5,18 @@
 //! 以及行高分布，供后续行对齐、离群框剔除、段置信度调整使用。
 
 use crate::FrameResult;
+use serde::Serialize;
 
 /// 字幕框纵向统计结果（对齐 LocalDub `YStats`）。
 ///
 /// 坐标为原图像素坐标（f32，未取整——ROI 还原后可能为小数）。
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default, Serialize)]
 pub struct YStats {
-    /// y 值域均值 `[top, bottom]`（所有框 top 均值、bottom 均值）。
+    /// y 值域均值 `[top, bottom]`（所有框 top 均值、bottom 均值）
     pub avg: [f32; 2],
-    /// y 值域众数 `[top, bottom]`（出现最频繁的 (top, bottom) 对）。
+    /// y 值域众数 `[top, bottom]`出现最频繁的 (top, bottom) 对
     pub mode: [f32; 2],
-    /// y 值域中位数 `[top, bottom]`（所有 top 排序取中位、所有 bottom 排序取中位）。
+    /// y 值域中位数 `[top, bottom]`所有 top 排序取中位、所有 bottom 排序取中位
     pub median: [f32; 2],
     /// 平均行高（所有框 `y_range[1]-y_range[0]` 的均值）。
     pub avg_height: f32,
@@ -54,10 +55,7 @@ pub fn compute_box_y_stats(frames: &[FrameResult]) -> YStats {
     let avg_height = sum_h / n as f32;
 
     // 行高排序取中位。
-    let mut heights: Vec<f32> = boxes
-        .iter()
-        .map(|l| l.y_range[1] - l.y_range[0])
-        .collect();
+    let mut heights: Vec<f32> = boxes.iter().map(|l| l.y_range[1] - l.y_range[0]).collect();
     heights.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     let median_height = median_of(&heights);
 
@@ -182,8 +180,8 @@ mod tests {
     fn median_and_mode() {
         // 三个框：高度 10/20/10（众数 10）；位置各异。
         let f = frame(vec![
-            box_with("a", [10.0, 20.0]), // h=10
-            box_with("b", [40.0, 60.0]), // h=20
+            box_with("a", [10.0, 20.0]),   // h=10
+            box_with("b", [40.0, 60.0]),   // h=20
             box_with("c", [100.0, 110.0]), // h=10
         ]);
         let r = compute_box_y_stats(&[f]);

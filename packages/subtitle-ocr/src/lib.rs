@@ -31,7 +31,8 @@ pub(crate) mod pipeline;
 // 不随内部拆分而变。
 pub use crate::geometry::nms;
 pub use crate::ocr_fix::adjusted::{
-    build_ocr_frames_box_adjust, BoxAdjustedArgs, OcrFramesAdjustBox, OcrFramesBoxAdjustFrame,
+    build_ocr_frames_box_adjust, BoxAdjustedArgs, OcrBoxAdjustResult, OcrBoxAdjustResultMeta,
+    OcrFramesAdjustBox, OcrFramesBoxAdjustFrame,
 };
 pub use crate::ocr_fix::stats::{compute_box_y_stats, YStats};
 pub use crate::ocr_util::aggregate_boxes;
