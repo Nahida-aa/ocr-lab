@@ -2,5 +2,7 @@
 //!
 //! 子模块：
 //! - [`stats`]：字幕框纵向左统计（`compute_box_y_stats` / `YStats`）。
+//! - [`adjusted`]：行对齐后的框调整参数（`BoxAdjustedArgs`）。
 
+pub(crate) mod adjusted;
 pub(crate) mod stats;
