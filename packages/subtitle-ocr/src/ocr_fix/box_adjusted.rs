@@ -4,6 +4,7 @@
 //! `build_ocr_frames_box_adjust`：`box_adjusted_threshold` 为触发 box 调整的置信度阈值
 //! （低于此值的框进入调整流程），默认 0.5。
 
+use crate::ocr_util::aggregate_boxes;
 use crate::{FrameResult, OcrBoxResult, YStats};
 use serde::Deserialize;
 use serde::Serialize;
@@ -17,7 +18,10 @@ use serde::Serialize;
 #[serde(default)]
 pub struct BoxAdjustedArgs {
     /// box 调整的置信度阈值。默认 0.5。
-    #[serde(default = "default_box_adjusted_threshold", rename = "boxAdjustedThreshold")]
+    #[serde(
+        default = "default_box_adjusted_threshold",
+        rename = "boxAdjustedThreshold"
+    )]
     pub box_adjusted_threshold: Option<f32>,
 }
 
@@ -36,7 +40,7 @@ impl BoxAdjustedArgs {
 ///
 /// 用 `#[serde(flatten)]` 使序列化为平铺 JSON（对齐 TS 的 `OcrBoxResult & {...}` 交叉类型）。
 #[derive(Clone, Debug, Serialize)]
-pub struct OcrFramesAdjustBox {
+pub struct OcrBoxResultWithAdjust {
     #[serde(flatten)]
     pub base: OcrBoxResult,
     /// 上边界相对典型上边界的偏离（以行高为单位）。
@@ -58,22 +62,41 @@ pub struct OcrFramesAdjustBox {
 /// 显式列出帧字段（而非 flatten `FrameResult`）以避免与下面的 `boxes` 字段在序列化时
 /// 产生重复的 `boxes` key（对齐 TS 的 `Omit<FrameResult, "boxes"> & { boxes }`）。
 #[derive(Clone, Debug, Serialize)]
-pub struct OcrFramesBoxAdjustFrame {
+pub struct FrameResultBoxWithAdjust {
     pub text: String,
     pub confidence: f64,
     pub x_range: [f32; 2],
     pub y_range: [f32; 2],
     pub timestamp_ms: u64,
-    pub boxes: Vec<OcrFramesAdjustBox>,
+    pub boxes: Vec<OcrBoxResultWithAdjust>,
 }
 
 /// `build_ocr_frames_box_adjust` 的返回结构（对齐 LocalDub `OcrBoxAdjustResult`）。
 #[derive(Clone, Debug, Serialize)]
 pub struct OcrBoxAdjustResult {
     /// 各帧调整后的结果。
-    pub frames: Vec<OcrFramesBoxAdjustFrame>,
+    pub frames: Vec<FrameResultBoxWithAdjust>,
     /// 溯源 / 生成参数。
     pub meta: OcrBoxAdjustResultMeta,
+}
+
+/// 超集 → 子集的投影：`FrameResultBoxWithAdjust`（含调整附加字段）坍缩为干净的
+/// [`FrameResult`]（仅保留识别结果，丢弃 adjust 字段）。
+///
+/// 这正是 `From` 的标准语义：宽类型到窄类型、明确丢弃附加字段的转换。
+/// 实现后调用方可用 `.into()` 自动获得 [`FrameResult`]，对应 TS `get_ocr_frames_box_filtered`
+/// 用 `as` 强转后 adjust 元数据实际丢失的语义。
+impl From<FrameResultBoxWithAdjust> for FrameResult {
+    fn from(f: FrameResultBoxWithAdjust) -> FrameResult {
+        FrameResult {
+            text: f.text,
+            confidence: f.confidence,
+            x_range: f.x_range,
+            y_range: f.y_range,
+            timestamp_ms: f.timestamp_ms,
+            boxes: f.boxes.into_iter().map(|b| b.base).collect(),
+        }
+    }
 }
 
 /// `OcrBoxAdjustResult` 的 meta（对齐 LocalDub `OcrBoxAdjustResultMeta`）。
@@ -99,9 +122,9 @@ pub fn build_ocr_frames_box_adjust(
     args: &BoxAdjustedArgs,
 ) -> OcrBoxAdjustResult {
     let threshold = args.threshold();
-    let frames: Vec<OcrFramesBoxAdjustFrame> = ocr_frames
+    let frames: Vec<FrameResultBoxWithAdjust> = ocr_frames
         .iter()
-        .map(|f| OcrFramesBoxAdjustFrame {
+        .map(|f| FrameResultBoxWithAdjust {
             text: f.text.clone(),
             confidence: f.confidence,
             x_range: f.x_range,
@@ -125,10 +148,10 @@ pub fn build_ocr_frames_box_adjust(
 }
 
 /// 单个框的预处理调整（对齐 TS `build_ocr_frames_box_adjust` 内的 map 体）。
-fn adjust_box(box_r: &OcrBoxResult, y_stats: &YStats, threshold: f32) -> OcrFramesAdjustBox {
+fn adjust_box(box_r: &OcrBoxResult, y_stats: &YStats, threshold: f32) -> OcrBoxResultWithAdjust {
     // 空文本框：直接透传，不罚、不标记离群。
     if box_r.text.trim().is_empty() {
-        return OcrFramesAdjustBox {
+        return OcrBoxResultWithAdjust {
             base: box_r.clone(),
             top_offset_ratio: 0.0,
             bot_offset_ratio: 0.0,
@@ -165,7 +188,7 @@ fn adjust_box(box_r: &OcrBoxResult, y_stats: &YStats, threshold: f32) -> OcrFram
     let adjusted = box_r.text_confidence * (1.0 - noise_penalty);
     let is_outlier = adjusted < threshold;
 
-    OcrFramesAdjustBox {
+    OcrBoxResultWithAdjust {
         base: box_r.clone(),
         top_offset_ratio: top_or,
         bot_offset_ratio: bot_or,
@@ -174,6 +197,46 @@ fn adjust_box(box_r: &OcrBoxResult, y_stats: &YStats, threshold: f32) -> OcrFram
         is_outlier,
         adjusted_text_confidence: adjusted,
     }
+}
+
+/// 过滤离群框：逐帧剔除 `is_outlier` 的框后，重新聚合得到干净帧。
+///
+/// 输出普通的 [`FrameResult`]（不含调整附加字段），对齐 LocalDub `get_ocr_frames_box_filtered`：
+/// - 全部框都是离群 → 丢弃该帧；
+/// - 无离群框 → 原帧转回 [`FrameResult`] 返回；
+/// - 部分离群 → 用干净框调 [`aggregate_boxes`] 重聚合成新帧（text/confidence/x_range/
+///   y_range/boxes 取自重聚结果，其余帧字段如 `timestamp_ms` 保留原值）。
+///
+/// 返回 [`FrameResult`] 而非带 adjust 字段的结构，正好对应 TS 用 `as` 强转后
+/// adjust 元数据实际丢失的语义：过滤阶段只关心「框是否离群」，下游拿到的是干净
+/// 的识别结果，不再需要偏离比 / 惩罚置信度等中间量。
+pub fn get_ocr_frames_box_filtered(
+    frames: &[FrameResultBoxWithAdjust],
+) -> Vec<FrameResult> {
+    frames
+        .iter()
+        .flat_map(|f| {
+            let clean_boxes: Vec<&OcrBoxResultWithAdjust> =
+                f.boxes.iter().filter(|b| !b.is_outlier).collect();
+            if clean_boxes.is_empty() {
+                return Vec::new(); // 全离群 → 丢帧
+            }
+            if clean_boxes.len() == f.boxes.len() {
+                // 无离群 → 原帧转回 FrameResult
+                return vec![f.clone().into()];
+            }
+            // 部分离群 → 干净框重聚合（`aggregate_boxes` 只聚合 `OcrBoxResult`，
+            // 不携带 `timestamp_ms`，需保留原帧的时刻）。
+            let mut rebuilt_ocr = aggregate_boxes(
+                &clean_boxes
+                    .iter()
+                    .map(|b| b.base.clone())
+                    .collect::<Vec<_>>(),
+            );
+            rebuilt_ocr.timestamp_ms = f.timestamp_ms;
+            vec![rebuilt_ocr]
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -206,6 +269,36 @@ mod tests {
             x_range: [0.0, 0.0],
             y_range: [0.0, 0.0],
             timestamp_ms: 0,
+        }
+    }
+
+    /// 构造一个调整后框（adjust 字段用给定值，便于测试 is_outlier 过滤）。
+    fn adjust_box_with(
+        text: &str,
+        y_range: [f32; 2],
+        conf: f32,
+        is_outlier: bool,
+    ) -> OcrBoxResultWithAdjust {
+        OcrBoxResultWithAdjust {
+            base: box_with(text, y_range, conf),
+            top_offset_ratio: 0.0,
+            bot_offset_ratio: 0.0,
+            height: y_range[1] - y_range[0],
+            height_ratio: 1.0,
+            is_outlier,
+            adjusted_text_confidence: conf,
+        }
+    }
+
+    /// 用一组调整后框构造一帧（强制 sameLine=false 的 y 不重叠，确保聚合不被合并）。
+    fn adjust_frame(boxes: Vec<OcrBoxResultWithAdjust>, ts: u64) -> FrameResultBoxWithAdjust {
+        FrameResultBoxWithAdjust {
+            text: String::new(),
+            confidence: 0.0,
+            x_range: [0.0, 0.0],
+            y_range: [0.0, 0.0],
+            timestamp_ms: ts,
+            boxes,
         }
     }
 
@@ -261,5 +354,54 @@ mod tests {
         assert_eq!(out.meta.frame_count, 1);
         assert_eq!(out.meta.y_stats.median_height, 20.0);
         assert_eq!(out.meta.args.threshold(), 0.5);
+    }
+
+    #[test]
+    fn all_outlier_frame_is_dropped() {
+        // 整帧框都是离群 → 过滤后该帧消失。
+        let f = adjust_frame(
+            vec![
+                adjust_box_with("a", [400.0, 420.0], 0.9, true),
+                adjust_box_with("b", [410.0, 430.0], 0.8, true),
+            ],
+            100,
+        );
+        let out = get_ocr_frames_box_filtered(&[f]);
+        assert!(out.is_empty(), "全离群帧应被丢弃");
+    }
+
+    #[test]
+    fn no_outlier_frame_passthrough() {
+        // 无离群框 → 原帧转回 FrameResult 返回（含原 timestamp_ms）。
+        let f = adjust_frame(
+            vec![
+                adjust_box_with("a", [100.0, 120.0], 0.9, false),
+                adjust_box_with("b", [200.0, 220.0], 0.8, false),
+            ],
+            12345,
+        );
+        let out = get_ocr_frames_box_filtered(&[f]);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].timestamp_ms, 12345);
+        assert_eq!(out[0].boxes.len(), 2);
+    }
+
+    #[test]
+    fn partial_outlier_frame_rebuilt() {
+        // 部分离群 → 干净框重聚合，离群框被剔除、新帧保留原 timestamp_ms。
+        // 两个干净框 y 不重叠（sameLine=false），聚合后 text 用换行连接，boxes 数量为 2。
+        let f = adjust_frame(
+            vec![
+                adjust_box_with("a", [100.0, 120.0], 0.9, false),
+                adjust_box_with("b", [200.0, 220.0], 0.8, false),
+                adjust_box_with("c", [400.0, 420.0], 0.9, true), // 离群，剔除
+            ],
+            999,
+        );
+        let out = get_ocr_frames_box_filtered(&[f]);
+        assert_eq!(out.len(), 1, "部分离群帧保留");
+        assert_eq!(out[0].timestamp_ms, 999, "timestamp_ms 保留原值");
+        assert_eq!(out[0].boxes.len(), 2, "离群框被剔除");
+        // 输出为干净 FrameResult，框就是普通 OcrBoxResult（无 adjust 字段）。
     }
 }
