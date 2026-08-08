@@ -14,7 +14,7 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use serde_json::Value;
 use std::path::{Path, PathBuf};
-use subtitle_ocr::{OcrOptions, OcrEntry, SubtitleOcr};
+use subtitle_ocr::{OcrOptions, OcrEntry, OcrDevice, OcrFramesMeta, OcrFramesResult, SubtitleOcr};
 
 mod util;
 use util::{BadNameAction, list_frames};
@@ -46,8 +46,8 @@ struct Cli {
     dir: Option<String>,
 
     /// 批量模式（`--dir`）下，文件名不符合 `ms` / `ms_ms` 时间格式时的处理：
-    /// `skip` 跳过并警告（默认）；`error` 直接报错终止。
-    #[arg(long, value_enum, default_value_t = BadNameAction::Skip)]
+    /// `error` 直接报错终止（默认，避免静默丢帧）；`skip` 跳过并警告。
+    #[arg(long, value_enum, default_value_t = BadNameAction::Error)]
     on_bad_name: BadNameAction,
 
     /// 识别置信度下限（cpp text_score，默认 0.5）
@@ -74,6 +74,13 @@ struct Cli {
     /// 推理线程数（预留；当前 OcrEngine 固定 4，与 cpp 默认一致）
     #[arg(long)]
     threads: Option<usize>,
+
+    /// 输出文件路径（完整文件名，由调用方决定，如 `asr_ocr_frames.json`）：写入
+    /// `OcrFramesResult` 结构（各帧结果 + 溯源 meta），便于对接 LocalDub 的
+    /// `asr_ocr_frames.json` / `sf_ocr_frames.json` 等。不指定时仅向 stdout 打印逐帧
+    /// JSON 数组，行为与之前一致。两者可同时生效。
+    #[arg(long)]
+    out: Option<String>,
 }
 
 /// 仓库根：二进制在 `target/debug/subtitle-ocr`，上溯两级到 workspace 根。
@@ -136,6 +143,33 @@ fn main() -> Result<()> {
 
     // 核心流程（读图 → 识别 → 聚合 → 按时刻展开）复用库函数，避免各处照抄。
     let frame_outs: Vec<subtitle_ocr::FrameResult> = subtitle_ocr::ocr_entries(&mut ocr, &entries)?;
+
+    // --out：额外落地 OcrFramesResult（文件名由调用方指定，如 asr_ocr_frames.json）
+    if let Some(out) = &cli.out {
+        let path = resolve_path(&repo_root, out);
+        if let Some(parent) = path.parent() {
+            if !parent.as_os_str().is_empty() {
+                std::fs::create_dir_all(parent)
+                    .with_context(|| format!("创建输出目录失败: {}", parent.display()))?;
+            }
+        }
+        let result = OcrFramesResult {
+            frames: frame_outs.clone(),
+            meta: OcrFramesMeta {
+                // 本包为 rust 实现；设备固定 cpu（cpp 侧才区分 cuda 等）。
+                engine: "ort-rust".to_string(),
+                device: OcrDevice::Cpu,
+            },
+        };
+        let json =
+            serde_json::to_string_pretty(&result).context("序列化 OcrFramesResult 失败")?;
+        std::fs::write(&path, json).with_context(|| format!("写入失败: {}", path.display()))?;
+        eprintln!(
+            "[ocr] 已写出 {} 帧到 {}",
+            result.frames.len(),
+            path.display()
+        );
+    }
 
     // 主输出：与 cpp 同形状的 JSON 数组（逐图/批量，不带时间轴）。
     let arr: Vec<Value> = frame_outs

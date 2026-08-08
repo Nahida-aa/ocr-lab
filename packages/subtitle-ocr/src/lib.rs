@@ -21,14 +21,16 @@ use rapidocr_ort::{ModelProfile, OcrEngine};
 use serde::Serialize;
 use std::path::PathBuf;
 
-pub(crate) mod alg_util;
+pub(crate) mod geometry;
 pub(crate) mod ocr_util;
+pub(crate) mod pipeline;
 
 // 模块保持 pub(crate)（内部分层是实现细节），仅把对外 API 提到 crate 根，
 // 使用方路径仍是 `subtitle_ocr::aggregate_boxes` / `subtitle_ocr::nms`，
 // 不随内部拆分而变。
-pub use crate::alg_util::nms;
+pub use crate::geometry::nms;
 pub use crate::ocr_util::aggregate_boxes;
+pub use crate::pipeline::{OcrDevice, OcrFramesMeta, OcrFramesResult};
 
 // ==========================================================
 // 选项与结果类型
@@ -174,7 +176,7 @@ impl SubtitleOcr {
             .collect();
 
         if self.opts.use_nms && boxes.len() > 1 {
-            boxes = alg_util::nms(boxes);
+            boxes = geometry::nms(boxes);
         }
 
         // 排序：先按 y 中心，差 ≤20px 再按 x 中心（cpp 的 TL/BR 排序等价）。

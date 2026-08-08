@@ -18,11 +18,11 @@ use glam::Vec2;
 /// 算质心——若复用此处会多扫一遍点。两函数求值口径必须保持一致，故请让它们**紧邻放置**，
 /// 便于对照（改一处值域算法时另一处要同步）。
 pub fn points_range<I: Iterator<Item = Vec2>>(pts: I) -> ([f32; 2], [f32; 2]) {
-    let (lo, hi) = pts.fold(
+    let (min_xy, max_xy) = pts.fold(
         (Vec2::splat(f32::INFINITY), Vec2::splat(f32::NEG_INFINITY)),
-        |(lo, hi), p| (lo.min(p), hi.max(p)),
+        |(min_xy, max_xy), p| (min_xy.min(p), max_xy.max(p)),
     );
-    ([lo.x, hi.x], [lo.y, hi.y])
+    ([min_xy.x, max_xy.x], [min_xy.y, max_xy.y])
 }
 
 /// 由四边形顶点算 `x_range` / `y_range` 与几何中心（四点平均）。
