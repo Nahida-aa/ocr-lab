@@ -22,6 +22,7 @@ use serde::Serialize;
 use std::path::PathBuf;
 
 pub(crate) mod geometry;
+pub(crate) mod ocr_fix;
 pub(crate) mod ocr_util;
 pub(crate) mod pipeline;
 
@@ -29,6 +30,7 @@ pub(crate) mod pipeline;
 // 使用方路径仍是 `subtitle_ocr::aggregate_boxes` / `subtitle_ocr::nms`，
 // 不随内部拆分而变。
 pub use crate::geometry::nms;
+pub use crate::ocr_fix::stats::{compute_box_y_stats, YStats};
 pub use crate::ocr_util::aggregate_boxes;
 pub use crate::pipeline::{OcrDevice, OcrFramesMeta, OcrFramesResult};
 
