@@ -33,9 +33,9 @@ pub use crate::geometry::nms;
 pub use crate::ocr_fix::box_adjust::{
     BoxAdjustedArgs, FrameResultBoxWithAdjust, OcrBoxAdjustResult, OcrBoxAdjustResultMeta,
     OcrBoxResultWithAdjust, OcrFramesBoxFilteredResult, OcrFramesBoxFilteredResultMeta,
-    build_ocr_frames_box_adjust,
+    ocr_frames_adjust_box,
 };
-pub use crate::ocr_fix::box_filter::filter_ocr_frames_box;
+pub use crate::ocr_fix::box_filter::ocr_frames_filter_box;
 pub use crate::ocr_fix::merge_frames::{
     MergeFramesArgs, MergeFramesResult, OcrSegment, SegmentFrame, avg_confidence,
     base_merge_frames, dedup_overlap, edit_distance, is_substring_of, merge_adjacent_same_text,
@@ -43,7 +43,7 @@ pub use crate::ocr_fix::merge_frames::{
     remove_triplet_noise,
 };
 pub use crate::ocr_fix::segment_adjust::{
-    OcrSegmentAdjustArgs, OcrSegmentWithAdjust, compute_segment_adjust,
+    OcrSegmentAdjustArgs, OcrSegmentWithAdjust, ocr_segment_adjust,
 };
 pub use crate::ocr_fix::segment_filter::{
     OcrSegmentFilterData, OcrSegmentFilterMeta, OcrSegmentFilterResult, ocr_segment_filter,

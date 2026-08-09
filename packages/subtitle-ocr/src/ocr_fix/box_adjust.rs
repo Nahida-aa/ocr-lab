@@ -135,8 +135,8 @@ pub struct OcrFramesBoxFilteredResultMeta {
 /// 低于 `box_adjusted_threshold` 的框标记为离群。
 ///
 /// 返回 [`OcrBoxAdjustResult`]（含 `meta`：`y_stats` / `frame_count` / `args`），
-/// 对齐 LocalDub `build_ocr_frames_box_adjust`。坐标保持 f32，不取整。
-pub fn build_ocr_frames_box_adjust(
+/// 对齐 LocalDub `ocr_frames_adjust_box`。坐标保持 f32，不取整。
+pub fn ocr_frames_adjust_box(
     ocr_frames: &[FrameResult],
     y_stats: &YStats,
     args: &BoxAdjustedArgs,
@@ -275,7 +275,7 @@ mod tests {
     fn empty_text_box_passthrough() {
         let f = frame(vec![box_with("", [10.0, 20.0], 0.9)]);
         let y = YStats::default();
-        let out = build_ocr_frames_box_adjust(&[f], &y, &BoxAdjustedArgs::default());
+        let out = ocr_frames_adjust_box(&[f], &y, &BoxAdjustedArgs::default());
         let b = &out.frames[0].boxes[0];
         assert!(!b.is_outlier);
         assert_eq!(b.adjusted_text_confidence, 0.9);
@@ -295,7 +295,7 @@ mod tests {
             mode_height: 20.0,
         };
         let f = frame(vec![box_with("a", [400.0, 420.0], 0.9)]);
-        let out = build_ocr_frames_box_adjust(&[f], &y, &BoxAdjustedArgs::default());
+        let out = ocr_frames_adjust_box(&[f], &y, &BoxAdjustedArgs::default());
         let b = &out.frames[0].boxes[0];
         assert!(b.is_outlier, "偏离典型位置过远的框应标记为离群");
         assert!(b.adjusted_text_confidence < 0.9);

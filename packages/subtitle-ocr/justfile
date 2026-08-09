@@ -9,6 +9,7 @@
 #   just merge <frames> [out]  # 多帧合并：逐帧 JSON → 带时间轴字幕段
 #   just adjust-box <frames> [out]  # 字幕框调整：逐帧 JSON(含boxes) → 调整后框+meta
 #   just filter-box <adj> [out]     # 离群框过滤：adjust 输出 → 干净逐帧结果
+#   just adjust-segment <in> [out]  # 字幕段置信度调整：合并段 → 带惩罚/调整后置信度
 #   just doc                   # 构建文档（带私有项，便于看内部模块）
 #
 # 输出：stdout 为与 cpp 同形状的 JSON 数组（text/confidence/boxes/timestamp）；
@@ -66,3 +67,11 @@ adjust-box in="tmp/asr_ocr_frames.json" out="tmp/adjusted.json":
 # 输出 OcrFramesBoxFilteredResult { frames, meta } 到 stdout（--out 额外落盘）。
 filter-box in="tmp/adjusted.json" out="tmp/filtered.json":
     cargo run -p subtitle-ocr --bin ocr-frames-filter-box --release -- {{in}} --out {{out}}
+
+# ---- 字幕段置信度调整：给合并段补 Y 偏移/孤立惩罚与调整后置信度 ----
+# 用法：just adjust-segment <input.json> [out]
+# 输入为打包 JSON（segments/frames/video_height + 可选 y_stats/args），通常由
+# merge-frames 的 segments 与目录识别的 frames 组装而来；
+# 输出 OcrSegmentWithAdjust[] 到 stdout（--out 额外落盘），供下游 ocr-segment-filter 消费。
+adjust-segment in="tmp/segment_adjust_in.json" out="tmp/segment_adjusted.json":
+    cargo run -p subtitle-ocr --bin ocr-segment-adjust --release -- {{in}} --out {{out}}

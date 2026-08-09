@@ -23,7 +23,7 @@ use crate::{FrameResult, compute_box_y_stats};
 /// 用 `as FrameResult` / 重建后 adjust 元数据实际丢失的语义。最终包成
 /// [`OcrFramesBoxFilteredResult`]，其 `meta.y_stats` 对**过滤后**的帧重新统计
 /// （对齐 TS `computeBoxYStats(filteredFrames)`）。
-pub fn filter_ocr_frames_box(frames: &[FrameResultBoxWithAdjust]) -> OcrFramesBoxFilteredResult {
+pub fn ocr_frames_filter_box(frames: &[FrameResultBoxWithAdjust]) -> OcrFramesBoxFilteredResult {
     let frames: Vec<FrameResult> = frames
         .iter()
         .flat_map(|f| {
@@ -60,8 +60,8 @@ pub fn filter_ocr_frames_box(frames: &[FrameResultBoxWithAdjust]) -> OcrFramesBo
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ocr_fix::box_adjust::OcrBoxResultWithAdjust;
     use crate::OcrBoxResult;
+    use crate::ocr_fix::box_adjust::OcrBoxResultWithAdjust;
 
     fn box_with(text: &str, y_range: [f32; 2], conf: f32) -> OcrBoxResult {
         OcrBoxResult {
@@ -120,7 +120,7 @@ mod tests {
             ],
             100,
         );
-        let out = filter_ocr_frames_box(&[f]);
+        let out = ocr_frames_filter_box(&[f]);
         assert!(out.frames.is_empty(), "全离群帧应被丢弃");
         assert_eq!(out.meta.frame_count, 0);
     }
@@ -135,7 +135,7 @@ mod tests {
             ],
             12345,
         );
-        let out = filter_ocr_frames_box(&[f]);
+        let out = ocr_frames_filter_box(&[f]);
         assert_eq!(out.frames.len(), 1);
         assert_eq!(out.frames[0].timestamp, 12345);
         assert_eq!(out.frames[0].boxes.len(), 2);
@@ -154,7 +154,7 @@ mod tests {
             ],
             999,
         );
-        let out = filter_ocr_frames_box(&[f]);
+        let out = ocr_frames_filter_box(&[f]);
         assert_eq!(out.frames.len(), 1, "部分离群帧保留");
         assert_eq!(out.frames[0].timestamp, 999, "timestamp 保留原值");
         assert_eq!(out.frames[0].boxes.len(), 2, "离群框被剔除");

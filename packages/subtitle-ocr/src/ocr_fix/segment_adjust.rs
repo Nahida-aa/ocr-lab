@@ -118,7 +118,7 @@ pub struct OcrSegmentWithAdjust {
 /// 类型映射：TS 的 `frame_count` / `text_confidence` 为可选（本库 `frame_count` 为
 /// `Option<u32>`、`text_confidence` 为必填 f32）；当 `frame_count` 为 `None` 时按 TS 的
 /// 「缺字段」处理——原样包回、不计算调整。
-pub fn compute_segment_adjust(
+pub fn ocr_segment_adjust(
     segments: &[OcrSegment],
     frame_results: &[FrameResult],
     y_stats: &YStats,
@@ -162,7 +162,8 @@ pub fn compute_segment_adjust(
                 };
             }
 
-            let y_penalty = compute_y_penalty(seg, avg_centroid, video_height, args.adjust_y_factor());
+            let y_penalty =
+                compute_y_penalty(seg, avg_centroid, video_height, args.adjust_y_factor());
             let iso_penalty = compute_iso_penalty(seg, &non_empty_ts, args.iso_threshold_ms());
 
             // ─── 合成最终置信度 ───
@@ -211,11 +212,7 @@ fn compute_y_penalty(
 /// `non_empty_ts` 里相邻的「前/后最近非空帧」的较小间隔，归一化到
 /// `gap / iso_threshold_ms`，clamp 到 [0,1]；某侧无相邻非空帧时该间隔视为无穷 → 惩罚取满 1。
 /// 多帧段（`frame_count != 1`）返回 0。
-fn compute_iso_penalty(
-    seg: &OcrSegment,
-    non_empty_ts: &[u64],
-    iso_threshold_ms: u64,
-) -> f32 {
+fn compute_iso_penalty(seg: &OcrSegment, non_empty_ts: &[u64], iso_threshold_ms: u64) -> f32 {
     if seg.frame_count != Some(1) {
         return 0.0;
     }
@@ -377,11 +374,11 @@ mod tests {
     fn compute_segment_adjust_early_return_when_empty_or_zero_ystats() {
         let args = OcrSegmentAdjustArgs::default();
         // 段为空 → 原样包回（无惩罚字段）。
-        let out = compute_segment_adjust(&[], &[], &y_stats(10.0, 30.0), 1080.0, &args);
+        let out = ocr_segment_adjust(&[], &[], &y_stats(10.0, 30.0), 1080.0, &args);
         assert!(out.is_empty());
         // yStats.avg 全 0 → 原样包回，不计算惩罚。
         let segs = vec![seg("你好", 0, 100, [10.0, 30.0], 0.9, Some(1))];
-        let out = compute_segment_adjust(&segs, &[], &y_stats(0.0, 0.0), 1080.0, &args);
+        let out = ocr_segment_adjust(&segs, &[], &y_stats(0.0, 0.0), 1080.0, &args);
         assert_eq!(out.len(), 1);
         assert!(out[0].adjusted_text_confidence.is_none());
         assert!(out[0].y_penalty.is_none());
@@ -393,7 +390,7 @@ mod tests {
         let frames = vec![frame(400, [10.0, 30.0]), frame(600, [10.0, 30.0])];
         let segs = vec![seg("你好", 400, 600, [10.0, 30.0], 0.9, Some(1))];
         let args = OcrSegmentAdjustArgs::default();
-        let out = compute_segment_adjust(&segs, &frames, &y_stats(10.0, 30.0), 1080.0, &args);
+        let out = ocr_segment_adjust(&segs, &frames, &y_stats(10.0, 30.0), 1080.0, &args);
         let iso = out[0].iso_penalty.unwrap();
         // 100/1500=0.0666… 经 round2 取 0.07。
         assert!((iso - 0.07).abs() < 1e-6, "iso_penalty ≈ 0.07, got {iso}");
@@ -409,7 +406,7 @@ mod tests {
         let frames: Vec<FrameResult> = vec![]; // 无相邻帧
         let segs = vec![seg("你好", 4000, 6000, [10.0, 30.0], 0.9, Some(1))];
         let args = OcrSegmentAdjustArgs::default();
-        let out = compute_segment_adjust(&segs, &frames, &y_stats(10.0, 30.0), 1080.0, &args);
+        let out = ocr_segment_adjust(&segs, &frames, &y_stats(10.0, 30.0), 1080.0, &args);
         assert_eq!(out[0].iso_penalty.unwrap(), 1.0, "全孤立单帧惩罚取满 1");
         // 调整置信度 = 0.9 × max(0, 1 - (0.8·0 + 0.2·1)) = 0.9 × 0.8 = 0.72。
         assert!((out[0].adjusted_text_confidence.unwrap() - 0.72).abs() < 1e-6);
@@ -421,7 +418,7 @@ mod tests {
         let frames = vec![frame(400, [10.0, 30.0])];
         let segs = vec![seg("你好", 0, 1000, [10.0, 30.0], 0.9, Some(3))];
         let args = OcrSegmentAdjustArgs::default();
-        let out = compute_segment_adjust(&segs, &frames, &y_stats(10.0, 30.0), 1080.0, &args);
+        let out = ocr_segment_adjust(&segs, &frames, &y_stats(10.0, 30.0), 1080.0, &args);
         assert_eq!(out[0].iso_penalty.unwrap(), 0.0, "多帧段无孤立惩罚");
     }
 
@@ -431,7 +428,7 @@ mod tests {
         // adjustYFactor 默认 0.08 → denom=86.4 → yPenalty=40/86.4≈0.46。
         let segs = vec![seg("你好", 0, 100, [50.0, 70.0], 0.9, Some(2))];
         let args = OcrSegmentAdjustArgs::default();
-        let out = compute_segment_adjust(&segs, &[], &y_stats(10.0, 30.0), 1080.0, &args);
+        let out = ocr_segment_adjust(&segs, &[], &y_stats(10.0, 30.0), 1080.0, &args);
         let yp = out[0].y_penalty.unwrap();
         // 40/86.4=0.46296… 经 round2 取 0.46。
         assert!((yp - 0.46).abs() < 1e-2, "y_penalty ≈ 0.46, got {yp}");
@@ -442,7 +439,7 @@ mod tests {
         // frame_count 为 None → 对齐 TS 缺字段，原样包回。
         let segs = vec![seg("你好", 0, 100, [10.0, 30.0], 0.9, None)];
         let args = OcrSegmentAdjustArgs::default();
-        let out = compute_segment_adjust(&segs, &[], &y_stats(10.0, 30.0), 1080.0, &args);
+        let out = ocr_segment_adjust(&segs, &[], &y_stats(10.0, 30.0), 1080.0, &args);
         assert!(out[0].adjusted_text_confidence.is_none());
         assert!(out[0].y_penalty.is_none());
         assert!(out[0].iso_penalty.is_none());
@@ -470,7 +467,10 @@ mod tests {
         // 段质心 60、avgCentroid 20 → offset=40，denom=1080×0.08=86.4 → 40/86.4≈0.46。
         let s = seg("你好", 0, 100, [50.0, 70.0], 0.9, Some(1));
         let yp = compute_y_penalty(&s, 20.0, 1080.0, 0.08);
-        assert!((yp - 40.0 / 86.4).abs() < 1e-3, "y_penalty ≈ 0.46, got {yp}");
+        assert!(
+            (yp - 40.0 / 86.4).abs() < 1e-3,
+            "y_penalty ≈ 0.46, got {yp}"
+        );
     }
 
     #[test]
@@ -493,7 +493,10 @@ mod tests {
         // 单帧 mid=500，相邻 400/600 → gap=100，threshold=1500 → 100/1500≈0.0666…（f32 近似）。
         let single = seg("你好", 400, 600, [10.0, 30.0], 0.9, Some(1));
         let iso = compute_iso_penalty(&single, &[400, 600], 1500);
-        assert!((iso - 100.0 / 1500.0).abs() < 1e-6, "iso_penalty ≈ 0.0666, got {iso}");
+        assert!(
+            (iso - 100.0 / 1500.0).abs() < 1e-6,
+            "iso_penalty ≈ 0.0666, got {iso}"
+        );
     }
 
     #[test]

@@ -5,12 +5,12 @@
 //! 以及行高分布，供后续行对齐、离群框剔除、段置信度调整使用。
 
 use crate::FrameResult;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 /// 字幕框纵向统计结果（对齐 LocalDub `YStats`）。
 ///
 /// 坐标为原图像素坐标（f32，未取整——ROI 还原后可能为小数）。
-#[derive(Clone, Copy, Debug, Default, Serialize)]
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize)]
 pub struct YStats {
     /// y 值域均值 `[top, bottom]`（所有框 top 均值、bottom 均值）
     pub avg: [f32; 2],
