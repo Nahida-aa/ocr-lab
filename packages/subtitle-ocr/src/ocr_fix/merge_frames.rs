@@ -478,6 +478,42 @@ pub fn dedup_overlap(segments: &[OcrSegment], dedup_edit_distance: u32) -> Vec<O
     out
 }
 
+/// fourth pass：合并归一化后文本相同、且时间上不重叠、间隔不超过 `MAX_GAP_MS`(2s) 的
+/// 相邻段（对齐 LocalDub `utils.ts` 的 `mergeAdjacentSameText`）。
+///
+/// 处理 A → 噪声 → A 这种被「长噪声段」切断、三元组噪声规则未触发的情况：同一字幕在
+/// 标点/换气停顿切开了 ASR 切片后，于约 2s 内再次出现。反向遍历相邻 `(prev, cur)`：
+/// 归一化文本不同则跳过；`cur.start - prev.end` 为「不重叠且间隔 ≤ 2s」才合并——延伸
+/// prev 终点、置信度取 [`avg_confidence`]、`frame_count` 相加、`frames` 拼接。
+///
+/// 合并出的段**不携带 `frames`**（TS 合并字面量未含 `frames` 键，序列化即丢弃），与 TS
+/// 丢弃组成帧明细的语义一致。段序列按时间有序，反向相邻合并即等价于 TS 的 `splice(i, 1)`
+/// 把 cur 删进 prev。
+pub fn merge_adjacent_same_text(segments: &[OcrSegment]) -> Vec<OcrSegment> {
+    const MAX_GAP_MS: u64 = 2000;
+    let mut out: Vec<OcrSegment> = segments.to_vec();
+    // 反向遍历，把 cur 并入 prev（等价于 TS 的 segments[i-1] 吸收 segments[i] 后 splice 删除）。
+    for i in (1..out.len()).rev() {
+        let prev_norm = normalize(&out[i - 1].base.text);
+        let cur_norm = normalize(&out[i].base.text);
+        if prev_norm != cur_norm {
+            continue;
+        }
+        let gap = out[i].base.start_ms.saturating_sub(out[i - 1].base.end_ms);
+        if gap > MAX_GAP_MS {
+            continue; // 仅在不重叠（gap>=0）且间隔 ≤ 2s 时合并
+        }
+        // 把 cur 吞进 prev：终点顺延、置信度均值、frame_count 相加、frames 拼接。
+        out[i - 1].base.end_ms = out[i].base.end_ms;
+        out[i - 1].text_confidence =
+            avg_confidence(&[out[i - 1].text_confidence, out[i].text_confidence]);
+        out[i - 1].frame_count =
+            Some(out[i - 1].frame_count.unwrap_or(1) + out[i].frame_count.unwrap_or(1));
+        out.remove(i);
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -830,5 +866,45 @@ mod tests {
         ];
         assert_eq!(dedup_overlap(&segs, 1).len(), 2, "阈值 1 不合并");
         assert_eq!(dedup_overlap(&segs, 2).len(), 1, "阈值 2 合并");
+    }
+
+    #[test]
+    fn merge_adjacent_same_text_merges_same_text_within_gap() {
+        // A(0-1000) → 停顿 → A(2500-3500)：归一化文本相同、间隔 1500ms ≤ 2s 且不重叠
+        // → 合并为一段，终点顺延到 3500，frame_count=2，置信度取均值。
+        let segs = vec![
+            segment("你好", 0, 1000, [10.0, 30.0], 0.9),
+            segment("你好", 2500, 3500, [10.0, 30.0], 0.8),
+        ];
+        let out = merge_adjacent_same_text(&segs);
+        assert_eq!(out.len(), 1, "归一化同文本、间隔≤2s 应合并");
+        assert_eq!(out[0].base.text, "你好");
+        assert_eq!(out[0].base.start_ms, 0);
+        assert_eq!(out[0].base.end_ms, 3500);
+        assert_eq!(out[0].frame_count, Some(2));
+        assert!((out[0].text_confidence - 0.85).abs() < 1e-5);
+    }
+
+    #[test]
+    fn merge_adjacent_same_text_keeps_when_gap_too_large() {
+        // 文本相同但间隔 3000ms > 2s → 不合并，保留两段。
+        let segs = vec![
+            segment("你好", 0, 1000, [10.0, 30.0], 0.9),
+            segment("你好", 4000, 5000, [10.0, 30.0], 0.8),
+        ];
+        let out = merge_adjacent_same_text(&segs);
+        assert_eq!(out.len(), 2, "间隔>2s 应保留两段");
+    }
+
+    #[test]
+    fn merge_adjacent_same_text_normalizes_whitespace() {
+        // 归一化后文本相同（差异仅空白）→ 合并。
+        let segs = vec![
+            segment("你 好", 0, 1000, [10.0, 30.0], 0.9),
+            segment("你好", 1500, 2500, [10.0, 30.0], 0.8),
+        ];
+        let out = merge_adjacent_same_text(&segs);
+        assert_eq!(out.len(), 1, "归一化同文本应合并");
+        assert_eq!(out[0].base.end_ms, 2500);
     }
 }
