@@ -15,25 +15,25 @@ path = "src/lib.rs"
 name = "subtitle-ocr"
 path = "src/main.rs"
 
-[[bin]]
-name = "merge-frames"
-path = "src/bin/merge_frames_cli.rs"
+# [[bin]]
+# name = "merge-frames"
+# path = "src/bin/merge_frames_cli.rs"
 
-[[bin]]
-name = "ocr-frames-adjust-box"
-path = "src/bin/ocr_frames_adjust_box_cli.rs"
+# [[bin]]
+# name = "ocr-frames-adjust-box"
+# path = "src/bin/ocr_frames_adjust_box_cli.rs"
 
-[[bin]]
-name = "ocr-frames-filter-box"
-path = "src/bin/ocr_frames_filter_box_cli.rs"
+# [[bin]]
+# name = "ocr-frames-filter-box"
+# path = "src/bin/ocr_frames_filter_box_cli.rs"
 
-[[bin]]
-name = "ocr-segment-adjust"
-path = "src/bin/ocr_segment_adjust_cli.rs"
+# [[bin]]
+# name = "ocr-segment-adjust"
+# path = "src/bin/ocr_segment_adjust_cli.rs"
 
-[[bin]]
-name = "ocr-segment-filter"
-path = "src/bin/ocr_segment_filter_cli.rs"
+# [[bin]]
+# name = "ocr-segment-filter"
+# path = "src/bin/ocr_segment_filter_cli.rs"
 
 [dependencies]
 # OCR 引擎（det/rec/cls 推理 + 模型加载 + 字典），本包只做字幕专属逻辑。
