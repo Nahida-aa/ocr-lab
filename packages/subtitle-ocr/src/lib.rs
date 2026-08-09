@@ -36,8 +36,8 @@ pub use crate::ocr_fix::box_adjusted::{
     build_ocr_frames_box_adjust, get_ocr_frames_box_filtered,
 };
 pub use crate::ocr_fix::merge_frames::{
-    avg_confidence, base_merge_frames, edit_distance, is_substring_of, MergeFramesArgs,
-    merge_confidence, merge_substring_segments, normalize, OcrSegment, overlap,
+    avg_confidence, base_merge_frames, dedup_overlap, edit_distance, is_substring_of,
+    MergeFramesArgs, merge_confidence, merge_substring_segments, normalize, OcrSegment, overlap,
     remove_triplet_noise, SegmentFrame,
 };
 pub use crate::ocr_fix::stats::{YStats, compute_box_y_stats};

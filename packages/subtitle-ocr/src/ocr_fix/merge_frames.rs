@@ -322,36 +322,27 @@ pub fn merge_substring_segments(segments: &[OcrSegment]) -> Vec<OcrSegment> {
     let mut i = out.len();
     while i > 1 {
         i -= 1;
-        // 先把需要比较/合并的标量读成自有值，结束对 out 的不可变借用后再改 out。
-        let prev_text = out[i - 1].base.text.clone();
-        let prev_y = out[i - 1].y_range;
-        let prev_conf = out[i - 1].text_confidence;
-        let prev_fc = out[i - 1].frame_count;
-        let prev_start = out[i - 1].base.start_ms;
+        // 整段克隆相邻两段，避免逐字段扒拉；构造 out[i-1] 时不再触碰 out 的借用。
+        let prev = out[i - 1].clone();
+        let cur = out[i].clone();
 
-        let cur_text = out[i].base.text.clone();
-        let cur_y = out[i].y_range;
-        let cur_conf = out[i].text_confidence;
-        let cur_fc = out[i].frame_count;
-        let cur_end = out[i].base.end_ms;
-
-        if !overlap(prev_y, cur_y) {
+        if !overlap(prev.y_range, cur.y_range) {
             continue;
         }
-        let (merged_text, merged_y) = if is_substring_of(&prev_text, &cur_text) {
-            (cur_text, cur_y)
-        } else if is_substring_of(&cur_text, &prev_text) {
-            (prev_text, prev_y)
+        let (merged_text, merged_y) = if is_substring_of(&prev.base.text, &cur.base.text) {
+            (cur.base.text, cur.y_range)
+        } else if is_substring_of(&cur.base.text, &prev.base.text) {
+            (prev.base.text, prev.y_range)
         } else {
             continue;
         };
-        let conf = merge_confidence(Some(prev_conf), Some(cur_conf));
-        let fc = prev_fc.unwrap_or(1) + cur_fc.unwrap_or(1);
+        let conf = merge_confidence(Some(prev.text_confidence), Some(cur.text_confidence));
+        let fc = prev.frame_count.unwrap_or(1) + cur.frame_count.unwrap_or(1);
         out[i - 1] = OcrSegment {
             base: SubtitlingSegment {
                 text: merged_text,
-                start_ms: prev_start,
-                end_ms: cur_end,
+                start_ms: prev.base.start_ms,
+                end_ms: cur.base.end_ms,
             },
             y_range: merged_y,
             text_confidence: conf,
@@ -380,59 +371,44 @@ pub fn remove_triplet_noise(segments: &[OcrSegment]) -> Vec<OcrSegment> {
     let mut out: Vec<OcrSegment> = segments.to_vec();
     let mut i = 0;
     while i + 2 < out.len() {
-        // 先把三元组需要的字段读成自有值，结束不可变借用后再改 out。
-        let a_text = out[i].base.text.clone();
-        let a_start = out[i].base.start_ms;
-        let a_y = out[i].y_range;
-        let a_conf = out[i].text_confidence;
-        let a_fc = out[i].frame_count;
-        let a_frames = out[i].frames.clone();
+        // 整段克隆三元组，避免逐字段扒拉；随后构造 out[i] 时不再触碰 out 的借用。
+        let a = out[i].clone();
+        let b = out[i + 1].clone();
+        let c = out[i + 2].clone();
 
-        let b_text = out[i + 1].base.text.clone();
-        let b_start = out[i + 1].base.start_ms;
-        let b_end = out[i + 1].base.end_ms;
-        let b_y = out[i + 1].y_range;
-        let b_conf = out[i + 1].text_confidence;
-        let b_fc = out[i + 1].frame_count;
-        let b_frames = out[i + 1].frames.clone();
-
-        let c_text = out[i + 2].base.text.clone();
-        let c_end = out[i + 2].base.end_ms;
-        let c_y = out[i + 2].y_range;
-        let c_conf = out[i + 2].text_confidence;
-        let c_fc = out[i + 2].frame_count;
-        let c_frames = out[i + 2].frames.clone();
-
-        let triplet_match =
-            edit_distance(&a_text, &c_text) <= 2 && overlap(a_y, b_y) && overlap(b_y, c_y);
+        let triplet_match = edit_distance(&a.base.text, &c.base.text) <= 2
+            && overlap(a.y_range, b.y_range)
+            && overlap(b.y_range, c.y_range);
         if !triplet_match {
             i += 1;
             continue;
         }
-        let dur_b = b_end.saturating_sub(b_start);
+        let dur_b = b.base.end_ms.saturating_sub(b.base.start_ms);
         let is_short = dur_b <= 1000;
-        let b_near_a = edit_distance(&b_text, &a_text) <= 2
-            && (b_text.chars().count() as i32 - a_text.chars().count() as i32).abs() <= 2;
-        let b_near_c = edit_distance(&b_text, &c_text) <= 2
-            && (b_text.chars().count() as i32 - c_text.chars().count() as i32).abs() <= 2;
+        let b_near_a = edit_distance(&b.base.text, &a.base.text) <= 2
+            && (b.base.text.chars().count() as i32 - a.base.text.chars().count() as i32).abs()
+                <= 2;
+        let b_near_c = edit_distance(&b.base.text, &c.base.text) <= 2
+            && (b.base.text.chars().count() as i32 - c.base.text.chars().count() as i32).abs()
+                <= 2;
         let is_noise = is_short || b_near_a || b_near_c;
         if !is_noise {
             i += 1;
             continue;
         }
         // 合并 a/b/c → 留在位置 i；删除 b、c，并从当前位置重查。
-        let merged_conf = avg_confidence(&[a_conf, b_conf, c_conf]);
-        let fc = a_fc.unwrap_or(1) + b_fc.unwrap_or(1) + c_fc.unwrap_or(1);
-        let mut frames = a_frames.unwrap_or_default();
-        frames.extend(b_frames.unwrap_or_default());
-        frames.extend(c_frames.unwrap_or_default());
+        let merged_conf = avg_confidence(&[a.text_confidence, b.text_confidence, c.text_confidence]);
+        let fc = a.frame_count.unwrap_or(1) + b.frame_count.unwrap_or(1) + c.frame_count.unwrap_or(1);
+        let mut frames = a.frames.unwrap_or_default();
+        frames.extend(b.frames.unwrap_or_default());
+        frames.extend(c.frames.unwrap_or_default());
         out[i] = OcrSegment {
             base: SubtitlingSegment {
-                text: a_text,
-                start_ms: a_start,
-                end_ms: c_end,
+                text: a.base.text,
+                start_ms: a.base.start_ms,
+                end_ms: c.base.end_ms,
             },
-            y_range: a_y,
+            y_range: a.y_range,
             text_confidence: merged_conf,
             frame_count: Some(fc),
             frames: Some(frames),
@@ -441,6 +417,65 @@ pub fn remove_triplet_noise(segments: &[OcrSegment]) -> Vec<OcrSegment> {
         if i > 0 {
             i -= 1; // 重查当前位置（对齐 TS 的 i--）
         }
+    }
+    out
+}
+
+/// 去重 / 重叠合并（对齐 LocalDub `utils.ts` 的 `dedupOverlap`）。
+///
+/// 对每对 `(a, b)`（i < j）：若 a、b 时间上**重叠**（`a.start < b.end && b.start < a.end`）
+/// 或在 `TOUCH_GAP_MS`(500) 内**相接**，且文本编辑距离 ≤ `dedup_edit_distance`，则合并：
+/// 取较长文本、`min(start)`/`max(end)`、a 的 y 值域，置信度取 [`merge_confidence`]、
+/// `frame_count` 相加、`frames` 拼接。合并后删除 b，并继续用更新后的 `a` 往后比。
+///
+/// `dedup_edit_distance` 对应 `MergeFramesArgs::dedup_edit_distance`（默认 1），由调用方传入；
+/// 这是 `MergeFramesArgs` 阈值真正被消费的地方。时间差用 `saturating_sub` 防御反向时间戳。
+pub fn dedup_overlap(segments: &[OcrSegment], dedup_edit_distance: u32) -> Vec<OcrSegment> {
+    const TOUCH_GAP_MS: u64 = 500;
+    let mut out: Vec<OcrSegment> = segments.to_vec();
+    let mut i = 0;
+    while i < out.len() {
+        let mut j = i + 1;
+        while j < out.len() {
+            // 每轮重新克隆 out[i]/out[j]（合并后 out[i] 会变，对齐 TS 在 j 循环内取
+            // segments[i]）；构造 out[i] 时不再触碰 out 的借用。
+            let a = out[i].clone();
+            let b = out[j].clone();
+
+            let gap = a.base.start_ms.max(b.base.start_ms)
+                .saturating_sub(a.base.end_ms.min(b.base.end_ms));
+            let overlap = a.base.start_ms < b.base.end_ms && b.base.start_ms < a.base.end_ms;
+            let touching = gap <= TOUCH_GAP_MS;
+            let do_merge = (overlap || touching)
+                && edit_distance(&a.base.text, &b.base.text) <= dedup_edit_distance;
+            if do_merge {
+                // 取较长文本（按字符数，对齐 TS length）。
+                let merged_text = if a.base.text.chars().count() >= b.base.text.chars().count() {
+                    a.base.text
+                } else {
+                    b.base.text
+                };
+                let conf = merge_confidence(Some(a.text_confidence), Some(b.text_confidence));
+                let fc = a.frame_count.unwrap_or(1) + b.frame_count.unwrap_or(1);
+                let mut frames = a.frames.unwrap_or_default();
+                frames.extend(b.frames.unwrap_or_default());
+                out[i] = OcrSegment {
+                    base: SubtitlingSegment {
+                        text: merged_text,
+                        start_ms: a.base.start_ms.min(b.base.start_ms),
+                        end_ms: a.base.end_ms.max(b.base.end_ms),
+                    },
+                    y_range: a.y_range,
+                    text_confidence: conf,
+                    frame_count: Some(fc),
+                    frames: Some(frames),
+                };
+                out.remove(j);
+                j -= 1; // 等价 TS splice(j,1); j--
+            }
+            j += 1;
+        }
+        i += 1;
     }
     out
 }
@@ -760,5 +795,42 @@ mod tests {
         ];
         let out = remove_triplet_noise(&segs);
         assert_eq!(out.len(), 3, "y 不重叠应保留三段");
+    }
+
+    #[test]
+    fn dedup_overlap_merges_overlapping_similar_text() {
+        // a/b 时间相接（gap 100ms ≤ 500）且文本编辑距离 ≤ 1 → 合并。
+        let segs = vec![
+            segment("嗯发财了", 0, 1000, [10.0, 30.0], 0.9),
+            segment("嗯发财", 1000, 1100, [10.0, 30.0], 0.8), // 差 1 字
+        ];
+        let out = dedup_overlap(&segs, 1);
+        assert_eq!(out.len(), 1, "重叠+近文本应合并");
+        assert_eq!(out[0].base.text, "嗯发财了", "取较长文本");
+        assert_eq!(out[0].base.start_ms, 0);
+        assert_eq!(out[0].base.end_ms, 1100);
+        assert_eq!(out[0].frame_count, Some(2));
+    }
+
+    #[test]
+    fn dedup_overlap_keeps_dissimilar_text() {
+        // 时间重叠但编辑距离 > 阈值 → 不合并。
+        let segs = vec![
+            segment("今天天气真好", 0, 1000, [10.0, 30.0], 0.9),
+            segment("完全不同的字幕", 500, 1500, [10.0, 30.0], 0.8),
+        ];
+        let out = dedup_overlap(&segs, 1);
+        assert_eq!(out.len(), 2, "编辑距离过大应保留两段");
+    }
+
+    #[test]
+    fn dedup_overlap_respects_edit_distance_threshold() {
+        // 文本差 2 字，阈值=1 时不合并；阈值=2 时合并。
+        let segs = vec![
+            segment("abcdef", 0, 1000, [10.0, 30.0], 0.9),
+            segment("abXYef", 500, 1500, [10.0, 30.0], 0.8),
+        ];
+        assert_eq!(dedup_overlap(&segs, 1).len(), 2, "阈值 1 不合并");
+        assert_eq!(dedup_overlap(&segs, 2).len(), 1, "阈值 2 合并");
     }
 }
