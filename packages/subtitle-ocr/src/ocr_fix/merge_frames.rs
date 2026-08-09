@@ -49,6 +49,17 @@ impl MergeFramesArgs {
 ///
 /// `timestamp` 默认即毫秒（对齐 [`crate::FrameResult::timestamp`] 语义）；`text_confidence`
 /// 为文本置信度（f32，与 [`crate::OcrBoxResult::text_confidence`] 一致）。
+/// 多帧合并输出（对齐 LocalDub `MergeFramesResult`）。
+///
+/// `text` 为所有段文本按空格拼接的全文；`segments` 为合并后的字幕段时间轴。
+#[derive(Clone, Debug, Serialize)]
+pub struct MergeFramesResult {
+    /// 全文：各段 `text` 以空格拼接。
+    pub text: String,
+    /// 合并后的字幕段列表。
+    pub segments: Vec<OcrSegment>,
+}
+
 #[derive(Clone, Debug, Serialize)]
 pub struct SegmentFrame {
     /// 帧文本。
@@ -514,6 +525,49 @@ pub fn merge_adjacent_same_text(segments: &[OcrSegment]) -> Vec<OcrSegment> {
     out
 }
 
+/// 逐帧 [`FrameResult`] 合并成字幕段时间轴（对齐 LocalDub `utils.ts` 的 `mergeFrames`）。
+///
+/// 流水线（各 pass 均接收 `&[OcrSegment]` 返回新 `Vec`，故按值串联）：
+/// 1. `base_merge_frames`：逐帧聚合为带时间轴的段；
+/// 2. `merge_substring_segments`（仅当 `args.is_merge_substring`）：合并互为子串且 y
+///    重叠的相邻段（OCR 单字幻觉，如 `身` → `绝不起身`）；
+/// 3. `remove_triplet_noise`：消除夹在两段相同真实字幕间的短噪声段（A-B-C）；
+/// 4. `dedup_overlap`：合并时间重叠/相接、文本近邻（`edit_distance ≤ dedup_edit_distance`）
+///    的重复段（ASR 切片重叠产生的 `干嘛`/`于嘛` 类）；
+/// 5. `merge_adjacent_same_text`：合并归一化后同文本、间隔 ≤ 2s 且不重叠的相邻段
+///    （停顿/换气切开的同一字幕）。
+///
+/// 返回 [`MergeFramesResult`]：`text` 为各段文本空格拼接，`segments` 为最终段列表。
+///
+/// 注：TS 版 `mergeSubstringSegments(segments)` 未把返回值写回 `segments`（`segments` 是
+/// `const` 后的数组，函数返回新数组但未被接收），属 TS 笔误；Rust 中严格按值串联，
+/// 该 pass 实际生效。
+pub fn merge_frames(frames: &[FrameResult], args: &MergeFramesArgs) -> MergeFramesResult {
+    let mut segments = base_merge_frames(frames, args);
+
+    // ─── Pass 1: substring merge ───
+    if args.is_merge_substring() {
+        segments = merge_substring_segments(&segments);
+    }
+
+    // ─── Pass 2: A-B-C triplet 噪声消除 ───
+    segments = remove_triplet_noise(&segments);
+
+    // ─── Pass 3: overlapping dedup ───
+    segments = dedup_overlap(&segments, args.dedup_edit_distance());
+
+    // ─── Pass 4: 同 text 相邻合并 ───
+    segments = merge_adjacent_same_text(&segments);
+
+    let text = segments
+        .iter()
+        .map(|s| s.base.text.as_str())
+        .collect::<Vec<_>>()
+        .join(" ");
+
+    MergeFramesResult { text, segments }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -906,5 +960,38 @@ mod tests {
         let out = merge_adjacent_same_text(&segs);
         assert_eq!(out.len(), 1, "归一化同文本应合并");
         assert_eq!(out[0].base.end_ms, 2500);
+    }
+
+    #[test]
+    fn merge_frames_runs_full_pipeline() {
+        // 同文本帧 → base_merge_frames 成一段；随后 pass 均不拆它。
+        let frames = vec![
+            frame("你好世界", 0, 0.9),
+            frame("你好世界", 500, 0.8),
+            frame("", 600, 0.0), // 空帧制造 gap
+            frame("你好世界", 800, 0.85), // 间隔 200ms 同文本 → gap 恢复合并
+        ];
+        let result = merge_frames(&frames, &MergeFramesArgs::default());
+        assert_eq!(result.segments.len(), 1, "同文本应合并成一段");
+        assert_eq!(result.segments[0].base.text, "你好世界");
+        assert_eq!(result.segments[0].base.end_ms, 800);
+        // text 为各段文本空格拼接。
+        assert_eq!(result.text, "你好世界");
+    }
+
+    #[test]
+    fn merge_frames_substring_pass_merges_single_char_hallucination() {
+        // is_merge_substring 开启时，「身」(子串) 与「绝不起身」合并为「绝不起身」。
+        let frames = vec![
+            frame("身", 0, 0.9),
+            frame("绝不起身", 500, 0.8),
+        ];
+        let args = MergeFramesArgs {
+            is_merge_substring: Some(true),
+            dedup_edit_distance: Some(1),
+        };
+        let result = merge_frames(&frames, &args);
+        assert_eq!(result.segments.len(), 1, "子串 pass 应合并");
+        assert_eq!(result.segments[0].base.text, "绝不起身");
     }
 }
