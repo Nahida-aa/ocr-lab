@@ -306,50 +306,64 @@ pub fn base_merge_frames(
     segments
 }
 
+/// 把 `b` 合并进 `a` 得到新段：时间为两者 `min(start)` / `max(end)`，置信度取
+/// [`merge_confidence`]，`frame_count` 相加，`frames` 拼接（a 在前、b 在后）。
+/// `text` 与 `y_range` 由调用方决定（不同合并策略取较长文本 / 某侧 y 值域）。
+///
+/// 各合并函数（去重、子串等）的公共逻辑收口于此，避免重复字段拼接。
+fn merge_two_segments(
+    a: &OcrSegment,
+    b: &OcrSegment,
+    text: String,
+    y_range: Option<[f32; 2]>,
+) -> OcrSegment {
+    let mut frames = a.frames.clone().unwrap_or_default();
+    frames.extend(b.frames.clone().unwrap_or_default());
+    OcrSegment {
+        base: SubtitlingSegment {
+            text,
+            start_ms: a.base.start_ms.min(b.base.start_ms),
+            end_ms: a.base.end_ms.max(b.base.end_ms),
+        },
+        y_range,
+        text_confidence: merge_confidence(Some(a.text_confidence), Some(b.text_confidence)),
+        frame_count: Some(a.frame_count.unwrap_or(1) + b.frame_count.unwrap_or(1)),
+        frames: Some(frames),
+    }
+}
+
 /// second pass：合并相邻且互为子串、且 y 值域重叠的段（对齐 LocalDub `utils.ts`
 /// 的 `mergeSubstringSegments`，处理 OCR 单字幻觉，如 `身` → `绝不起身`）。
 ///
-/// 从后往前遍历：对每对相邻段 `(prev, cur)`，`overlap` 为 false 则跳过；否则若
-/// `prev.text` 是 `cur.text` 子串 → 用 cur 的文本、prev 的起点、cur 的终点与 y 值域；
-/// 若 `cur.text` 是 `prev.text` 子串 → 保留 prev 的文本与 y 值域；置信度取
-/// [`merge_confidence`]、`frame_count` 相加（TS 的 `?? 1` 对应 `unwrap_or(1)`）。
-/// 合并后删除 cur（TS `splice(i, 1)`）。
+/// 生成式（前向、用 `last_mut` 把 cur 吞进 prev）：对相邻 `(prev, cur)`，y 不重叠则跳过；
+/// 若 `prev.text` 是 `cur.text` 子串 → 用 cur 的文本与 y 值域；若 `cur.text` 是 `prev.text`
+/// 子串 → 保留 prev 的文本与 y 值域；置信度取 [`merge_confidence`]、`frame_count` 相加。
 ///
 /// 合并出的段**不携带 `frames`**（TS 合并字面量未含 `frames` 键，序列化即丢弃），
-/// 与 TS 丢弃组成帧明细的语义一致。反向遍历保证 `remove(i)` 不影响尚未处理的 `< i` 下标。
+/// 与 TS 丢弃组成帧明细的语义一致。段序列本就按时间有序，相邻合并即等价于 TS 的
+/// 反向相邻合并（无需 `splice` / 重查）。
 pub fn merge_substring_segments(segments: &[OcrSegment]) -> Vec<OcrSegment> {
-    let mut out: Vec<OcrSegment> = segments.to_vec();
-    let mut i = out.len();
-    while i > 1 {
-        i -= 1;
-        // 整段克隆相邻两段，避免逐字段扒拉；构造 out[i-1] 时不再触碰 out 的借用。
-        let prev = out[i - 1].clone();
-        let cur = out[i].clone();
-
-        if !overlap(prev.y_range, cur.y_range) {
-            continue;
+    let mut out: Vec<OcrSegment> = Vec::new();
+    for cur in segments {
+        if let Some(prev) = out.last_mut() {
+            if overlap(prev.y_range, cur.y_range)
+                && (is_substring_of(&prev.base.text, &cur.base.text)
+                    || is_substring_of(&cur.base.text, &prev.base.text))
+            {
+                // 把 cur 吞进 prev：prev⊂cur 时改用 cur 的文本/y 值域，终点顺延到 cur。
+                if is_substring_of(&prev.base.text, &cur.base.text) {
+                    prev.base.text = cur.base.text.clone();
+                    prev.y_range = cur.y_range;
+                }
+                prev.base.end_ms = cur.base.end_ms;
+                prev.text_confidence =
+                    merge_confidence(Some(prev.text_confidence), Some(cur.text_confidence));
+                prev.frame_count =
+                    Some(prev.frame_count.unwrap_or(1) + cur.frame_count.unwrap_or(1));
+                continue;
+            }
         }
-        let (merged_text, merged_y) = if is_substring_of(&prev.base.text, &cur.base.text) {
-            (cur.base.text, cur.y_range)
-        } else if is_substring_of(&cur.base.text, &prev.base.text) {
-            (prev.base.text, prev.y_range)
-        } else {
-            continue;
-        };
-        let conf = merge_confidence(Some(prev.text_confidence), Some(cur.text_confidence));
-        let fc = prev.frame_count.unwrap_or(1) + cur.frame_count.unwrap_or(1);
-        out[i - 1] = OcrSegment {
-            base: SubtitlingSegment {
-                text: merged_text,
-                start_ms: prev.base.start_ms,
-                end_ms: cur.base.end_ms,
-            },
-            y_range: merged_y,
-            text_confidence: conf,
-            frame_count: Some(fc),
-            frames: None,
-        };
-        out.remove(i);
+        out.push(cur.clone());
     }
     out
 }
@@ -423,59 +437,43 @@ pub fn remove_triplet_noise(segments: &[OcrSegment]) -> Vec<OcrSegment> {
 
 /// 去重 / 重叠合并（对齐 LocalDub `utils.ts` 的 `dedupOverlap`）。
 ///
-/// 对每对 `(a, b)`（i < j）：若 a、b 时间上**重叠**（`a.start < b.end && b.start < a.end`）
-/// 或在 `TOUCH_GAP_MS`(500) 内**相接**，且文本编辑距离 ≤ `dedup_edit_distance`，则合并：
-/// 取较长文本、`min(start)`/`max(end)`、a 的 y 值域，置信度取 [`merge_confidence`]、
-/// `frame_count` 相加、`frames` 拼接。合并后删除 b，并继续用更新后的 `a` 往后比。
+/// 生成式（前向、用 `last_mut` 把 cur 与已合并的 prev 比）：若 prev 与 cur 时间上**重叠**
+/// （`prev.start < cur.end && cur.start < prev.end`）或在 `TOUCH_GAP_MS`(500) 内**相接**，
+/// 且文本编辑距离 ≤ `dedup_edit_distance`，则合并：取较长文本、`min(start)`/`max(end)`、
+/// prev 的 y 值域，置信度取 [`merge_confidence`](crate::merge_confidence)、`frame_count` 相加、
+/// `frames` 拼接。
 ///
 /// `dedup_edit_distance` 对应 `MergeFramesArgs::dedup_edit_distance`（默认 1），由调用方传入；
-/// 这是 `MergeFramesArgs` 阈值真正被消费的地方。时间差用 `saturating_sub` 防御反向时间戳。
+/// 这是 `MergeFramesArgs` 阈值真正被消费的地方。段序列按时间有序，相邻合并即等价于
+/// TS 的「任意 i<j 两两合并」——合并后 prev 即「更新后的 a」继续往后比。时间差用
+/// `saturating_sub` 防御反向时间戳。
 pub fn dedup_overlap(segments: &[OcrSegment], dedup_edit_distance: u32) -> Vec<OcrSegment> {
     const TOUCH_GAP_MS: u64 = 500;
-    let mut out: Vec<OcrSegment> = segments.to_vec();
-    let mut i = 0;
-    while i < out.len() {
-        let mut j = i + 1;
-        while j < out.len() {
-            // 每轮重新克隆 out[i]/out[j]（合并后 out[i] 会变，对齐 TS 在 j 循环内取
-            // segments[i]）；构造 out[i] 时不再触碰 out 的借用。
-            let a = out[i].clone();
-            let b = out[j].clone();
-
-            let gap = a.base.start_ms.max(b.base.start_ms)
-                .saturating_sub(a.base.end_ms.min(b.base.end_ms));
-            let overlap = a.base.start_ms < b.base.end_ms && b.base.start_ms < a.base.end_ms;
+    let mut out: Vec<OcrSegment> = Vec::new();
+    for cur in segments {
+        if let Some(prev) = out.last_mut() {
+            let gap = prev
+                .base
+                .start_ms
+                .max(cur.base.start_ms)
+                .saturating_sub(prev.base.end_ms.min(cur.base.end_ms));
+            let overlaps =
+                prev.base.start_ms < cur.base.end_ms && cur.base.start_ms < prev.base.end_ms;
             let touching = gap <= TOUCH_GAP_MS;
-            let do_merge = (overlap || touching)
-                && edit_distance(&a.base.text, &b.base.text) <= dedup_edit_distance;
-            if do_merge {
-                // 取较长文本（按字符数，对齐 TS length）。
-                let merged_text = if a.base.text.chars().count() >= b.base.text.chars().count() {
-                    a.base.text
+            if (overlaps || touching)
+                && edit_distance(&prev.base.text, &cur.base.text) <= dedup_edit_distance
+            {
+                // 合并进 prev：取较长文本（按字符数，对齐 TS length），保留 prev 的 y 值域。
+                let text = if prev.base.text.chars().count() >= cur.base.text.chars().count() {
+                    prev.base.text.clone()
                 } else {
-                    b.base.text
+                    cur.base.text.clone()
                 };
-                let conf = merge_confidence(Some(a.text_confidence), Some(b.text_confidence));
-                let fc = a.frame_count.unwrap_or(1) + b.frame_count.unwrap_or(1);
-                let mut frames = a.frames.unwrap_or_default();
-                frames.extend(b.frames.unwrap_or_default());
-                out[i] = OcrSegment {
-                    base: SubtitlingSegment {
-                        text: merged_text,
-                        start_ms: a.base.start_ms.min(b.base.start_ms),
-                        end_ms: a.base.end_ms.max(b.base.end_ms),
-                    },
-                    y_range: a.y_range,
-                    text_confidence: conf,
-                    frame_count: Some(fc),
-                    frames: Some(frames),
-                };
-                out.remove(j);
-                j -= 1; // 等价 TS splice(j,1); j--
+                *prev = merge_two_segments(prev, cur, text, prev.y_range);
+                continue;
             }
-            j += 1;
         }
-        i += 1;
+        out.push(cur.clone());
     }
     out
 }
