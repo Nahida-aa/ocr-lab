@@ -8,7 +8,7 @@
 #   just run-out <image> <out> # 单图识别并写出 OcrFramesResult 到指定文件
 #   just doc                   # 构建文档（带私有项，便于看内部模块）
 #
-# 输出：stdout 为与 cpp 同形状的 JSON 数组（text/confidence/boxes/timestamp_ms）；
+# 输出：stdout 为与 cpp 同形状的 JSON 数组（text/confidence/boxes/timestamp）；
 #       --out 额外落地 OcrFramesResult（{frames, meta}），文件名由调用方指定
 #       （如 asr_ocr_frames.json / sf_ocr_frames.json），对齐 LocalDub。
 

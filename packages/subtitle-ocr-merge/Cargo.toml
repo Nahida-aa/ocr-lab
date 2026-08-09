@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 publish.workspace = true
-description = "字幕 OCR 帧合并层：把逐帧（带时间戳 timestamp_ms）的 FrameResult 聚合成带时间轴的字幕段。独立于视频/截图来源，供多项目复用。"
+description = "字幕 OCR 帧合并层：把逐帧（带时间戳 timestamp）的 FrameResult 聚合成带时间轴的字幕段。独立于视频/截图来源，供多项目复用。"
 
 [lib]
 name = "subtitle_ocr_merge"

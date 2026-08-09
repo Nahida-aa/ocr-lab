@@ -37,6 +37,7 @@ pub use crate::ocr_fix::box_adjusted::{
 };
 pub use crate::ocr_fix::merge_frames::MergeFramesArgs;
 pub use crate::ocr_fix::stats::{YStats, compute_box_y_stats};
+pub use crate::ocr_fix::subtitling::SubtitlingSegment;
 pub use crate::ocr_util::aggregate_boxes;
 pub use crate::pipeline::{OcrDevice, OcrFramesMeta, OcrFramesResult};
 
@@ -83,7 +84,7 @@ pub use rapidocr_ort::OcrBoxResult;
 
 /// 单图聚合结果（可携带单时刻时间戳）。
 ///
-/// 把一张图里识别出的多框聚合成一条文本 + 值域 + 明细。`timestamp_ms` 为
+/// 把一张图里识别出的多框聚合成一条文本 + 值域 + 明细。`timestamp` 为
 /// 单时刻（毫秒）：默认 `0` 表示「无时间」；当上游按文件名（`ms` / `ms_ms`）
 /// 或帧序号代入时携带该图对应时刻。`ms_ms` 文件名会让同一张图被识别一次、
 /// 产出两个 `FrameResult`（各自带 start/end 时刻、内容相同）。
@@ -110,7 +111,7 @@ pub struct FrameResult {
     /// 的 start/end），为避免对同一 boxes 重复聚合，聚合函数保持单参数、只产出
     /// 无时间结果；调用方聚合一次后，按各时刻 `clone` 并覆写本字段。时间来源由
     /// 上游按文件名 `ms`/`ms_ms` 解析、帧序号或视频 PTS 提供。
-    pub timestamp_ms: u64,
+    pub timestamp: u64,
 }
 
 // ===========================================================================
@@ -214,7 +215,7 @@ impl SubtitleOcr {
 ///   展开为单个 `0` 时刻，产出一个 `FrameResult`。
 /// - [`FrameTimes::Single`]`(t)`：单时刻（`ms` 文件名）。
 /// - [`FrameTimes::Range`]`(s, e)`：时间区间（`ms_ms` 文件名）；同一张图仅识别一次，
-///   展开为 `[s, e]` 两个 `FrameResult`（内容相同、仅 `timestamp_ms` 不同）。
+///   展开为 `[s, e]` 两个 `FrameResult`（内容相同、仅 `timestamp` 不同）。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FrameTimes {
     None,
@@ -243,7 +244,7 @@ pub struct OcrEntry {
 ///
 /// 这是「读图 → 识别 → 聚合 → 按时刻展开」的核心流程，供 CLI / benchmark / 测试
 /// 直接复用，无需各自照抄。每张图**仅识别一次**：`ms_ms` 同一张图产出多个
-/// `FrameResult`，内容相同、仅 `timestamp_ms` 不同（避免对同一 boxes 重复聚合）。
+/// `FrameResult`，内容相同、仅 `timestamp` 不同（避免对同一 boxes 重复聚合）。
 ///
 /// 本函数不含：耗时测量（调用方在 `ocr_image` 前后自行 `Instant`）、JSON 序列化、
 /// 目录扫描 / 文件名解析（这些留给调用方；CLI 见 `subtitle_ocr::util::list_frames`）。
@@ -258,16 +259,16 @@ pub fn ocr_entries(ocr: &mut SubtitleOcr, entries: &[OcrEntry]) -> Result<Vec<Fr
         match e.times {
             FrameTimes::None => out.push(aggregated),
             FrameTimes::Single(t) => out.push(FrameResult {
-                timestamp_ms: t,
+                timestamp: t,
                 ..aggregated
             }),
             FrameTimes::Range(s, end) => {
                 out.push(FrameResult {
-                    timestamp_ms: s,
+                    timestamp: s,
                     ..aggregated.clone()
                 });
                 out.push(FrameResult {
-                    timestamp_ms: end,
+                    timestamp: end,
                     ..aggregated
                 });
             }

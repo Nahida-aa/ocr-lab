@@ -82,7 +82,7 @@ struct OcrImgResult {
     };
     std::vector<OcrBoxResult> boxes;
     double charListLoadMs, imageLoadMs, modelLoadMs, detMs, postMs, recMs, totalMs;
-    uint64_t timestamp_ms = 0;  // 对齐 Rust FrameResult：单时刻（ms），0=无时间。
+    uint64_t timestamp = 0;  // 对齐 Rust FrameResult：单时刻（ms），0=无时间。
                                 // 文件名 ms/ms_ms 解析后填入；ms_ms 同一张图产出两个结果。
 };
 
@@ -829,7 +829,7 @@ static std::string toJson(const OcrImgResult& r, const std::string& filename = "
         if (i + 1 < r.boxes.size()) ss << ",";
     }
     ss << "]";
-    ss << ", \"timestamp_ms\": " << r.timestamp_ms;
+    ss << ", \"timestamp\": " << r.timestamp;
     ss << "}";
     // 耗时是旁路观测数据，不进 JSON（对齐 Rust：由调用方 / tracing 消费）。
     // 这里打到 stderr，方便单图调试，且不污染 stdout 的 JSON 数组。
@@ -1082,7 +1082,7 @@ static int runMain(int argc, char* argv[]) {
                 // 每个时刻产出一个结果（内容相同，仅 timestampMs 不同）；
                 // ms_ms 时同一张图 OCR 一次、复制成两个 FrameResult。
                 for (uint64_t t : times) {
-                    result.timestamp_ms = t;
+                    result.timestamp = t;
                     if (!first) std::cout << ",";
                     first = false;
                     std::cout << "\n  " << toJson(result, extractFilename(fp));

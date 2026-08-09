@@ -145,7 +145,7 @@ mod tests {
             boxes,
             x_range: [0.0, 0.0],
             y_range: [0.0, 0.0],
-            timestamp_ms: 0,
+            timestamp: 0,
         }
     }
 

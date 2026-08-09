@@ -2,7 +2,7 @@
 //!
 //! 把「逐帧（带时间戳）的 [`FrameResult`]」聚合成「带时间轴的字幕段 [`Segment`]」。
 //!
-//! [`FrameResult`] 由 [`subtitle_ocr`] 库产出——它携带单时刻 `timestamp_ms`
+//! [`FrameResult`] 由 [`subtitle_ocr`] 库产出——它携带单时刻 `timestamp`
 //! （由上游按文件名 `ms`/`ms_ms` 或帧序号代入）。本层不关心时间从哪来，只负责
 //! 把多个 `FrameResult` 合并成段。`ms_ms` 文件名会让同一张图产出两个 `FrameResult`
 //! （start/end 时刻、内容相同），本层照常按两帧处理。
@@ -12,7 +12,7 @@
 
 use serde::Serialize;
 
-// FrameResult 现在直接复用感知层的类型（已带 timestamp_ms），本层不再另定义。
+// FrameResult 现在直接复用感知层的类型（已带 timestamp），本层不再另定义。
 // 注：aggregate_boxes 不在本层转发，调用方直接用 subtitle_ocr::aggregate_boxes
 // （本层只管「FrameResult → Segment」，不代理感知层 API）。
 pub use subtitle_ocr::FrameResult;
@@ -56,7 +56,7 @@ impl Default for MergeArgs {
 }
 
 /// 帧序号 → 时间戳（毫秒）：`index * 1000 / fps`。
-pub fn frame_timestamp_ms(index: usize, fps: f64) -> u64 {
+pub fn frame_timestamp(index: usize, fps: f64) -> u64 {
     if fps <= 0.0 {
         return 0;
     }
@@ -126,7 +126,7 @@ pub fn merge_frames(frames: &[FrameResult], args: &MergeArgs) -> Vec<Segment> {
         let start_new = match &cur {
             None => true,
             Some(c) => {
-                let gap = f.timestamp_ms.saturating_sub(c.end_ms);
+                let gap = f.timestamp.saturating_sub(c.end_ms);
                 if gap > args.merge_gap_ms {
                     true
                 } else {
@@ -141,8 +141,8 @@ pub fn merge_frames(frames: &[FrameResult], args: &MergeArgs) -> Vec<Segment> {
             }
             cur = Some(Segment {
                 text: f.text.clone(),
-                start_ms: f.timestamp_ms,
-                end_ms: f.timestamp_ms,
+                start_ms: f.timestamp,
+                end_ms: f.timestamp,
                 confidence: f.confidence,
                 x_range: f.x_range,
                 y_range: f.y_range,
@@ -158,7 +158,7 @@ pub fn merge_frames(frames: &[FrameResult], args: &MergeArgs) -> Vec<Segment> {
             cur_count += 1;
             c.confidence =
                 (c.confidence * (cur_count - 1) as f64 + f.confidence) / cur_count as f64;
-            c.end_ms = f.timestamp_ms;
+            c.end_ms = f.timestamp;
             c.x_range = [
                 c.x_range[0].min(f.x_range[0]),
                 c.x_range[1].max(f.x_range[1]),
@@ -194,20 +194,20 @@ mod tests {
             boxes: Vec::new(),
             x_range: [0.0, 0.0],
             y_range: [y_range.0, y_range.1],
-            timestamp_ms: ts,
+            timestamp: ts,
         }
     }
 
     #[test]
     fn timestamp_math() {
         // fps=2 → 每帧 500ms。
-        assert_eq!(frame_timestamp_ms(0, 2.0), 0);
-        assert_eq!(frame_timestamp_ms(1, 2.0), 500);
-        assert_eq!(frame_timestamp_ms(2, 2.0), 1000);
+        assert_eq!(frame_timestamp(0, 2.0), 0);
+        assert_eq!(frame_timestamp(1, 2.0), 500);
+        assert_eq!(frame_timestamp(2, 2.0), 1000);
         // fps=4 → 每帧 250ms。
-        assert_eq!(frame_timestamp_ms(3, 4.0), 750);
+        assert_eq!(frame_timestamp(3, 4.0), 750);
         // 非法 fps 回落 0，不 panic。
-        assert_eq!(frame_timestamp_ms(5, 0.0), 0);
+        assert_eq!(frame_timestamp(5, 0.0), 0);
     }
 
     #[test]

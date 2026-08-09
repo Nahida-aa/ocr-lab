@@ -36,7 +36,10 @@ fn count_frames() -> usize {
         .filter_map(|e| e.ok())
         .map(|e| e.file_name().to_string_lossy().to_string())
         .filter(|n| {
-            n.ends_with(".jpg") || n.ends_with(".jpeg") || n.ends_with(".png") || n.ends_with(".bmp")
+            n.ends_with(".jpg")
+                || n.ends_with(".jpeg")
+                || n.ends_with(".png")
+                || n.ends_with(".bmp")
         })
         .collect();
     names.len()
@@ -71,7 +74,10 @@ fn check_cpp_output(stdout: &str) {
                 .and_then(|c| c.as_f64())
                 .expect("box.text_confidence 应为数字");
             assert!((0.0..=1.0).contains(&conf), "confidence 越界: {conf}");
-            let pts = b.get("box").and_then(|x| x.as_array()).expect("box 应为数组");
+            let pts = b
+                .get("box")
+                .and_then(|x| x.as_array())
+                .expect("box 应为数组");
             if !pts.is_empty() {
                 assert_eq!(pts.len(), 4, "box 应为 4 点");
             }
@@ -86,7 +92,10 @@ fn run_cpp() -> bool {
         .join("build")
         .join("subtitle_ocr_ort_cpp");
     if !bin.exists() {
-        eprintln!("[cpp] 二进制不存在: {}，先构建 packages/subtitle-ocr-cpp", bin.display());
+        eprintln!(
+            "[cpp] 二进制不存在: {}，先构建 packages/subtitle-ocr-cpp",
+            bin.display()
+        );
         return false;
     }
     let md = models_dir();
@@ -100,7 +109,10 @@ fn run_cpp() -> bool {
         .output()
         .expect("spawn cpp 失败");
     if !out.status.success() {
-        eprintln!("[cpp] 退出码非零:\n{}", String::from_utf8_lossy(&out.stderr));
+        eprintln!(
+            "[cpp] 退出码非零:\n{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
         return false;
     }
     check_cpp_output(&String::from_utf8_lossy(&out.stdout));
@@ -109,7 +121,10 @@ fn run_cpp() -> bool {
 }
 
 fn run_py() -> bool {
-    let script = repo_root().join("packages").join("subtitle-ocr-py").join("main.py");
+    let script = repo_root()
+        .join("packages")
+        .join("subtitle-ocr-py")
+        .join("main.py");
     if !script.exists() {
         eprintln!("[py] main.py 不存在，跳过");
         return false;
@@ -166,7 +181,7 @@ fn check_rust_output(stdout: &str, expect_len: usize) {
             .and_then(|c| c.as_f64())
             .expect("帧级 confidence 应为数字");
         assert!((0.0..=1.0).contains(&conf), "confidence 越界: {conf}");
-        assert!(item.get("timestamp_ms").is_some(), "缺 timestamp_ms 字段");
+        assert!(item.get("timestamp").is_some(), "缺 timestamp 字段");
         let boxes = item
             .get("boxes")
             .and_then(|b| b.as_array())
@@ -192,7 +207,10 @@ fn check_rust_output(stdout: &str, expect_len: usize) {
 
 fn run_rust() -> bool {
     // 与 cpp 不同，rust 二进制产出在 workspace 根 target/（非包内 target/）。
-    let bin = repo_root().join("target").join("release").join("subtitle-ocr");
+    let bin = repo_root()
+        .join("target")
+        .join("release")
+        .join("subtitle-ocr");
     if !bin.exists() {
         eprintln!(
             "[rust] 二进制不存在: {}，先 cargo build --release -p subtitle-ocr",
@@ -202,7 +220,7 @@ fn run_rust() -> bool {
     }
     // 不用 --dir：该模式要求文件名是 ms / ms_ms（编码时刻），而 .test-frames 下是
     // frame_0000260.jpg 这种命名，会被 --on-bad-name skip 全部跳过、输出空数组。
-    // 这里逐帧走单图模式（timestamp_ms 恒为 0），只校验结构。
+    // 这里逐帧走单图模式（timestamp 恒为 0），只校验结构。
     let mut frames: Vec<PathBuf> = std::fs::read_dir(frames_dir())
         .unwrap()
         .filter_map(|e| e.ok())

@@ -1,7 +1,7 @@
 //! 命令行：`subtitle-ocr <image> [text_score]` 或 `subtitle-ocr --dir <dir> ...`
 //!
 //! 纯感知 OCR 工具，对标 cpp 的 `ocr_pipeline.cpp`：输出 JSON 数组，
-//! 每个元素含 `text` / `confidence` / `boxes` / `timestamp_ms`。
+//! 每个元素含 `text` / `confidence` / `boxes` / `timestamp`。
 //!
 //! 不含任何耗时字段——推理耗时是旁路观测数据，由调用方自行计时（CLI 在
 //! `ocr_image` 调用前后 `Instant::now()` 测量，打到 stderr 的 `[ocr] ... det=...ms`；
@@ -14,7 +14,7 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use serde_json::Value;
 use std::path::{Path, PathBuf};
-use subtitle_ocr::{OcrOptions, OcrEntry, OcrDevice, OcrFramesMeta, OcrFramesResult, SubtitleOcr};
+use subtitle_ocr::{OcrDevice, OcrEntry, OcrFramesMeta, OcrFramesResult, OcrOptions, SubtitleOcr};
 
 mod util;
 use util::{BadNameAction, list_frames};
@@ -108,7 +108,7 @@ fn resolve_path(repo_root: &Path, p: &str) -> PathBuf {
 /// 各框明细 / 几何值域 / 对应时刻），不再另定义输出结构。
 ///
 /// 不含输入文件名——调用方本就知道自己喂了哪张图，批量模式下时刻信息已体现在
-/// `timestamp_ms`；也不含耗时字段——推理耗时是旁路观测数据，由调用方自行计时
+/// `timestamp`；也不含耗时字段——推理耗时是旁路观测数据，由调用方自行计时
 /// （在 `ocr_image` 调用前后 `Instant::now()` 测量），不污染 JSON 结构。
 fn main() -> Result<()> {
     let cli = Cli::parse();
@@ -161,8 +161,7 @@ fn main() -> Result<()> {
                 device: OcrDevice::Cpu,
             },
         };
-        let json =
-            serde_json::to_string_pretty(&result).context("序列化 OcrFramesResult 失败")?;
+        let json = serde_json::to_string_pretty(&result).context("序列化 OcrFramesResult 失败")?;
         std::fs::write(&path, json).with_context(|| format!("写入失败: {}", path.display()))?;
         eprintln!(
             "[ocr] 已写出 {} 帧到 {}",

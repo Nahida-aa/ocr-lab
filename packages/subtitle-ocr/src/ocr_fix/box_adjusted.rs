@@ -5,7 +5,7 @@
 //! （低于此值的框进入调整流程），默认 0.5。
 
 use crate::ocr_util::aggregate_boxes;
-use crate::{compute_box_y_stats, FrameResult, OcrBoxResult, YStats};
+use crate::{FrameResult, OcrBoxResult, YStats, compute_box_y_stats};
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -67,7 +67,7 @@ pub struct FrameResultBoxWithAdjust {
     pub text_confidence: f64,
     pub x_range: [f32; 2],
     pub y_range: [f32; 2],
-    pub timestamp_ms: u64,
+    pub timestamp: u64,
     pub boxes: Vec<OcrBoxResultWithAdjust>,
 }
 
@@ -93,7 +93,7 @@ impl From<FrameResultBoxWithAdjust> for FrameResult {
             text_confidence: f.text_confidence,
             x_range: f.x_range,
             y_range: f.y_range,
-            timestamp_ms: f.timestamp_ms,
+            timestamp: f.timestamp,
             boxes: f.boxes.into_iter().map(|b| b.base).collect(),
         }
     }
@@ -150,7 +150,7 @@ pub fn build_ocr_frames_box_adjust(
             text_confidence: f.text_confidence,
             x_range: f.x_range,
             y_range: f.y_range,
-            timestamp_ms: f.timestamp_ms,
+            timestamp: f.timestamp,
             boxes: f
                 .boxes
                 .iter()
@@ -226,7 +226,7 @@ fn adjust_box(box_r: &OcrBoxResult, y_stats: &YStats, threshold: f32) -> OcrBoxR
 /// - 全部框都是离群 → 丢弃该帧；
 /// - 无离群框 → 原帧转回 [`FrameResult`] 返回；
 /// - 部分离群 → 用干净框调 [`aggregate_boxes`] 重聚合成新帧（text/confidence/x_range/
-///   y_range/boxes 取自重聚结果，其余帧字段如 `timestamp_ms` 保留原值）。
+///   y_range/boxes 取自重聚结果，其余帧字段如 `timestamp` 保留原值）。
 ///
 /// 返回的是干净 [`FrameResult`] 序列（`From` 投影已丢弃 adjust 附加字段），正好对应 TS
 /// 用 `as FrameResult` / 重建后 adjust 元数据实际丢失的语义。最终包成
@@ -248,14 +248,14 @@ pub fn get_ocr_frames_box_filtered(
                 return vec![f.clone().into()];
             }
             // 部分离群 → 干净框重聚合（`aggregate_boxes` 只聚合 `OcrBoxResult`，
-            // 不携带 `timestamp_ms`，需保留原帧的时刻）。
+            // 不携带 `timestamp`，需保留原帧的时刻）。
             let mut rebuilt_ocr = aggregate_boxes(
                 &clean_boxes
                     .iter()
                     .map(|b| b.base.clone())
                     .collect::<Vec<_>>(),
             );
-            rebuilt_ocr.timestamp_ms = f.timestamp_ms;
+            rebuilt_ocr.timestamp = f.timestamp;
             vec![rebuilt_ocr]
         })
         .collect();
@@ -297,7 +297,7 @@ mod tests {
             boxes,
             x_range: [0.0, 0.0],
             y_range: [0.0, 0.0],
-            timestamp_ms: 0,
+            timestamp: 0,
         }
     }
 
@@ -326,7 +326,7 @@ mod tests {
             text_confidence: 0.0,
             x_range: [0.0, 0.0],
             y_range: [0.0, 0.0],
-            timestamp_ms: ts,
+            timestamp: ts,
             boxes,
         }
     }
@@ -402,7 +402,7 @@ mod tests {
 
     #[test]
     fn no_outlier_frame_passthrough() {
-        // 无离群框 → 原帧转回 FrameResult 返回（含原 timestamp_ms）。
+        // 无离群框 → 原帧转回 FrameResult 返回（含原 timestamp）。
         let f = adjust_frame(
             vec![
                 adjust_box_with("a", [100.0, 120.0], 0.9, false),
@@ -412,14 +412,14 @@ mod tests {
         );
         let out = get_ocr_frames_box_filtered(&[f]);
         assert_eq!(out.frames.len(), 1);
-        assert_eq!(out.frames[0].timestamp_ms, 12345);
+        assert_eq!(out.frames[0].timestamp, 12345);
         assert_eq!(out.frames[0].boxes.len(), 2);
         assert_eq!(out.meta.frame_count, 1);
     }
 
     #[test]
     fn partial_outlier_frame_rebuilt() {
-        // 部分离群 → 干净框重聚合，离群框被剔除、新帧保留原 timestamp_ms。
+        // 部分离群 → 干净框重聚合，离群框被剔除、新帧保留原 timestamp。
         // 两个干净框 y 不重叠（sameLine=false），聚合后 text 用换行连接，boxes 数量为 2。
         let f = adjust_frame(
             vec![
@@ -431,7 +431,7 @@ mod tests {
         );
         let out = get_ocr_frames_box_filtered(&[f]);
         assert_eq!(out.frames.len(), 1, "部分离群帧保留");
-        assert_eq!(out.frames[0].timestamp_ms, 999, "timestamp_ms 保留原值");
+        assert_eq!(out.frames[0].timestamp, 999, "timestamp 保留原值");
         assert_eq!(out.frames[0].boxes.len(), 2, "离群框被剔除");
         assert_eq!(out.meta.frame_count, 1, "meta.frame_count 取过滤后帧数");
         // 输出为干净 FrameResult，框就是普通 OcrBoxResult（无 adjust 字段）。
