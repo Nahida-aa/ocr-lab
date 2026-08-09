@@ -33,7 +33,7 @@ pub use crate::geometry::nms;
 pub use crate::ocr_fix::box_adjust::{
     BoxAdjustedArgs, FrameResultBoxWithAdjust, OcrBoxAdjustResult, OcrBoxAdjustResultMeta,
     OcrBoxResultWithAdjust, OcrFramesBoxFilteredResult, OcrFramesBoxFilteredResultMeta,
-    build_ocr_frames_box_adjust, get_ocr_frames_box_filtered,
+    build_ocr_frames_box_adjust, filter_ocr_frames_box,
 };
 pub use crate::ocr_fix::merge_frames::{
     MergeFramesArgs, MergeFramesResult, OcrSegment, SegmentFrame, avg_confidence,
@@ -44,7 +44,10 @@ pub use crate::ocr_fix::merge_frames::{
 pub use crate::ocr_fix::segment_adjust::{
     OcrSegmentAdjustArgs, OcrSegmentWithAdjust, compute_segment_adjust,
 };
-pub use crate::ocr_fix::segment_filter::{ocr_segment_filter, OcrSegmentFilterResult};
+pub use crate::ocr_fix::segment_filter::{
+    OcrSegmentFilterData, OcrSegmentFilterMeta, OcrSegmentFilterResult, ocr_segment_filter,
+    ocr_segment_filter_with_meta,
+};
 pub use crate::ocr_fix::stats::{YStats, compute_box_y_stats};
 pub use crate::ocr_fix::subtitling::SubtitlingSegment;
 pub use crate::ocr_util::aggregate_boxes;
