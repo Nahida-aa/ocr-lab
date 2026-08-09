@@ -12,7 +12,7 @@
 //! 同模块还导出应用调整后的字幕段类型 [`OcrSegmentWithAdjusted`]（在 [`OcrSegment`]
 //! 基础上补充 `adjusted_text_confidence` / `y_penalty` / `iso_penalty` 三个可选字段）。
 
-use crate::OcrSegment;
+use crate::{FrameResult, OcrSegment, YStats};
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -100,6 +100,123 @@ pub struct OcrSegmentWithAdjusted {
     pub iso_penalty: Option<f32>,
 }
 
+/// 把逐段 [`OcrSegment`] 调整出最终置信度（对齐 LocalDub `utils.ts` 的 `computeSegmentAdjust`）。
+///
+/// 惩罚由两部分加权合成：
+/// - Y 偏移惩罚 `y_penalty`：段质心距平均质心 `avgCentroid` 的偏移，归一化到
+///   `offset / (videoHeight × adjustYFactor)`，clamp 到 [0,1]（仅当段有 `y_range` 时计算）。
+/// - 孤立惩罚 `iso_penalty`：仅对单帧段（`frame_count == 1`）计算——取段中点 `mid` 在
+///   非空帧时间轴里相邻的「前/后最近非空帧」的较小间隔，归一化到 `gap / isoThresholdMs`；
+///   若某侧无相邻非空帧，间隔视为无穷 → 惩罚取满 1。
+///
+/// 总惩罚 `= adjustYWeight·y_penalty + adjustIsoWeight·iso_penalty`，调整后置信度
+/// `= text_confidence × max(0, 1 - totalPenalty)`，三个值均四舍五入到 2 位小数。
+///
+/// 早退：段为空，或 `yStats.avg` 全为 0（无有效纵向统计）时，直接把各段原样包成
+/// [`OcrSegmentWithAdjusted`] 返回（不计算惩罚，对齐 TS 早退语义）。
+///
+/// 类型映射：TS 的 `frame_count` / `text_confidence` 为可选（本库 `frame_count` 为
+/// `Option<u32>`、`text_confidence` 为必填 f32）；当 `frame_count` 为 `None` 时按 TS 的
+/// 「缺字段」处理——原样包回、不计算调整。
+pub fn compute_segment_adjust(
+    segments: &[OcrSegment],
+    frame_results: &[FrameResult],
+    y_stats: &YStats,
+    video_height: f32,
+    args: &OcrSegmentAdjustArgs,
+) -> Vec<OcrSegmentWithAdjusted> {
+    // 早退守卫：对齐 TS `segments.length === 0 || (!yStats.avg[0] && yStats.avg[1] === 0)`。
+    if segments.is_empty() || (y_stats.avg[0] == 0.0 && y_stats.avg[1] == 0.0) {
+        return segments
+            .iter()
+            .map(|s| OcrSegmentWithAdjusted {
+                base: s.clone(),
+                adjusted_text_confidence: None,
+                y_penalty: None,
+                iso_penalty: None,
+            })
+            .collect();
+    }
+
+    let avg_centroid = (y_stats.avg[0] + y_stats.avg[1]) / 2.0;
+
+    // 非空帧（有 text 与 x/y 值域）的时间戳升序，供孤立度查找。
+    let mut non_empty_ts: Vec<u64> = frame_results
+        .iter()
+        .filter(|f| !f.text.is_empty() && f.x_range != [0.0, 0.0] && f.y_range != [0.0, 0.0])
+        .map(|f| f.timestamp)
+        .collect();
+    non_empty_ts.sort_unstable();
+
+    segments
+        .iter()
+        .map(|seg| {
+            // 对齐 TS `seg.frame_count === undefined || seg.text_confidence === undefined`：
+            // 本库 text_confidence 必填，仅 frame_count 可能为 None。
+            if seg.frame_count.is_none() {
+                return OcrSegmentWithAdjusted {
+                    base: seg.clone(),
+                    adjusted_text_confidence: None,
+                    y_penalty: None,
+                    iso_penalty: None,
+                };
+            }
+
+            // ─── Y 偏移惩罚 ───
+            let mut y_penalty = 0.0;
+            if let Some(y_range) = seg.y_range {
+                let centroid = (y_range[0] + y_range[1]) / 2.0;
+                let offset = (centroid - avg_centroid).abs();
+                // videoHeight × adjustYFactor 为归一化分母（f32）。
+                let denom = video_height * args.adjust_y_factor();
+                y_penalty = if denom > 0.0 {
+                    (offset / denom).min(1.0)
+                } else {
+                    0.0
+                };
+            }
+
+            // ─── 孤立惩罚（仅单帧段）───
+            let mut iso_penalty = 0.0;
+            if seg.frame_count == Some(1) {
+                let mid = (seg.base.start_ms + seg.base.end_ms) / 2;
+                // 前最近非空帧：反向找第一个 < mid。
+                let non_empty_before =
+                    non_empty_ts.iter().rev().find(|&&t| t < mid).copied();
+                // 后最近非空帧：正向找第一个 > mid。
+                let non_empty_after = non_empty_ts.iter().find(|&&t| t > mid).copied();
+                // 无相邻则间隔为无穷 → 惩罚取满 1（对齐 TS Infinity/threshold = 1）。
+                let nearest_gap: f64 = match (non_empty_before, non_empty_after) {
+                    (Some(b), Some(a)) => (mid - b).min(a - mid) as f64,
+                    (Some(b), None) => (mid - b) as f64,
+                    (None, Some(a)) => (a - mid) as f64,
+                    (None, None) => f64::INFINITY,
+                };
+                iso_penalty = (nearest_gap / args.iso_threshold_ms() as f64).min(1.0);
+            }
+
+            // ─── 合成最终置信度 ───
+            let total_penalty =
+                args.adjust_y_weight() as f64 * y_penalty as f64
+                    + args.adjust_iso_weight() as f64 * iso_penalty as f64;
+            let adjusted_confidence =
+                seg.text_confidence as f64 * (1.0 - total_penalty).max(0.0);
+
+            OcrSegmentWithAdjusted {
+                base: seg.clone(),
+                adjusted_text_confidence: Some(round2(adjusted_confidence)),
+                y_penalty: Some(round2(y_penalty as f64)),
+                iso_penalty: Some(round2(iso_penalty as f64)),
+            }
+        })
+        .collect()
+}
+
+/// 四舍五入到 2 位小数（对齐 TS `Math.round(x * 100) / 100`）。
+fn round2(x: f64) -> f32 {
+    ((x * 100.0).round() / 100.0) as f32
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -184,5 +301,118 @@ mod tests {
         assert_eq!(v["adjusted_text_confidence"], 0.7);
         assert_eq!(v["y_penalty"], 0.1);
         assert_eq!(v["iso_penalty"], 0.2);
+    }
+
+    /// 构造一个带文本/时刻/y 值域/置信度/帧数的段（其余字段占位）。
+    fn seg(text: &str, start: u64, end: u64, y: [f32; 2], conf: f32, fc: Option<u32>) -> OcrSegment {
+        OcrSegment {
+            base: crate::SubtitlingSegment {
+                text: text.into(),
+                start_ms: start,
+                end_ms: end,
+            },
+            y_range: Some(y),
+            text_confidence: conf,
+            frame_count: fc,
+            frames: None,
+        }
+    }
+
+    /// 构造一个非空帧（带 text + x/y 值域）。
+    fn frame(ts: u64, y: [f32; 2]) -> FrameResult {
+        FrameResult {
+            text: "x".into(),
+            text_confidence: 0.9,
+            boxes: vec![],
+            x_range: [0.0, 10.0],
+            y_range: y,
+            timestamp: ts,
+        }
+    }
+
+    fn y_stats(avg_top: f32, avg_bottom: f32) -> YStats {
+        YStats {
+            avg: [avg_top, avg_bottom],
+            mode: [avg_top, avg_bottom],
+            median: [avg_top, avg_bottom],
+            avg_height: avg_bottom - avg_top,
+            median_height: avg_bottom - avg_top,
+            mode_height: avg_bottom - avg_top,
+        }
+    }
+
+    #[test]
+    fn compute_segment_adjust_early_return_when_empty_or_zero_ystats() {
+        let args = OcrSegmentAdjustArgs::default();
+        // 段为空 → 原样包回（无惩罚字段）。
+        let out = compute_segment_adjust(&[], &[], &y_stats(10.0, 30.0), 1080.0, &args);
+        assert!(out.is_empty());
+        // yStats.avg 全 0 → 原样包回，不计算惩罚。
+        let segs = vec![seg("你好", 0, 100, [10.0, 30.0], 0.9, Some(1))];
+        let out = compute_segment_adjust(&segs, &[], &y_stats(0.0, 0.0), 1080.0, &args);
+        assert_eq!(out.len(), 1);
+        assert!(out[0].adjusted_text_confidence.is_none());
+        assert!(out[0].y_penalty.is_none());
+    }
+
+    #[test]
+    fn compute_segment_adjust_single_frame_with_neighbor_has_low_iso_penalty() {
+        // 单帧段 mid=500，相邻非空帧 400 与 600 → gap=100，isoThreshold=1500 → penalty≈0.07。
+        let frames = vec![frame(400, [10.0, 30.0]), frame(600, [10.0, 30.0])];
+        let segs = vec![seg("你好", 400, 600, [10.0, 30.0], 0.9, Some(1))];
+        let args = OcrSegmentAdjustArgs::default();
+        let out = compute_segment_adjust(&segs, &frames, &y_stats(10.0, 30.0), 1080.0, &args);
+        let iso = out[0].iso_penalty.unwrap();
+        // 100/1500=0.0666… 经 round2 取 0.07。
+        assert!((iso - 0.07).abs() < 1e-6, "iso_penalty ≈ 0.07, got {iso}");
+        // 段质心=(10+30)/2=20 与 avgCentroid=20 重合 → y_penalty=0；
+        // 调整置信度 = 0.9 × (1 - (0.8·0 + 0.2·0.07)) = 0.9 × 0.986 = 0.8874 → round2 0.89。
+        assert_eq!(out[0].y_penalty.unwrap(), 0.0);
+        assert!((out[0].adjusted_text_confidence.unwrap() - 0.89).abs() < 1e-6);
+    }
+
+    #[test]
+    fn compute_segment_adjust_fully_isolated_single_frame_gets_full_iso_penalty() {
+        // 单帧段 mid=5000，无任何非空帧 → 间隔无穷 → iso_penalty=1。
+        let frames: Vec<FrameResult> = vec![]; // 无相邻帧
+        let segs = vec![seg("你好", 4000, 6000, [10.0, 30.0], 0.9, Some(1))];
+        let args = OcrSegmentAdjustArgs::default();
+        let out = compute_segment_adjust(&segs, &frames, &y_stats(10.0, 30.0), 1080.0, &args);
+        assert_eq!(out[0].iso_penalty.unwrap(), 1.0, "全孤立单帧惩罚取满 1");
+        // 调整置信度 = 0.9 × max(0, 1 - (0.8·0 + 0.2·1)) = 0.9 × 0.8 = 0.72。
+        assert!((out[0].adjusted_text_confidence.unwrap() - 0.72).abs() < 1e-6);
+    }
+
+    #[test]
+    fn compute_segment_adjust_multi_frame_has_no_iso_penalty() {
+        // 多帧段（frame_count>1）不计算孤立惩罚 → iso_penalty=0。
+        let frames = vec![frame(400, [10.0, 30.0])];
+        let segs = vec![seg("你好", 0, 1000, [10.0, 30.0], 0.9, Some(3))];
+        let args = OcrSegmentAdjustArgs::default();
+        let out = compute_segment_adjust(&segs, &frames, &y_stats(10.0, 30.0), 1080.0, &args);
+        assert_eq!(out[0].iso_penalty.unwrap(), 0.0, "多帧段无孤立惩罚");
+    }
+
+    #[test]
+    fn compute_segment_adjust_y_penalty_from_offset() {
+        // avgCentroid=20，段质心=60（y_range [50,70]）→ offset=40，videoHeight=1080,
+        // adjustYFactor 默认 0.08 → denom=86.4 → yPenalty=40/86.4≈0.46。
+        let segs = vec![seg("你好", 0, 100, [50.0, 70.0], 0.9, Some(2))];
+        let args = OcrSegmentAdjustArgs::default();
+        let out = compute_segment_adjust(&segs, &[], &y_stats(10.0, 30.0), 1080.0, &args);
+        let yp = out[0].y_penalty.unwrap();
+        // 40/86.4=0.46296… 经 round2 取 0.46。
+        assert!((yp - 0.46).abs() < 1e-2, "y_penalty ≈ 0.46, got {yp}");
+    }
+
+    #[test]
+    fn compute_segment_adjust_frame_count_none_returns_unadjusted() {
+        // frame_count 为 None → 对齐 TS 缺字段，原样包回。
+        let segs = vec![seg("你好", 0, 100, [10.0, 30.0], 0.9, None)];
+        let args = OcrSegmentAdjustArgs::default();
+        let out = compute_segment_adjust(&segs, &[], &y_stats(10.0, 30.0), 1080.0, &args);
+        assert!(out[0].adjusted_text_confidence.is_none());
+        assert!(out[0].y_penalty.is_none());
+        assert!(out[0].iso_penalty.is_none());
     }
 }

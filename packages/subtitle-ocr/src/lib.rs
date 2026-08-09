@@ -41,7 +41,9 @@ pub use crate::ocr_fix::merge_frames::{
     merge_confidence, merge_frames, merge_substring_segments, normalize, overlap,
     remove_triplet_noise,
 };
-pub use crate::ocr_fix::segment_adjust::{OcrSegmentAdjustArgs, OcrSegmentWithAdjusted};
+pub use crate::ocr_fix::segment_adjust::{
+    compute_segment_adjust, OcrSegmentAdjustArgs, OcrSegmentWithAdjusted,
+};
 pub use crate::ocr_fix::stats::{YStats, compute_box_y_stats};
 pub use crate::ocr_fix::subtitling::SubtitlingSegment;
 pub use crate::ocr_util::aggregate_boxes;
