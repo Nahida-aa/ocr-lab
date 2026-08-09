@@ -10,6 +10,7 @@
 //! - [`subtitling`]：字幕结果类型（`SubtitlingSegment`）。
 
 pub(crate) mod box_adjust;
+pub(crate) mod box_filter;
 pub(crate) mod merge_frames;
 pub(crate) mod segment_adjust;
 pub(crate) mod segment_filter;
