@@ -6,10 +6,12 @@
 //!   `get_ocr_frames_box_filtered`）。
 //! - [`merge_frames`]：多帧合并参数（`MergeFramesArgs`）与字幕段类型（`OcrSegment` / `SegmentFrame`）。
 //! - [`segment_adjust`]：字幕段置信度调整参数（`OcrSegmentAdjustArgs`）。
+//! - [`segment_filter`]：按置信度过滤字幕段（`ocr_segment_filter`）。
 //! - [`subtitling`]：字幕结果类型（`SubtitlingSegment`）。
 
-pub(crate) mod box_adjusted;
+pub(crate) mod box_adjust;
 pub(crate) mod merge_frames;
 pub(crate) mod segment_adjust;
+pub(crate) mod segment_filter;
 pub(crate) mod stats;
 pub(crate) mod subtitling;
