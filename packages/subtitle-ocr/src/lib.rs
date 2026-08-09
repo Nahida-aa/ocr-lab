@@ -35,7 +35,7 @@ pub use crate::ocr_fix::box_adjusted::{
     OcrBoxResultWithAdjust, OcrFramesBoxFilteredResult, OcrFramesBoxFilteredResultMeta,
     build_ocr_frames_box_adjust, get_ocr_frames_box_filtered,
 };
-pub use crate::ocr_fix::merge_frames::MergeFramesArgs;
+pub use crate::ocr_fix::merge_frames::{MergeFramesArgs, OcrSegment, SegmentFrame};
 pub use crate::ocr_fix::stats::{YStats, compute_box_y_stats};
 pub use crate::ocr_fix::subtitling::SubtitlingSegment;
 pub use crate::ocr_util::aggregate_boxes;
