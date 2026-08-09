@@ -306,6 +306,63 @@ pub fn base_merge_frames(
     segments
 }
 
+/// second pass：合并相邻且互为子串、且 y 值域重叠的段（对齐 LocalDub `utils.ts`
+/// 的 `mergeSubstringSegments`，处理 OCR 单字幻觉，如 `身` → `绝不起身`）。
+///
+/// 从后往前遍历：对每对相邻段 `(prev, cur)`，`overlap` 为 false 则跳过；否则若
+/// `prev.text` 是 `cur.text` 子串 → 用 cur 的文本、prev 的起点、cur 的终点与 y 值域；
+/// 若 `cur.text` 是 `prev.text` 子串 → 保留 prev 的文本与 y 值域；置信度取
+/// [`merge_confidence`]、`frame_count` 相加（TS 的 `?? 1` 对应 `unwrap_or(1)`）。
+/// 合并后删除 cur（TS `splice(i, 1)`）。
+///
+/// 合并出的段**不携带 `frames`**（TS 合并字面量未含 `frames` 键，序列化即丢弃），
+/// 与 TS 丢弃组成帧明细的语义一致。反向遍历保证 `remove(i)` 不影响尚未处理的 `< i` 下标。
+pub fn merge_substring_segments(segments: &[OcrSegment]) -> Vec<OcrSegment> {
+    let mut out: Vec<OcrSegment> = segments.to_vec();
+    let mut i = out.len();
+    while i > 1 {
+        i -= 1;
+        // 先把需要比较/合并的标量读成自有值，结束对 out 的不可变借用后再改 out。
+        let prev_text = out[i - 1].base.text.clone();
+        let prev_y = out[i - 1].y_range;
+        let prev_conf = out[i - 1].text_confidence;
+        let prev_fc = out[i - 1].frame_count;
+        let prev_start = out[i - 1].base.start_ms;
+
+        let cur_text = out[i].base.text.clone();
+        let cur_y = out[i].y_range;
+        let cur_conf = out[i].text_confidence;
+        let cur_fc = out[i].frame_count;
+        let cur_end = out[i].base.end_ms;
+
+        if !overlap(prev_y, cur_y) {
+            continue;
+        }
+        let (merged_text, merged_y) = if is_substring_of(&prev_text, &cur_text) {
+            (cur_text, cur_y)
+        } else if is_substring_of(&cur_text, &prev_text) {
+            (prev_text, prev_y)
+        } else {
+            continue;
+        };
+        let conf = merge_confidence(Some(prev_conf), Some(cur_conf));
+        let fc = prev_fc.unwrap_or(1) + cur_fc.unwrap_or(1);
+        out[i - 1] = OcrSegment {
+            base: SubtitlingSegment {
+                text: merged_text,
+                start_ms: prev_start,
+                end_ms: cur_end,
+            },
+            y_range: merged_y,
+            text_confidence: conf,
+            frame_count: Some(fc),
+            frames: None,
+        };
+        out.remove(i);
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -523,5 +580,60 @@ mod tests {
     fn base_merge_frames_empty_input_yields_no_segments() {
         let segs = base_merge_frames(&[], &MergeFramesArgs::default());
         assert!(segs.is_empty());
+    }
+
+    /// 构造一个字幕段（其余字段占位）。
+    fn segment(text: &str, start: u64, end: u64, y: [f32; 2], conf: f32) -> OcrSegment {
+        OcrSegment {
+            base: SubtitlingSegment {
+                text: text.into(),
+                start_ms: start,
+                end_ms: end,
+            },
+            y_range: Some(y),
+            text_confidence: conf,
+            frame_count: Some(1),
+            frames: None,
+        }
+    }
+
+    #[test]
+    fn merge_substring_segments_merges_overlapping_substring() {
+        // prev「身」是 cur「绝不起身」的子串、y 重叠 → 合并为「绝不起身」，
+        // 起点取 prev、终点取 cur。
+        let segs = vec![
+            segment("身", 0, 500, [10.0, 30.0], 0.9),
+            segment("绝不起身", 500, 1000, [10.0, 30.0], 0.8),
+        ];
+        let merged = merge_substring_segments(&segs);
+        assert_eq!(merged.len(), 1, "互为子串且 y 重叠应合并");
+        assert_eq!(merged[0].base.text, "绝不起身");
+        assert_eq!(merged[0].base.start_ms, 0);
+        assert_eq!(merged[0].base.end_ms, 1000);
+        // 置信度取均值 (0.9+0.8)/2 = 0.85。
+        assert!((merged[0].text_confidence - 0.85).abs() < 1e-5);
+        assert_eq!(merged[0].frame_count, Some(2));
+    }
+
+    #[test]
+    fn merge_substring_segments_skips_when_y_not_overlap() {
+        // 文本互为子串但 y 不重叠 → 不合并。
+        let segs = vec![
+            segment("身", 0, 500, [10.0, 30.0], 0.9),
+            segment("绝不起身", 500, 1000, [200.0, 220.0], 0.8),
+        ];
+        let merged = merge_substring_segments(&segs);
+        assert_eq!(merged.len(), 2, "y 不重叠应保留两段");
+    }
+
+    #[test]
+    fn merge_substring_segments_skips_when_not_substring() {
+        // 文本互不包含、y 重叠 → 不合并。
+        let segs = vec![
+            segment("你好", 0, 500, [10.0, 30.0], 0.9),
+            segment("世界", 500, 1000, [10.0, 30.0], 0.8),
+        ];
+        let merged = merge_substring_segments(&segs);
+        assert_eq!(merged.len(), 2, "非子串应保留两段");
     }
 }
