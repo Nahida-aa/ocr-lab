@@ -30,17 +30,18 @@ pub(crate) mod pipeline;
 // 使用方路径仍是 `subtitle_ocr::aggregate_boxes` / `subtitle_ocr::nms`，
 // 不随内部拆分而变。
 pub use crate::geometry::nms;
-pub use crate::ocr_fix::box_adjusted::{
+pub use crate::ocr_fix::box_adjust::{
     BoxAdjustedArgs, FrameResultBoxWithAdjust, OcrBoxAdjustResult, OcrBoxAdjustResultMeta,
     OcrBoxResultWithAdjust, OcrFramesBoxFilteredResult, OcrFramesBoxFilteredResultMeta,
     build_ocr_frames_box_adjust, get_ocr_frames_box_filtered,
 };
 pub use crate::ocr_fix::merge_frames::{
-    avg_confidence, base_merge_frames, dedup_overlap, edit_distance, is_substring_of,
-    MergeFramesArgs, MergeFramesResult, merge_adjacent_same_text, merge_confidence, merge_frames,
-    merge_substring_segments, normalize, OcrSegment, overlap, remove_triplet_noise, SegmentFrame,
+    MergeFramesArgs, MergeFramesResult, OcrSegment, SegmentFrame, avg_confidence,
+    base_merge_frames, dedup_overlap, edit_distance, is_substring_of, merge_adjacent_same_text,
+    merge_confidence, merge_frames, merge_substring_segments, normalize, overlap,
+    remove_triplet_noise,
 };
-pub use crate::ocr_fix::segment_adjust::OcrSegmentAdjustArgs;
+pub use crate::ocr_fix::segment_adjust::{OcrSegmentAdjustArgs, OcrSegmentWithAdjusted};
 pub use crate::ocr_fix::stats::{YStats, compute_box_y_stats};
 pub use crate::ocr_fix::subtitling::SubtitlingSegment;
 pub use crate::ocr_util::aggregate_boxes;
