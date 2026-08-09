@@ -1,10 +1,10 @@
 //! 字幕框离群过滤：逐帧剔除离群框、重聚合得到干净帧。
 //!
 //! 对齐 LocalDub `packages/core/stages/ocr/utils.ts` 的 `get_ocr_frames_box_filtered`：
-//! 在 [`crate::ocr_fix::box_adjust`] 的行对齐 / 调整之后，按 `is_outlier` 标记过滤离群框。
+//! 在 [`crate::ocr_post::box_adjust`] 的行对齐 / 调整之后，按 `is_outlier` 标记过滤离群框。
 //! 本模块只负责「过滤 + 重聚合」，不碰 box 调整参数（那些在 `box_adjust`）。
 
-use crate::ocr_fix::box_adjust::{
+use crate::ocr_post::box_adjust::{
     FrameResultBoxWithAdjust, OcrBoxResultWithAdjust, OcrFramesBoxFilteredResult,
     OcrFramesBoxFilteredResultMeta,
 };
@@ -61,7 +61,7 @@ pub fn ocr_frames_filter_box(frames: &[FrameResultBoxWithAdjust]) -> OcrFramesBo
 mod tests {
     use super::*;
     use crate::OcrBoxResult;
-    use crate::ocr_fix::box_adjust::OcrBoxResultWithAdjust;
+    use crate::ocr_post::box_adjust::OcrBoxResultWithAdjust;
 
     fn box_with(text: &str, y_range: [f32; 2], conf: f32) -> OcrBoxResult {
         OcrBoxResult {

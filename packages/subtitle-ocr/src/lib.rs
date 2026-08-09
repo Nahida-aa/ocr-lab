@@ -22,7 +22,7 @@ use serde::Serialize;
 use std::path::PathBuf;
 
 pub(crate) mod geometry;
-pub(crate) mod ocr_fix;
+pub(crate) mod ocr_post;
 pub(crate) mod ocr_util;
 pub(crate) mod pipeline;
 
@@ -30,27 +30,27 @@ pub(crate) mod pipeline;
 // 使用方路径仍是 `subtitle_ocr::aggregate_boxes` / `subtitle_ocr::nms`，
 // 不随内部拆分而变。
 pub use crate::geometry::nms;
-pub use crate::ocr_fix::box_adjust::{
+pub use crate::ocr_post::box_adjust::{
     BoxAdjustedArgs, FrameResultBoxWithAdjust, OcrBoxAdjustResult, OcrBoxAdjustResultMeta,
     OcrBoxResultWithAdjust, OcrFramesBoxFilteredResult, OcrFramesBoxFilteredResultMeta,
     ocr_frames_adjust_box,
 };
-pub use crate::ocr_fix::box_filter::ocr_frames_filter_box;
-pub use crate::ocr_fix::merge_frames::{
+pub use crate::ocr_post::box_filter::ocr_frames_filter_box;
+pub use crate::ocr_post::merge_frames::{
     MergeFramesArgs, MergeFramesResult, OcrSegment, SegmentFrame, avg_confidence,
     base_merge_frames, dedup_overlap, edit_distance, is_substring_of, merge_adjacent_same_text,
     merge_confidence, merge_frames, merge_substring_segments, normalize, overlap,
     remove_triplet_noise,
 };
-pub use crate::ocr_fix::segment_adjust::{
+pub use crate::ocr_post::segment_adjust::{
     OcrSegmentAdjustArgs, OcrSegmentWithAdjust, ocr_segment_adjust,
 };
-pub use crate::ocr_fix::segment_filter::{
+pub use crate::ocr_post::segment_filter::{
     OcrSegmentFilterData, OcrSegmentFilterMeta, OcrSegmentFilterResult, ocr_segment_filter,
     ocr_segment_filter_with_meta,
 };
-pub use crate::ocr_fix::stats::{YStats, compute_box_y_stats};
-pub use crate::ocr_fix::subtitling::SubtitlingSegment;
+pub use crate::ocr_post::stats::{YStats, compute_box_y_stats};
+pub use crate::ocr_post::subtitling::SubtitlingSegment;
 pub use crate::ocr_util::aggregate_boxes;
 pub use crate::pipeline::{OcrDevice, OcrFramesMeta, OcrFramesResult};
 
