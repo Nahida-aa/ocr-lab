@@ -7,6 +7,7 @@
 #   just run-dir <dir>         # 批量识别（文件名须为 ms / ms_ms 时间格式）
 #   just run-out <image> <out> # 单图识别并写出 OcrFramesResult 到指定文件
 #   just merge <frames> [out]  # 多帧合并：逐帧 JSON → 带时间轴字幕段
+#   just adjust-box <frames> [out]  # 字幕框调整：逐帧 JSON(含boxes) → 调整后框+meta
 #   just doc                   # 构建文档（带私有项，便于看内部模块）
 #
 # 输出：stdout 为与 cpp 同形状的 JSON 数组（text/confidence/boxes/timestamp）；
@@ -50,3 +51,10 @@ doc:
 # 输出 MergeFramesResult { text, segments } 到 stdout（--out 额外落盘）。
 merge in="tmp/asr_ocr_frames.json" out="tmp/merged.json":
     cargo run -p subtitle-ocr --bin merge-frames --release -- {{in}} --out {{out}}
+
+# ---- 字幕框调整：给逐帧 JSON 的框算偏离/噪声惩罚、标记离群 ----
+# 用法：just adjust-box <frames.json> [out]
+# 输入须含 boxes（调整依赖框几何），由主 CLI（subtitle-ocr --out）产出；
+# 输出 OcrBoxAdjustResult { frames, meta } 到 stdout（--out 额外落盘）。
+adjust-box in="tmp/asr_ocr_frames.json" out="tmp/adjusted.json":
+    cargo run -p subtitle-ocr --bin ocr-frames-adjust-box --release -- {{in}} --out {{out}}
