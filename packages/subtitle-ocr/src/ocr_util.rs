@@ -26,7 +26,7 @@ pub fn aggregate_boxes(boxes: &[OcrBoxResult]) -> FrameResult {
     let sep = if same_line { " " } else { "\n" };
     let text: Vec<&str> = boxes.iter().map(|l| l.text.as_str()).collect();
     let text = text.join(sep);
-    let confidence = if boxes.is_empty() {
+    let text_confidence = if boxes.is_empty() {
         0.0
     } else {
         boxes.iter().map(|i| i.text_confidence as f64).sum::<f64>() / boxes.len() as f64
@@ -46,7 +46,7 @@ pub fn aggregate_boxes(boxes: &[OcrBoxResult]) -> FrameResult {
     };
     FrameResult {
         text,
-        confidence,
+        text_confidence,
         boxes: boxes.to_vec(),
         x_range,
         y_range,
@@ -80,7 +80,10 @@ mod tests {
     #[test]
     fn single_line_uses_space() {
         // 两框 y 重叠 ⇒ 同行，空格拼接。
-        let boxes = [box_with("hello", [10.0, 20.0]), box_with("world", [12.0, 22.0])];
+        let boxes = [
+            box_with("hello", [10.0, 20.0]),
+            box_with("world", [12.0, 22.0]),
+        ];
         let r = aggregate_boxes(&boxes);
         assert_eq!(r.text, "hello world");
     }
@@ -88,7 +91,10 @@ mod tests {
     #[test]
     fn multi_line_uses_newline() {
         // 两框 y 不重叠 ⇒ 多行，换行分隔。
-        let boxes = [box_with("line1", [10.0, 20.0]), box_with("line2", [40.0, 50.0])];
+        let boxes = [
+            box_with("line1", [10.0, 20.0]),
+            box_with("line2", [40.0, 50.0]),
+        ];
         let r = aggregate_boxes(&boxes);
         assert_eq!(r.text, "line1\nline2");
     }
@@ -97,6 +103,6 @@ mod tests {
     fn empty_boxes_text_is_empty() {
         let r = aggregate_boxes(&[]);
         assert_eq!(r.text, "");
-        assert_eq!(r.confidence, 0.0);
+        assert_eq!(r.text_confidence, 0.0);
     }
 }

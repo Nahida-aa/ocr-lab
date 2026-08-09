@@ -141,7 +141,7 @@ mod tests {
     fn frame(boxes: Vec<OcrBoxResult>) -> FrameResult {
         crate::FrameResult {
             text: String::new(),
-            confidence: 0.0,
+            text_confidence: 0.0,
             boxes,
             x_range: [0.0, 0.0],
             y_range: [0.0, 0.0],

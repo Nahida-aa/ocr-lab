@@ -32,8 +32,10 @@ pub(crate) mod pipeline;
 pub use crate::geometry::nms;
 pub use crate::ocr_fix::box_adjusted::{
     BoxAdjustedArgs, FrameResultBoxWithAdjust, OcrBoxAdjustResult, OcrBoxAdjustResultMeta,
-    OcrBoxResultWithAdjust, build_ocr_frames_box_adjust, get_ocr_frames_box_filtered,
+    OcrBoxResultWithAdjust, OcrFramesBoxFilteredResult, OcrFramesBoxFilteredResultMeta,
+    build_ocr_frames_box_adjust, get_ocr_frames_box_filtered,
 };
+pub use crate::ocr_fix::merge_frames::MergeFramesArgs;
 pub use crate::ocr_fix::stats::{YStats, compute_box_y_stats};
 pub use crate::ocr_util::aggregate_boxes;
 pub use crate::pipeline::{OcrDevice, OcrFramesMeta, OcrFramesResult};
@@ -94,7 +96,7 @@ pub struct FrameResult {
     pub text: String,
     /// 该图聚合置信度：各框 `text_confidence` 的均值（对齐下游 TS `aggregate_boxes`，
     /// 多框取平均而非最大）。
-    pub confidence: f64,
+    pub text_confidence: f64,
     /// 该图所有识别区域明细（每行文本/框/score，含坐标还原）。
     pub boxes: Vec<OcrBoxResult>,
     /// 横向值域 `[min_x, max_x]`（像素坐标），无字幕时为 `[0,0]`。
