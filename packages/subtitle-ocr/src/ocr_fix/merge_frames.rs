@@ -363,6 +363,88 @@ pub fn merge_substring_segments(segments: &[OcrSegment]) -> Vec<OcrSegment> {
     out
 }
 
+/// third pass：消除夹在两段相同真实字幕之间的短噪声段（A-B-C → A+C，处理 OCR 单字
+/// 幻觉，如 `嗯发财了` → `菌` → `嗯发财了`）。
+///
+/// 对齐 LocalDub `utils.ts` 的 `removeTripletNoise`：对相邻三元组 `(a, b, c)`，
+/// 当 `a`/`c` 文本编辑距离 ≤ 2 且 b 与 a/c 的 y 值域都重叠时，判定 b 是否为噪声：
+/// - b 自身很短（≤ 1000ms）；或
+/// - b 与 a（或 c）编辑距离 ≤ 2 且字符数差 ≤ 2（中间插入一个字的噪声）。
+/// 满足则把三段合并为一段（取 a 文本、a 起点、c 终点、a 的 y 值域，置信度取三者均值，
+/// frame_count 相加，frames 拼接 a/b/c），删除 b、c 并从当前位置重新检查。
+///
+/// `text_confidence` 在本库为必填 `f32`（TS 的 `??` 过滤无意义），直接对三者求均值；
+/// `b.text.length` 用 `chars().count()` 取字符数（对齐 TS `length` 与 `edit_distance` 的
+/// 字符语义）。`b.end_ms - b.start_ms` 用 `saturating_sub` 防御反向时间戳。
+pub fn remove_triplet_noise(segments: &[OcrSegment]) -> Vec<OcrSegment> {
+    let mut out: Vec<OcrSegment> = segments.to_vec();
+    let mut i = 0;
+    while i + 2 < out.len() {
+        // 先把三元组需要的字段读成自有值，结束不可变借用后再改 out。
+        let a_text = out[i].base.text.clone();
+        let a_start = out[i].base.start_ms;
+        let a_y = out[i].y_range;
+        let a_conf = out[i].text_confidence;
+        let a_fc = out[i].frame_count;
+        let a_frames = out[i].frames.clone();
+
+        let b_text = out[i + 1].base.text.clone();
+        let b_start = out[i + 1].base.start_ms;
+        let b_end = out[i + 1].base.end_ms;
+        let b_y = out[i + 1].y_range;
+        let b_conf = out[i + 1].text_confidence;
+        let b_fc = out[i + 1].frame_count;
+        let b_frames = out[i + 1].frames.clone();
+
+        let c_text = out[i + 2].base.text.clone();
+        let c_end = out[i + 2].base.end_ms;
+        let c_y = out[i + 2].y_range;
+        let c_conf = out[i + 2].text_confidence;
+        let c_fc = out[i + 2].frame_count;
+        let c_frames = out[i + 2].frames.clone();
+
+        let triplet_match =
+            edit_distance(&a_text, &c_text) <= 2 && overlap(a_y, b_y) && overlap(b_y, c_y);
+        if !triplet_match {
+            i += 1;
+            continue;
+        }
+        let dur_b = b_end.saturating_sub(b_start);
+        let is_short = dur_b <= 1000;
+        let b_near_a = edit_distance(&b_text, &a_text) <= 2
+            && (b_text.chars().count() as i32 - a_text.chars().count() as i32).abs() <= 2;
+        let b_near_c = edit_distance(&b_text, &c_text) <= 2
+            && (b_text.chars().count() as i32 - c_text.chars().count() as i32).abs() <= 2;
+        let is_noise = is_short || b_near_a || b_near_c;
+        if !is_noise {
+            i += 1;
+            continue;
+        }
+        // 合并 a/b/c → 留在位置 i；删除 b、c，并从当前位置重查。
+        let merged_conf = avg_confidence(&[a_conf, b_conf, c_conf]);
+        let fc = a_fc.unwrap_or(1) + b_fc.unwrap_or(1) + c_fc.unwrap_or(1);
+        let mut frames = a_frames.unwrap_or_default();
+        frames.extend(b_frames.unwrap_or_default());
+        frames.extend(c_frames.unwrap_or_default());
+        out[i] = OcrSegment {
+            base: SubtitlingSegment {
+                text: a_text,
+                start_ms: a_start,
+                end_ms: c_end,
+            },
+            y_range: a_y,
+            text_confidence: merged_conf,
+            frame_count: Some(fc),
+            frames: Some(frames),
+        };
+        out.drain(i + 1..=i + 2);
+        if i > 0 {
+            i -= 1; // 重查当前位置（对齐 TS 的 i--）
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -635,5 +717,48 @@ mod tests {
         ];
         let merged = merge_substring_segments(&segs);
         assert_eq!(merged.len(), 2, "非子串应保留两段");
+    }
+
+    #[test]
+    fn remove_triplet_noise_folds_short_middle_segment() {
+        // A=嗯发财了 / B=菌(短,150ms) / C=嗯发财了：A-C 编辑距离 1、y 全重叠、
+        // B 很短 → 合并为一段「嗯发财了」，覆盖 A 起点到 C 终点。
+        let segs = vec![
+            segment("嗯发财了", 0, 1000, [10.0, 30.0], 0.9),
+            segment("菌", 1000, 1150, [10.0, 30.0], 0.3),
+            segment("嗯发财了", 1150, 2000, [10.0, 30.0], 0.85),
+        ];
+        let out = remove_triplet_noise(&segs);
+        assert_eq!(out.len(), 1, "A-B-C 噪声应折叠为一段");
+        assert_eq!(out[0].base.text, "嗯发财了");
+        assert_eq!(out[0].base.start_ms, 0);
+        assert_eq!(out[0].base.end_ms, 2000);
+        // 三段置信度均值 (0.9+0.3+0.85)/3 ≈ 0.6833。
+        assert!((out[0].text_confidence - (0.9 + 0.3 + 0.85) / 3.0).abs() < 1e-4);
+        assert_eq!(out[0].frame_count, Some(3));
+    }
+
+    #[test]
+    fn remove_triplet_noise_keeps_when_middle_is_real() {
+        // A/C 文本差异大（编辑距离 > 2）→ 不触发合并，保留三段。
+        let segs = vec![
+            segment("今天天气真好", 0, 1000, [10.0, 30.0], 0.9),
+            segment("菌", 1000, 1150, [10.0, 30.0], 0.3),
+            segment("我们去爬山吧", 1150, 2000, [10.0, 30.0], 0.85),
+        ];
+        let out = remove_triplet_noise(&segs);
+        assert_eq!(out.len(), 3, "A-C 文本差异大应保留三段");
+    }
+
+    #[test]
+    fn remove_triplet_noise_keeps_when_no_y_overlap() {
+        // A-C 文本相同但 B 与 A/C 的 y 不重叠 → 不合并。
+        let segs = vec![
+            segment("嗯发财了", 0, 1000, [10.0, 30.0], 0.9),
+            segment("菌", 1000, 1150, [200.0, 220.0], 0.3),
+            segment("嗯发财了", 1150, 2000, [10.0, 30.0], 0.85),
+        ];
+        let out = remove_triplet_noise(&segs);
+        assert_eq!(out.len(), 3, "y 不重叠应保留三段");
     }
 }
