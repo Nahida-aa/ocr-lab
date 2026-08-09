@@ -5,7 +5,7 @@
 //! - `dedup_edit_distance`：`dedupOverlap` 的编辑距离阈值，edit_distance ≤ 此值则合并；
 //!   省略时默认 `1`。
 
-use crate::SubtitlingSegment;
+use crate::{FrameResult, SubtitlingSegment};
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -169,6 +169,143 @@ pub fn overlap(a: Option<[f32; 2]>, b: Option<[f32; 2]>) -> bool {
     }
 }
 
+/// 把逐帧 [`FrameResult`] 合并成带时间轴的字幕段 [`OcrSegment`]（对齐 LocalDub
+/// `utils.ts` 的 `base_merge_frames`）。
+///
+/// 状态机：空帧标记 gap → gap 内同文本恢复则合并、否则 flush；文本变更则 flush 旧段开新段；
+/// 循环结束 flush 最后一段。每段聚合所有组成帧的置信度均值、记录 `frame_count` 与各帧明细。
+///
+/// 注：TS 版签名含 `args: MergeFramesArgs`，但函数体内并未使用（去重/子串合并的阈值逻辑
+/// 尚未接入）。为保持签名一致这里仍接收 `&MergeFramesArgs`，以 `_args` 命名避免未用警告，
+/// 待后续接入 `is_merge_substring` / `dedup_edit_distance` 时再启用。
+///
+/// 类型映射：`FrameResult.text_confidence` 为 `f64`，而 [`OcrSegment`] / [`SegmentFrame`]
+/// 的置信度为 `f32`；此处按 `as f32` 收敛（置信度 ~0..1，f32 精度足够）。
+pub fn base_merge_frames(
+    frames: &[FrameResult],
+    _args: &MergeFramesArgs,
+) -> Vec<OcrSegment> {
+    let mut segments: Vec<OcrSegment> = Vec::new();
+    let mut current_text = String::new();
+    let mut current_start: u64 = 0;
+    let mut current_end: u64 = 0;
+    let mut current_box_y: Option<[f32; 2]> = None;
+    let mut gap_start: u64 = 0;
+    let mut current_confidences: Vec<f32> = Vec::new();
+    let mut current_frames: Vec<SegmentFrame> = Vec::new();
+
+    // 把当前累积的段 flush 进 segments（消费 current_frames，随后由调用方重置）。
+    let flush = |current_text: &str,
+                     current_start: u64,
+                     end_ms: u64,
+                     current_box_y: Option<[f32; 2]>,
+                     current_confidences: &[f32],
+                     current_frames: Vec<SegmentFrame>,
+                     segments: &mut Vec<OcrSegment>| {
+        segments.push(OcrSegment {
+            base: SubtitlingSegment {
+                text: current_text.to_string(),
+                start_ms: current_start,
+                end_ms,
+            },
+            y_range: current_box_y,
+            text_confidence: avg_confidence(current_confidences),
+            frame_count: Some(current_confidences.len() as u32),
+            frames: Some(current_frames),
+        });
+    };
+
+    for f in frames {
+        // ─── A: 空帧 → 标记 gap ───
+        if f.text.is_empty() {
+            if !current_text.is_empty() && gap_start == 0 {
+                gap_start = f.timestamp;
+            }
+            continue;
+        }
+        // ─── B: gap 恢复检查（空帧后同 text 恢复）───
+        if gap_start > 0 {
+            let gap_ms = f.timestamp.saturating_sub(gap_start);
+            if gap_ms <= 1500
+                && (normalize(&f.text) == normalize(&current_text)
+                    || is_substring_of(&f.text, &current_text)
+                    || is_substring_of(&current_text, &f.text))
+            {
+                // B1: gap 恢复成功 → 合并回当前段
+                current_confidences.push(f.text_confidence as f32);
+                current_end = f.timestamp;
+                gap_start = 0;
+                continue;
+            }
+            // B2: gap 恢复失败 → flush 当前段，重置
+            flush(
+                &current_text,
+                current_start,
+                gap_start,
+                current_box_y,
+                &current_confidences,
+                std::mem::take(&mut current_frames),
+                &mut segments,
+            );
+            current_text.clear();
+            current_start = 0;
+            current_box_y = None;
+            gap_start = 0;
+            current_confidences.clear();
+            // current_frames 已被 take 走，重新置空
+            current_frames = Vec::new();
+        }
+        // ─── C: text 比较 ───
+        if current_text.is_empty() || normalize(&f.text) != normalize(&current_text) {
+            // C1: 不同 text → flush 旧段，开始新段
+            if !current_text.is_empty() {
+                flush(
+                    &current_text,
+                    current_start,
+                    current_end,
+                    current_box_y,
+                    &current_confidences,
+                    std::mem::take(&mut current_frames),
+                    &mut segments,
+                );
+            }
+            current_text = f.text.clone();
+            current_start = f.timestamp;
+            current_end = f.timestamp;
+            current_box_y = Some(f.y_range);
+            current_confidences = vec![f.text_confidence as f32];
+            current_frames = vec![SegmentFrame {
+                timestamp: f.timestamp,
+                text: f.text.clone(),
+                text_confidence: f.text_confidence as f32,
+            }];
+        } else {
+            // C2: 同 text → 延续当前段
+            current_confidences.push(f.text_confidence as f32);
+            current_end = f.timestamp;
+            current_frames.push(SegmentFrame {
+                timestamp: f.timestamp,
+                text: f.text.clone(),
+                text_confidence: f.text_confidence as f32,
+            });
+        }
+    }
+    // ─── D: 循环结束 flush 最后一段 ───
+    if !current_text.is_empty() {
+        let last_ts = if gap_start > 0 { gap_start } else { current_end };
+        flush(
+            &current_text,
+            current_start,
+            last_ts,
+            current_box_y,
+            &current_confidences,
+            std::mem::take(&mut current_frames),
+            &mut segments,
+        );
+    }
+    segments
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -319,5 +456,72 @@ mod tests {
         assert!(!overlap(Some([0.0, 10.0]), Some([10.0, 20.0])));
         // 任一为 None ⇒ false。
         assert!(!overlap(None, Some([0.0, 10.0])));
+    }
+
+    /// 构造一个带文本与时刻的帧（其余字段占位）。
+    fn frame(text: &str, ts: u64, conf: f64) -> FrameResult {
+        FrameResult {
+            text: text.into(),
+            text_confidence: conf,
+            boxes: vec![],
+            x_range: [0.0, 10.0],
+            y_range: [10.0, 30.0],
+            timestamp: ts,
+        }
+    }
+
+    #[test]
+    fn base_merge_frames_groups_same_text_and_splits_on_change() {
+        // 两帧同文本 → 合并成一段；第三帧不同文本 → 另起一段。
+        let frames = vec![
+            frame("你好", 0, 0.9),
+            frame("你好", 500, 0.8),
+            frame("世界", 1000, 0.7),
+        ];
+        let segs = base_merge_frames(&frames, &MergeFramesArgs::default());
+        assert_eq!(segs.len(), 2, "同文本合并、异文本分段");
+        assert_eq!(segs[0].base.text, "你好");
+        assert_eq!(segs[0].base.start_ms, 0);
+        assert_eq!(segs[0].base.end_ms, 500);
+        assert_eq!(segs[0].frame_count, Some(2));
+        // 置信度为两帧均值 (0.9+0.8)/2=0.85。
+        assert!((segs[0].text_confidence - 0.85).abs() < 1e-5);
+        assert_eq!(segs[1].base.text, "世界");
+        assert_eq!(segs[1].base.start_ms, 1000);
+    }
+
+    #[test]
+    fn base_merge_frames_recovers_gap_when_same_text() {
+        // 中间空帧（gap）后同文本、间隔 < 1500ms → 合并回当前段（不分段）。
+        let frames = vec![
+            frame("字幕", 0, 0.9),
+            frame("", 500, 0.0), // 空帧标记 gap
+            frame("字幕", 800, 0.8),
+        ];
+        let segs = base_merge_frames(&frames, &MergeFramesArgs::default());
+        assert_eq!(segs.len(), 1, "gap 内同文本恢复应合并为一段");
+        assert_eq!(segs[0].frame_count, Some(2));
+        assert_eq!(segs[0].base.end_ms, 800);
+    }
+
+    #[test]
+    fn base_merge_frames_flushes_on_gap_then_different_text() {
+        // 空帧后文本不同 → flush 当前段、开新段（两段）。
+        let frames = vec![
+            frame("甲", 0, 0.9),
+            frame("", 500, 0.0),
+            frame("乙", 900, 0.8), // 间隔 400ms 但文本不同
+        ];
+        let segs = base_merge_frames(&frames, &MergeFramesArgs::default());
+        assert_eq!(segs.len(), 2);
+        assert_eq!(segs[0].base.text, "甲");
+        assert_eq!(segs[0].base.end_ms, 500); // gap 处截断
+        assert_eq!(segs[1].base.text, "乙");
+    }
+
+    #[test]
+    fn base_merge_frames_empty_input_yields_no_segments() {
+        let segs = base_merge_frames(&[], &MergeFramesArgs::default());
+        assert!(segs.is_empty());
     }
 }
