@@ -82,6 +82,93 @@ pub struct OcrSegment {
     pub frames: Option<Vec<SegmentFrame>>,
 }
 
+/// 归一化文本：去掉所有空白字符（对齐 LocalDub `utils.ts` 的 `normalize`，
+/// TS 用 `s.replace(/\s+/g, "")`）。用于字幕文本的比对 / 子串合并判断，
+/// 消除换行、空格、全/半角空白差异。返回新字符串，不改原输入。
+pub fn normalize(s: &str) -> String {
+    s.chars().filter(|c| !c.is_whitespace()).collect()
+}
+
+/// 平均置信度：输入为空时返回 `0.0`（对齐 LocalDub `utils.ts` 的 `avgConfidence`）。
+///
+/// `confidences` 为各文本置信度（f32）；空切片返回 0 而非 panic / NaN。
+pub fn avg_confidence(confidences: &[f32]) -> f32 {
+    if confidences.is_empty() {
+        0.0
+    } else {
+        confidences.iter().sum::<f32>() / confidences.len() as f32
+    }
+}
+
+/// 判断 `a` 是否为 `b` 的子串（双向：较短者被较长者包含即算）。
+///
+/// 对齐 LocalDub `utils.ts` 的 `isSubstringOf`：
+/// - 任一为空、或两串等长 ⇒ 返回 `false`（等长不算子串，避免自身匹配）；
+/// - 否则较短串是否被较长串 `contains`。
+///
+/// 通常配合 [`normalize`] 先去空白再比对。
+pub fn is_substring_of(a: &str, b: &str) -> bool {
+    if a.is_empty() || b.is_empty() || a.len() == b.len() {
+        return false;
+    }
+    if a.len() < b.len() {
+        b.contains(a)
+    } else {
+        a.contains(b)
+    }
+}
+
+/// 合并两个（可选）置信度为均值；任一为 `None` 时返回另一个（再无则 `0.0`）。
+///
+/// 对齐 LocalDub `utils.ts` 的 `mergeConfidence`：参数均为可选 number，
+/// 仅有一个有值时取该值，两者都有时取平均。
+pub fn merge_confidence(a: Option<f32>, b: Option<f32>) -> f32 {
+    match (a, b) {
+        (Some(x), Some(y)) => (x + y) / 2.0,
+        (Some(x), None) | (None, Some(x)) => x,
+        (None, None) => 0.0,
+    }
+}
+
+/// 编辑距离（Levenshtein）：将一个字符串变成另一个所需的最少
+/// 插入 / 删除 / 替换次数（对齐 LocalDub `utils.ts` 的 `edit_distance`）。
+///
+/// 按**字符**遍历（而非字节），以对齐 TS `a.length`（UTF-16 码元计数，BMP 字符每字 1 个）。
+/// 若按字节遍历，CJK 每字 3 字节会使距离被放大 3 倍，与 TS 结果不符。
+/// 例：`edit_distance("陆", "陆执巡") == 2`（插入「执」「巡」两次）。
+pub fn edit_distance(a: &str, b: &str) -> u32 {
+    let a: Vec<char> = a.chars().collect();
+    let b: Vec<char> = b.chars().collect();
+    let m = a.len();
+    let n = b.len();
+    // 滚动两行 DP，避免 (m+1)*(n+1) 矩阵分配；每行长为 n+1。
+    let mut prev: Vec<u32> = (0..=n as u32).collect();
+    let mut cur: Vec<u32> = vec![0; n + 1];
+    for i in 1..=m {
+        cur[0] = i as u32;
+        for j in 1..=n {
+            cur[j] = if a[i - 1] == b[j - 1] {
+                prev[j - 1]
+            } else {
+                prev[j].min(cur[j - 1]).min(prev[j - 1]) + 1
+            };
+        }
+        std::mem::swap(&mut prev, &mut cur);
+    }
+    prev[n]
+}
+
+/// 两个值域 `[min, max]` 是否重叠（对齐 LocalDub `utils.ts` 的 `overlap`）。
+///
+/// 重叠条件：`a[0] < b[1] && b[0] < a[1]`；任一为 `None` 返回 `false`。
+/// 用于判断相邻帧的时间 / y 区间是否相交（如去重时的区间碰撞检测）。
+pub fn overlap(a: Option<[f32; 2]>, b: Option<[f32; 2]>) -> bool {
+    match (a, b) {
+        (Some([a0, a1]), Some([b0, b1])) => a0 < b1 && b0 < a1,
+        _ => false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -118,6 +205,21 @@ mod tests {
         let a: MergeFramesArgs = serde_json::from_str(r#"{"is_merge_substring":true}"#).unwrap();
         assert!(a.is_merge_substring());
         assert_eq!(a.dedup_edit_distance(), 1);
+    }
+
+    #[test]
+    fn normalize_strips_all_whitespace() {
+        assert_eq!(normalize("a b\nc\t d"), "abcd");
+        // 原输入不被修改（返回新字符串）。
+        let s = "x y".to_string();
+        assert_eq!(normalize(&s), "xy");
+        assert_eq!(s, "x y");
+    }
+
+    #[test]
+    fn avg_confidence_mean_and_empty() {
+        assert_eq!(avg_confidence(&[0.9, 0.8, 0.7]), 0.8);
+        assert_eq!(avg_confidence(&[]), 0.0);
     }
 
     #[test]
@@ -169,5 +271,53 @@ mod tests {
         assert_eq!(v["frame_count"], 2);
         assert_eq!(v["frames"][0]["timestamp"], 0);
         assert_eq!(v["frames"][0]["text_confidence"], 0.8);
+    }
+
+    #[test]
+    fn is_substring_of_bidirectional() {
+        // 短串被长串包含 ⇒ true（双向：a 短则 b 含 a，反之 a 含 b）。
+        assert!(is_substring_of("abc", "xxabcxx"));
+        assert!(is_substring_of("xxabcxx", "abc"));
+        // 等长 ⇒ false（避免自身匹配）。
+        assert!(!is_substring_of("abc", "abc"));
+        // 任一为空 ⇒ false。
+        assert!(!is_substring_of("", "abc"));
+        assert!(!is_substring_of("abc", ""));
+        // 互不包含 ⇒ false。
+        assert!(!is_substring_of("abc", "def"));
+    }
+
+    #[test]
+    fn merge_confidence_combines() {
+        // 两者都有 ⇒ 均值（f32 有舍入，用近似比较）。
+        assert!((merge_confidence(Some(0.8), Some(0.6)) - 0.7).abs() < 1e-5);
+        // 仅一个 ⇒ 取该值。
+        assert_eq!(merge_confidence(Some(0.9), None), 0.9);
+        assert_eq!(merge_confidence(None, Some(0.4)), 0.4);
+        // 都为 None ⇒ 0.0。
+        assert_eq!(merge_confidence(None, None), 0.0);
+    }
+
+    #[test]
+    fn edit_distance_matches_ts_examples() {
+        // 陆 → 陆执巡：插入「执」「巡」= 2 次操作。
+        assert_eq!(edit_distance("陆", "陆执巡"), 2);
+        // 陆 → 这其中是不是有什么误会：替换「陆」并插入其余 10 字 = 11 次操作
+        // （该串实际为 11 个 BMP 字符；TS 注释里写的 9 为注释笔误）。
+        assert_eq!(edit_distance("陆", "这其中是不是有什么误会"), 11);
+        // 相同串距离为 0；单字符相等为 0。
+        assert_eq!(edit_distance("abc", "abc"), 0);
+        // 单字符替换 = 1。
+        assert_eq!(edit_distance("a", "b"), 1);
+    }
+
+    #[test]
+    fn overlap_detects_range_intersection() {
+        // [0,10) 与 [5,15) 相交。
+        assert!(overlap(Some([0.0, 10.0]), Some([5.0, 15.0])));
+        // [0,10) 与 [10,20) 相邻不相交（严格小于）。
+        assert!(!overlap(Some([0.0, 10.0]), Some([10.0, 20.0])));
+        // 任一为 None ⇒ false。
+        assert!(!overlap(None, Some([0.0, 10.0])));
     }
 }
