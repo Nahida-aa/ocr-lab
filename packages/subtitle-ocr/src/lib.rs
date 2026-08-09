@@ -40,6 +40,7 @@ pub use crate::ocr_fix::merge_frames::{
     MergeFramesArgs, MergeFramesResult, merge_adjacent_same_text, merge_confidence, merge_frames,
     merge_substring_segments, normalize, OcrSegment, overlap, remove_triplet_noise, SegmentFrame,
 };
+pub use crate::ocr_fix::segment_adjust::OcrSegmentAdjustArgs;
 pub use crate::ocr_fix::stats::{YStats, compute_box_y_stats};
 pub use crate::ocr_fix::subtitling::SubtitlingSegment;
 pub use crate::ocr_util::aggregate_boxes;
