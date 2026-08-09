@@ -1,7 +1,8 @@
 //! 字幕框调整（行对齐后的离群剔除 / 置信度调整）的参数与入口。
 //!
 //! 对齐 LocalDub `packages/core/stages/ocr/utils.ts` 的 `BoxAdjustedArgsSchema` /
-//! `build_ocr_frames_box_adjust`：`box_adjusted_threshold` 为触发 box 调整的置信度阈值
+//! `build_ocr_frames_box_adjust`（本库入口为 [`ocr_frames_adjust_box`]）：`box_adjusted_threshold`
+//! 为触发 box 调整的置信度阈值
 //! （低于此值的框进入调整流程），默认 0.5。
 
 use crate::{FrameResult, OcrBoxResult, YStats};
@@ -70,7 +71,7 @@ pub struct FrameResultBoxWithAdjust {
     pub boxes: Vec<OcrBoxResultWithAdjust>,
 }
 
-/// `build_ocr_frames_box_adjust` 的返回结构（对齐 LocalDub `OcrBoxAdjustResult`）。
+/// [`ocr_frames_adjust_box`] 的返回结构（对齐 LocalDub `OcrBoxAdjustResult`）。
 #[derive(Clone, Debug, Serialize)]
 pub struct OcrBoxAdjustResult {
     /// 各帧调整后的结果。
