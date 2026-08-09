@@ -15,6 +15,10 @@ path = "src/lib.rs"
 name = "subtitle-ocr"
 path = "src/main.rs"
 
+[[bin]]
+name = "merge-frames"
+path = "src/bin/merge_frames_cli.rs"
+
 [dependencies]
 # OCR 引擎（det/rec/cls 推理 + 模型加载 + 字典），本包只做字幕专属逻辑。
 # 纯感知层，不依赖 subtitle-ocr-merge（合并是上游职责）。
