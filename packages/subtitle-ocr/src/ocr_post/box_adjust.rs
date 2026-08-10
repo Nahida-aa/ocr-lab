@@ -205,8 +205,14 @@ fn adjust_box(box_r: &OcrBoxResult, y_stats: &YStats, threshold: f32) -> OcrBoxR
     };
     let band_drift = top_or.max(bot_or); // 上下边界偏离取大的
     // 噪声惩罚：band 偏离 >1 行高才罚；高度比偏离也贡献。
-    let noise_penalty = (band_drift - 1.0).max(0.0) * 0.5 + (1.0 - height_ratio).abs() * 0.3;
-    let noise_penalty = noise_penalty.min(1.0);
+    // 高度比项为「不对称」惩罚：偏大偏小都对称小幅罚（0.3），但对「高度过小」
+    // 的框额外加重（低于 HEIGHT_RATIO_LOW 时再按偏离程度补罚）——高度异常小的
+    // 框更可能是噪声，精准剔除而不误伤偏高/正常框。
+    const HEIGHT_RATIO_LOW: f32 = 0.5;
+    const HEIGHT_LOW_EXTRA: f32 = 0.5;
+    let height_pen = (1.0 - height_ratio).abs() * 0.3
+        + (HEIGHT_RATIO_LOW - height_ratio).max(0.0) * HEIGHT_LOW_EXTRA;
+    let noise_penalty = ((band_drift - 1.0).max(0.0) * 0.5 + height_pen).min(1.0);
     // 几何异常反映检测框可疑，惩罚作用在检测置信度 box_confidence 上
     //（而非识别置信度 text_confidence）。
     let adjusted = box_r.box_confidence * (1.0 - noise_penalty);
@@ -308,5 +314,44 @@ mod tests {
         assert_eq!(out.meta.frame_count, 1);
         assert_eq!(out.meta.y_stats.median_height, 20.0);
         assert_eq!(out.meta.args.threshold(), 0.5);
+    }
+
+    #[test]
+    fn abnormally_low_height_box_is_outlier() {
+        // 典型位置 mode=[100,120]，行高 20。框高度异常小（height_ratio=0.1，
+        // < 0.5）时，不对称高度惩罚应把它压成离群；band 偏离 <1 行高，不参与。
+        let y = YStats {
+            avg: [100.0, 120.0],
+            mode: [100.0, 120.0],
+            median: [100.0, 120.0],
+            avg_height: 20.0,
+            median_height: 20.0,
+            mode_height: 20.0,
+        };
+        let f = frame(vec![box_with("a", [100.0, 102.0], 0.9)]);
+        let out = ocr_frames_adjust_box(&[f], &y, &BoxAdjustedArgs::default());
+        let b = &out.frames[0].boxes[0];
+        assert!(b.is_outlier, "高度异常小的框应因不对称高度惩罚被标记为离群");
+        assert!(b.adjusted_box_confidence < 0.5);
+        assert!(b.height_ratio < 0.5);
+    }
+
+    #[test]
+    fn normal_height_box_not_penalized_extra() {
+        // 高度正常的框（height_ratio=1.0，位置贴合典型）不应被不对称高度惩罚误伤。
+        let y = YStats {
+            avg: [100.0, 120.0],
+            mode: [100.0, 120.0],
+            median: [100.0, 120.0],
+            avg_height: 20.0,
+            median_height: 20.0,
+            mode_height: 20.0,
+        };
+        let f = frame(vec![box_with("a", [100.0, 120.0], 0.9)]);
+        let out = ocr_frames_adjust_box(&[f], &y, &BoxAdjustedArgs::default());
+        let b = &out.frames[0].boxes[0];
+        assert!(!b.is_outlier, "高度正常且位置贴合的框不应被标记为离群");
+        // band_drift=0、height_ratio=1 → 惩罚为 0，置信度不变。
+        assert!((b.adjusted_box_confidence - 0.9).abs() < 1e-6);
     }
 }
