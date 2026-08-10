@@ -7,7 +7,7 @@
 1. **字幕识别**（目标 1）：从视频帧抽取字幕文字。
    - 实现变体：`packages/subtitle-ocr-cpp`（C++/ORT 直连，已实现）、
      `packages/subtitle-ocr-py`（Python/rapidocr，已实现）、
-     `packages/subtitle-ocr`（Rust，待实现）。
+     `packages/subtitle-ocr`（Rust，已实现 OCR + 后处理 CLI 链）。
    - 横比基准：`tests/bench/subtitle-ocr`（`bin/test.rs` 正确性 + `bin/bench.rs` 性能占位）。
    - 参考素材：`tests/bench/subtitle-ocr/ref/`（video_source.mp4 + ocr_manual.json 人工标注）。
 2. **GUI 自动操作**（目标 2）：「看屏幕 → 理解 → 操作」闭环。
@@ -50,21 +50,13 @@
   （0.5/0.5），识别不准，标记实验性。需补 PP-OCRv6 专用预处理。
 - `cls` 方向分类已加载未使用（旋转文本待支持）。
 
-## 下一步（建议顺序）
+## 下一步
 
-1. **修中文 fixture 渲染**：确认 `gen_fixtures.py` 取到 Noto Sans CJK SC 正确
-   face，肉眼核对 `tests/fixtures/zh1.png` / `mix1.png` 确实为中文而非乱码/方块
-   （已定位 `tools/gen_fixtures.py:84` 的 `h, w = canvas` 维度反了 bug，已修）。
-2. **用 gpui 真实渲染生成 fixture**（见下）：`tools/gen_ui_img` 开全屏 gpui 窗口画
-   文字，`crates/capturer` 通过 xdg-desktop-portal 抓屏裁切存 PNG。比 PIL 假图更
-   贴近真实 GUI，且把「渲染→抓图→存 PNG」链路跑通（将来模拟操作复用）。
-3. **提升 v3 识别完整度**：在 fixture 上做参数扫描（扩张比例、rec 输入高度、
-   是否双线性），目标是 `Hello OCR`→`Hello OCR`、`你好世界`→`你好世界` 不丢字。
-4. **补 v6 rec 预处理**，让 `--model v6-*` 与 v3 同等可用。
-5. **opencv 视觉层**：版面/图标/状态识别，作为文字层的补充。
-6. **ui_probe**：把 OCR 结果接到操作回灌（点击 center、输入文本、断言期望文字），
-   先打通 waydroid 截图 → OCR → 断言 的最小闭环。
-7. **(可选) yolo 控件检测**：对复杂 UI 做控件级定位，降低纯 OCR 的误判。
+细项行动清单（可勾选、按目标分组）见 [todo.md](./todo.md)，本文件只保留大方向与
+架构，避免路线图被易过期的长清单拖垮。
+
+概要：目标 1 的 Rust 实现已落地，收尾在 v3 掉字调参、v6 rec 预处理、cls 接入、
+三实现横比基准；目标 2/3 在 ui_probe 回灌闭环、opencv 视觉层、可选 yolo 控件检测。
 
 ## 抓图基础设施（crates/capturer）
 
@@ -93,7 +85,7 @@ ocr-lab/
 ├── packages/
 │   ├── subtitle-ocr-cpp/   # 目标 1：字幕识别 C++ 实现（ocr.test.ts + test.justfile）
 │   ├── subtitle-ocr-py/    # 目标 1：字幕识别 Python 实现
-│   └── subtitle-ocr/       # 目标 1：字幕识别 Rust 实现（待实现）
+│   └── subtitle-ocr/       # 目标 1：字幕识别 Rust 实现（已实现 OCR + 后处理 CLI 链）
 ├── tools/
 │   ├── gen_fixtures.py     # 文字图片生成器（PIL/中文，确定性单元 fixture）
 │   └── gen_ui_img/         # gpui 真实渲染 → capturer 抓图 → 存 tests/fixtures/ui_*.png（目标 3）

@@ -5,7 +5,7 @@
 
 1. **字幕识别**（`subtitle-ocr`）：从视频帧抽取字幕文字。实现变体
    `packages/subtitle-ocr-cpp`（ONNX Runtime 直连）、`packages/subtitle-ocr-py`、
-   待实现的 `packages/subtitle-ocr`（Rust）。横比基准见
+   以及 `packages/subtitle-ocr`（Rust，已实现 OCR + 后处理 CLI 链）。横比基准见
    `tests/bench/subtitle-ocr`。
 2. **GUI 自动操作**：「看屏幕 → 理解 → 操作」闭环。由 `crates/capturer`（抓图）+
    `crates/rapidocr-ort`（文字识别）+ `crates/screen-operator`（点击/输入回灌）组合。
@@ -26,9 +26,9 @@
 | `tools/gen_ui_img` | 3 | 用 gpui 真实渲染文字卡片，再经 `capturer` 抓图，生成 OCR 测试 fixture。 |
 | `packages/subtitle-ocr-cpp` | 1 | 字幕识别 C++ 实现（ONNX Runtime 直连），含正确性测试 `ocr.test.ts` 与 `test.justfile`。 |
 | `packages/subtitle-ocr-py` | 1 | 字幕识别 Python 实现（`rapidocr_onnxruntime`）。 |
-| `packages/subtitle-ocr` | 1 | 字幕识别 Rust 实现（待实现）。 |
+| `packages/subtitle-ocr` | 1 | 字幕识别 Rust 实现（OCR + 后处理 CLI 链，已实现）。 |
 | `tests/bench/subtitle-ocr` | 1 | 字幕识别三实现（cpp/py/rust）的横比基准（正确性 `bin/test.rs` + 性能 `bin/bench.rs` 占位）。 |
-| `models/rapidocr` | 共用 | PP-OCR v3 / v6 的 ONNX 权重与字典（需自行放置，见下）。 |
+| `models/rapidocr` | 共用 | PP-OCR v3 / v6 的 ONNX 权重与字典（被 gitignore，不入库；需本地放置，见下）。 |
 
 ## 识别结果结构
 
@@ -37,8 +37,8 @@
 ```jsonc
 {
   "text": "Count:100",
-  "confidence": 0.95,   // 识别置信度（rec 分支平均字符概率）
-  "score": 0.80,        // 检测框得分（框内平均概率）
+  "text_confidence": 0.95,   // 识别置信度（rec 分支平均字符概率）
+  "box_confidence": 0.80,    // 检测框得分（框内平均概率）
   "box": [[x,y],[x,y],[x,y],[x,y]],  // 四点（顺时针：左上、右上、右下、左下）
   "center": [x, y],     // 四点平均的几何中心，便于点击回灌
   "x_range": [min_x, max_x],   // 横向值域，便于按列/区域过滤
@@ -58,8 +58,9 @@ Runtime（`ort` crate 自带）。`capturer` 的 ScreenCast 路径还需要
 
 ## 准备模型权重
 
-`models/rapidocr/` 下需放置 PP-OCR 权重与字典（从
-[PaddleOCR](https://github.com/PaddlePaddle/PaddleOCR) 导出为 ONNX）。默认查找：
+`models/rapidocr/` 下的权重被 `.gitignore` 排除、**不入库**，需本地放置（从
+[PaddleOCR](https://github.com/PaddlePaddle/PaddleOCR) 导出为 ONNX，或团队内部同步）。
+代码通过 `--model-dir`（默认 `models/rapidocr`，相对仓库根）查找：
 
 - v3：`ch_PP-OCRv3_det_infer.onnx` / `ch_PP-OCRv3_rec_infer.onnx` /
   `ch_ppocr_mobile_v2.0_cls_infer.onnx` / `ppocr_keys.json`
