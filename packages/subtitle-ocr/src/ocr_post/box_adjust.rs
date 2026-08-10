@@ -51,10 +51,11 @@ pub struct OcrBoxResultWithAdjust {
     pub height: f32,
     /// 框高相对典型行高的比值。
     pub height_ratio: f32,
-    /// 是否离群（调整后置信度低于阈值）。
+    /// 是否离群（调整后检测置信度低于阈值）。
     pub is_outlier: bool,
-    /// 经噪声惩罚调整后的置信度。
-    pub adjusted_text_confidence: f32,
+    /// 经几何噪声惩罚调整后的检测置信度（作用在 `box_confidence` 上：几何异常
+    /// 反映的是检测框本身可疑，应压检测置信度而非识别置信度 `text_confidence`）。
+    pub adjusted_box_confidence: f32,
 }
 
 /// 调整后的一帧：原 [`FrameResult`]（去掉 `boxes`） + 调整后的 `boxes`。
@@ -179,7 +180,7 @@ fn adjust_box(box_r: &OcrBoxResult, y_stats: &YStats, threshold: f32) -> OcrBoxR
             height: 0.0,
             height_ratio: 0.0,
             is_outlier: false,
-            adjusted_text_confidence: box_r.text_confidence,
+            adjusted_box_confidence: box_r.box_confidence,
         };
     }
 
@@ -206,7 +207,9 @@ fn adjust_box(box_r: &OcrBoxResult, y_stats: &YStats, threshold: f32) -> OcrBoxR
     // 噪声惩罚：band 偏离 >1 行高才罚；高度比偏离也贡献。
     let noise_penalty = (band_drift - 1.0).max(0.0) * 0.5 + (1.0 - height_ratio).abs() * 0.3;
     let noise_penalty = noise_penalty.min(1.0);
-    let adjusted = box_r.text_confidence * (1.0 - noise_penalty);
+    // 几何异常反映检测框可疑，惩罚作用在检测置信度 box_confidence 上
+    //（而非识别置信度 text_confidence）。
+    let adjusted = box_r.box_confidence * (1.0 - noise_penalty);
     let is_outlier = adjusted < threshold;
 
     OcrBoxResultWithAdjust {
@@ -216,7 +219,7 @@ fn adjust_box(box_r: &OcrBoxResult, y_stats: &YStats, threshold: f32) -> OcrBoxR
         height,
         height_ratio,
         is_outlier,
-        adjusted_text_confidence: adjusted,
+        adjusted_box_confidence: adjusted,
     }
 }
 
@@ -279,7 +282,7 @@ mod tests {
         let out = ocr_frames_adjust_box(&[f], &y, &BoxAdjustedArgs::default());
         let b = &out.frames[0].boxes[0];
         assert!(!b.is_outlier);
-        assert_eq!(b.adjusted_text_confidence, 0.9);
+        assert_eq!(b.adjusted_box_confidence, 0.9);
         assert_eq!(b.height, 0.0);
         assert_eq!(out.meta.frame_count, 1);
     }
@@ -299,7 +302,7 @@ mod tests {
         let out = ocr_frames_adjust_box(&[f], &y, &BoxAdjustedArgs::default());
         let b = &out.frames[0].boxes[0];
         assert!(b.is_outlier, "偏离典型位置过远的框应标记为离群");
-        assert!(b.adjusted_text_confidence < 0.9);
+        assert!(b.adjusted_box_confidence < 0.9);
         assert_eq!(b.height, 20.0);
         // meta 溯源字段正确回填。
         assert_eq!(out.meta.frame_count, 1);
