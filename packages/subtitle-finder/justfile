@@ -10,8 +10,9 @@
 #   just out-clean             # 清空 out/（关键帧 + mask + json）
 # 参数用位置传：just run /tmp/a.mp4 /tmp/out_dir （video, out 按序；out 省略则默认 out/）
 #
-# 输出：packages/subtitle-finder/out/{start}_{end}_{i}.png + _mask.png +
-#       timeline.txt + keyframes.json
+# 输出（--out 目录下）：frames/{start}_{end}.png（与 subtitle-ocr --dir 的 ms_ms
+#       约定一致，可直接喂下游）+ mask/{start}_{end}.png（去背景掩码，分目录）
+#       + timeline.txt + keyframes.json
 #
 # 跨包流程例子（subtitle-finder 提关键帧 → subtitle-ocr 识别 → 带时间轴字幕）见
 # tests/bench/subtitle-ocr（cargo run -p bench-subtitle-ocr --bin sf_ocr -- <video>）。
@@ -36,7 +37,7 @@ run-nosave video="/tmp/clip5s.mp4" out="":
     cargo run -p subtitle-finder --release -- --output timeline {{video}} {{ if out != "" { "--out " + out } else { "" } }}
 
 # ---- 仅原始关键帧 PNG（--output frames，不写掩码/json/timeline） ----
-run-frames video="/tmp/clip5s.mp4" out="":
+run-frames video="tmp/3/video_source.mp4" out="tmp/3/sf_ocr_pre":
     cargo run -p subtitle-finder --release -- --output frames {{video}} {{ if out != "" { "--out " + out } else { "" } }}
 
 # ---- 带分阶段耗时剖析跑 ----

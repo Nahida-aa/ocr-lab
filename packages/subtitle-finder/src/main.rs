@@ -6,12 +6,13 @@
 //!   cargo run -p subtitle-finder --release -- --output timeline <video.mp4>  # 只写 timeline.txt
 //!   cargo run -p subtitle-finder --release -- --output frames <video.mp4>    # 仅原始关键帧 PNG
 //!
-//! 输出（由 `--output` 控制）：
-//!   - `full`（默认）：关键帧 PNG（RGB，H×W，文件名 `{start_ms}_{end_ms}_{i}.png`）、
-//!     去背景掩码 PNG（`{...}_mask.png`）、`timeline.txt`（每行 `start_ms,end_ms`）、
-//!     `keyframes.json`（结构化列表）。
+//! 输出（由 `--output` 控制，均落在 `--out` 目录下）：
+//!   - `full`（默认）：原始关键帧 PNG 在 `frames/`（`{start_ms}_{end_ms}.png`，
+//!     与 subtitle-ocr `--dir` 的 `ms_ms` 时间区间约定一致，可直接喂下游 OCR）、
+//!     去背景掩码 PNG 在 `mask/`（同名）、`timeline.txt`（每行 `start_ms,end_ms`）、
+//!     `keyframes.json`（结构化列表，image/mask 字段为裸文件名）。
 //!   - `timeline`：只写 `timeline.txt`，跳过 PNG / keyframes.json（纯算法计时用）。
-//!   - `frames`：仅写原始关键帧 PNG（含背景），不写掩码 / json / timeline。
+//!   - `frames`：仅写 `frames/` 下原始关键帧 PNG（含背景），不写掩码 / json / timeline。
 
 use anyhow::Context;
 use clap::{Parser, ValueEnum};
@@ -148,7 +149,14 @@ fn main() -> anyhow::Result<()> {
         Some(d) => resolve_path(&repo_root, d),
         None => PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("out"),
     };
-    std::fs::create_dir_all(&out_dir)?;
+    // 原始关键帧放 frames/，去背景掩码放 mask/（分目录，无需后缀区分，
+    // subtitle-ocr --dir frames/ 直接可用）。
+    let frames_dir = out_dir.join("frames");
+    let mask_dir = out_dir.join("mask");
+    std::fs::create_dir_all(&frames_dir)?;
+    if write_mask {
+        std::fs::create_dir_all(&mask_dir)?;
+    }
 
     let mut timeline = String::new();
     let mut json = Vec::new();
@@ -161,21 +169,24 @@ fn main() -> anyhow::Result<()> {
             .progress_chars("=> "),
     );
     for (i, kf) in kfs.iter().enumerate() {
-        let name = format!("{}_{}_{}", kf.start_ms, kf.end_ms, i);
+        // 文件名用 `start_ms_end_ms`（`ms_ms` 时间区间格式），与 subtitle-ocr
+        // 的 `--dir` 批量模式约定一致，可直接喂下游 OCR。关键帧时间区间互不
+        // 重叠，start_ms_end_ms 已天然唯一，无需再附加帧序号。
+        let name = format!("{}_{}", kf.start_ms, kf.end_ms);
         trace!("  [{}] {}ms - {}ms", i, kf.start_ms, kf.end_ms);
 
         if write_frames {
-            // 保存原始帧 PNG（BGR → RGB，含背景）。
-            let path = out_dir.join(format!("{}.png", name));
+            // 保存原始帧 PNG（BGR → RGB，含背景）→ frames/。
+            let path = frames_dir.join(format!("{}.png", name));
             save_png(&path, &kf.frame)?;
         }
         if write_mask {
-            // 保存去背景字幕前景 PNG（黑底白字，对应 VideoSubFinder 的 ISA 图）。
-            let mask_path = out_dir.join(format!("{}_mask.png", name));
+            // 保存去背景字幕前景 PNG（黑底白字，对应 VideoSubFinder 的 ISA 图）→ mask/。
+            let mask_path = mask_dir.join(format!("{}.png", name));
             save_mask_png(&mask_path, &kf.mask)?;
 
             json.push(format!(
-                "{{\"start_ms\":{},\"end_ms\":{},\"image\":\"{}.png\",\"mask\":\"{}_mask.png\"}}",
+                "{{\"start_ms\":{},\"end_ms\":{},\"image\":\"{}.png\",\"mask\":\"{}.png\"}}",
                 kf.start_ms, kf.end_ms, name, name
             ));
         }

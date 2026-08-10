@@ -191,16 +191,17 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-/// 从关键帧 PNG 目录读取（文件名 `{start}_{end}_{i}.png`，subtitle-finder 落盘格式）。
-/// 从文件名解析时间轴，只做 OCR，不重新提取关键帧。
+/// 从关键帧 PNG 目录读取（subtitle-finder 落盘格式：原始帧在 `frames/` 子目录，
+/// 文件名 `{start}_{end}.png`；掩码在 `mask/`，互不干扰）。从文件名解析时间轴，
+/// 只做 OCR，不重新提取关键帧。
 fn load_keyframes_from_dir(dir: &Path) -> Result<Vec<(u64, u64, ndarray::Array3<u8>)>> {
-    let mut files: Vec<_> = std::fs::read_dir(dir)?
+    // 原始关键帧统一在 frames/ 子目录下（掩码已分离到 mask/，无需后缀过滤）。
+    let frames_dir = dir.join("frames");
+    let mut files: Vec<_> = std::fs::read_dir(&frames_dir)?
         .filter_map(|e| e.ok())
         .filter(|e| e.path().extension().map(|x| x == "png").unwrap_or(false))
-        // 跳过 mask 图（`{start}_{end}_{i}_mask.png`），只读原始关键帧。
-        .filter(|e| !e.file_name().to_string_lossy().contains("_mask"))
         .collect();
-    // 按文件名里的 start_ms 数值排序（`{start}_{end}_{i}.png`），保证时间顺序。
+    // 按文件名里的 start_ms 数值排序（`{start}_{end}.png`），保证时间顺序。
     files.sort_by_key(|e| {
         e.file_name()
             .to_string_lossy()
@@ -213,11 +214,11 @@ fn load_keyframes_from_dir(dir: &Path) -> Result<Vec<(u64, u64, ndarray::Array3<
     let mut kfs = Vec::new();
     for e in files {
         let name = e.file_name().to_string_lossy().to_string();
-        // `{start}_{end}_{i}.png` → (start, end, i)。用下划线切，取前两个数字。
+        // `{start}_{end}.png` → (start, end)。
         let stem = name.trim_end_matches(".png");
         let parts: Vec<&str> = stem.split('_').collect();
-        if parts.len() < 3 {
-            anyhow::bail!("无法从文件名解析时间轴: {}", name);
+        if parts.len() != 2 {
+            anyhow::bail!("无法从文件名解析时间轴（应为 start_end.png）: {}", name);
         }
         let start: u64 = parts[0].parse().map_err(|_| anyhow::anyhow!("start 解析失败: {}", name))?;
         let end: u64 = parts[1].parse().map_err(|_| anyhow::anyhow!("end 解析失败: {}", name))?;

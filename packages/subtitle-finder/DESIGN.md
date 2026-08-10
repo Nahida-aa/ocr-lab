@@ -25,7 +25,8 @@
 ```
 
 > **当前实现**：`find_keyframes` 返回 `Vec<Keyframe>{ start_ms, end_ms, frame: Array3<u8> }`。
-> CLI（`main.rs`）把代表帧存为 `{start_ms}_{end_ms}_{i}.ppm`。JSON 输出未实现（可按需加）。
+> CLI（`main.rs`）把代表帧存为 `{start_ms}_{end_ms}.png`（即 subtitle-ocr `--dir` 的
+> `ms_ms` 时间区间约定，可直接喂下游 OCR）。JSON 输出（keyframes.json）已实现。
 
 下游：`rapidocr-ort` 对关键帧图 rec，得到字幕文本（对应 RapidVideOCR）。
 
