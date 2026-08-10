@@ -51,10 +51,9 @@ pub struct OcrBoxResultWithAdjust {
     pub height: f32,
     /// 框高相对典型行高的比值。
     pub height_ratio: f32,
-    /// 是否离群（调整后检测置信度低于阈值）。
+    /// 是否离群（调整后置信度低于阈值）。
     pub is_outlier: bool,
-    /// 经几何噪声惩罚调整后的检测置信度（作用在 `box_confidence` 上：几何异常
-    /// 反映的是检测框本身可疑，应压检测置信度而非识别置信度 `text_confidence`）。
+    /// 经几何噪声惩罚调整后的置信度（`text×0.3 + box×0.7` 加权值 × (1 - penalty)）。
     pub adjusted_box_confidence: f32,
 }
 
@@ -213,10 +212,20 @@ fn adjust_box(box_r: &OcrBoxResult, y_stats: &YStats, threshold: f32) -> OcrBoxR
     } else {
         1.0 // 高度为 0 或非法 → 最大惩罚（必然离群）
     };
-    let noise_penalty = ((band_drift - 1.0).max(0.0) * 0.5 + height_pen).min(1.0);
-    // 几何异常反映检测框可疑，惩罚作用在检测置信度 box_confidence 上
-    //（而非识别置信度 text_confidence）。
-    let adjusted = box_r.box_confidence * (1.0 - noise_penalty);
+    // 噪声惩罚：band 偏离超过 BAND_THRESHOLD 行高即开始罚（原为 1 行高，对
+    // 0.3/0.3 这种"上下各偏一点"的框毫无惩罚；降到 0.05 让任何明显偏移都计入）。
+    // 权重 0.8（原 0.5）：中等偏移 + 低 text_confidence 的框（如 text 0.56/box 0.63、
+    // 偏 0.28 行高）也能被压到阈值下。
+    const BAND_THRESHOLD: f32 = 0.05;
+    const BAND_WEIGHT: f32 = 0.8;
+    let noise_penalty = ((band_drift - BAND_THRESHOLD).max(0.0) * BAND_WEIGHT + height_pen).min(1.0);
+    // 几何异常反映检测框可疑，惩罚作用在「加权置信度」上：
+    //   weighted = text_confidence × 0.3 + box_confidence × 0.7
+    // 兼顾识别置信度与检测置信度（box 占主导，因几何惩罚主要针对检测框）。
+    const TEXT_W: f32 = 0.3;
+    const BOX_W: f32 = 0.7;
+    let weighted_conf = box_r.text_confidence * TEXT_W + box_r.box_confidence * BOX_W;
+    let adjusted = weighted_conf * (1.0 - noise_penalty);
     let is_outlier = adjusted < threshold;
 
     OcrBoxResultWithAdjust {
@@ -236,10 +245,19 @@ mod tests {
     use crate::OcrBoxResult;
 
     fn box_with(text: &str, y_range: [f32; 2], conf: f32) -> OcrBoxResult {
+        box_with_conf(text, y_range, conf, conf)
+    }
+
+    fn box_with_conf(
+        text: &str,
+        y_range: [f32; 2],
+        text_conf: f32,
+        box_conf: f32,
+    ) -> OcrBoxResult {
         OcrBoxResult {
             text: text.into(),
-            text_confidence: conf,
-            box_confidence: conf,
+            text_confidence: text_conf,
+            box_confidence: box_conf,
             box_: [
                 [0.0, y_range[0]],
                 [10.0, y_range[0]],
@@ -354,5 +372,26 @@ mod tests {
         assert!(!b.is_outlier, "高度正常且位置贴合的框不应被标记为离群");
         // band_drift=0、height_ratio=1 → 惩罚为 0，置信度不变。
         assert!((b.adjusted_box_confidence - 0.9).abs() < 1e-6);
+    }
+
+    #[test]
+    fn moderate_offset_low_conf_box_becomes_outlier() {
+        // 复现实际遇到的「色」框：上下各偏 ~0.28/0.26 行高（没超 1 行高）、
+        // text_confidence 低（0.56）。原 band 阈值 1.0 时这类框完全不被罚；
+        // 阈值降到 0.05 + 加权置信度（text×0.3+box×0.7）后应被判离群。
+        let y = YStats {
+            avg: [100.0, 143.0],
+            mode: [100.0, 143.0],
+            median: [100.0, 143.0],
+            avg_height: 43.0,
+            median_height: 43.0,
+            mode_height: 43.0,
+        };
+        // top = 100 - 0.279×43 ≈ 88, bottom = 143 - 0.256×43 ≈ 132。
+        let f = frame(vec![box_with_conf("色", [88.0, 132.0], 0.564, 0.634)]);
+        let out = ocr_frames_adjust_box(&[f], &y, &BoxAdjustedArgs::default());
+        let b = &out.frames[0].boxes[0];
+        assert!(b.is_outlier, "中等偏移 + 低 text_confidence 的框应被判离群");
+        assert!(b.adjusted_box_confidence < 0.5);
     }
 }

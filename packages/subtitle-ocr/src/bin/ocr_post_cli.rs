@@ -88,7 +88,11 @@ impl InputFrame {
         FrameResult {
             text: self.text,
             text_confidence: self.text_confidence,
-            boxes: self.boxes.into_iter().map(InputBox::into_ocr_box_result).collect(),
+            boxes: self
+                .boxes
+                .into_iter()
+                .map(InputBox::into_ocr_box_result)
+                .collect(),
             x_range: self.x_range,
             y_range: self.y_range,
             timestamp: self.timestamp,
@@ -108,12 +112,14 @@ enum InputFrames {
 impl InputFrames {
     fn into_frames(self) -> Vec<FrameResult> {
         match self {
-            InputFrames::Wrapped { frames } => {
-                frames.into_iter().map(InputFrame::into_frame_result).collect()
-            }
-            InputFrames::Bare(frames) => {
-                frames.into_iter().map(InputFrame::into_frame_result).collect()
-            }
+            InputFrames::Wrapped { frames } => frames
+                .into_iter()
+                .map(InputFrame::into_frame_result)
+                .collect(),
+            InputFrames::Bare(frames) => frames
+                .into_iter()
+                .map(InputFrame::into_frame_result)
+                .collect(),
         }
     }
 }
@@ -140,8 +146,8 @@ struct Cli {
     #[arg(long, value_enum, default_value_t = Step::FilterSegment)]
     stop_at: Step,
 
-    /// filter-segment 的置信度阈值（默认 0.6，对齐 justfile）。
-    #[arg(long, default_value_t = 0.6)]
+    /// filter-segment 的置信度阈值（默认 0.5，对齐 justfile）。
+    #[arg(long, default_value_t = 0.5)]
     threshold: f32,
 }
 
@@ -213,7 +219,10 @@ fn main() -> Result<()> {
     let y_stats = compute_box_y_stats(&frames);
     let adjust = ocr_frames_adjust_box(&frames, &y_stats, &BoxAdjustedArgs::default());
     write_json(&out_dir, "frames_box_adjust.json", &adjust)?;
-    println!("[1/5] adjust-box: {} 帧，写出 frames_box_adjust.json", adjust.frames.len());
+    println!(
+        "[1/5] adjust-box: {} 帧，写出 frames_box_adjust.json",
+        adjust.frames.len()
+    );
     if cli.stop_at == Step::AdjustBox {
         return Ok(());
     }
@@ -221,7 +230,10 @@ fn main() -> Result<()> {
     // ─── 2. filter-box ───
     let filtered = ocr_frames_filter_box(&adjust.frames);
     write_json(&out_dir, "frames_box_filter.json", &filtered)?;
-    println!("[2/5] filter-box: {} 帧，写出 frames_box_filter.json", filtered.frames.len());
+    println!(
+        "[2/5] filter-box: {} 帧，写出 frames_box_filter.json",
+        filtered.frames.len()
+    );
     if cli.stop_at == Step::FilterBox {
         return Ok(());
     }
@@ -229,7 +241,10 @@ fn main() -> Result<()> {
     // ─── 3. merge ───
     let merged = merge_frames(&filtered.frames, &MergeFramesArgs::default());
     write_json(&out_dir, "frames_merged.json", &merged)?;
-    println!("[3/5] merge: {} 段，写出 frames_merged.json", merged.segments.len());
+    println!(
+        "[3/5] merge: {} 段，写出 frames_merged.json",
+        merged.segments.len()
+    );
     if cli.stop_at == Step::Merge {
         return Ok(());
     }
@@ -245,7 +260,10 @@ fn main() -> Result<()> {
         &OcrSegmentAdjustArgs::default(),
     );
     write_json(&out_dir, "segment_adjust.json", &seg_adjust)?;
-    println!("[4/5] adjust-segment: {} 段，写出 segment_adjust.json", seg_adjust.len());
+    println!(
+        "[4/5] adjust-segment: {} 段，写出 segment_adjust.json",
+        seg_adjust.len()
+    );
     if cli.stop_at == Step::AdjustSegment {
         return Ok(());
     }
