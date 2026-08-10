@@ -15,7 +15,9 @@
 
 use anyhow::Context;
 use clap::{Parser, ValueEnum};
+use indicatif::{ProgressBar, ProgressStyle};
 use std::path::{Path, PathBuf};
+use tracing::trace;
 
 /// 输出模式：控制落盘哪些产物。
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
@@ -101,7 +103,33 @@ fn main() -> anyhow::Result<()> {
     if profile {
         cache = cache.with_profiling();
     }
-    let kfs = subtitle_finder::state::find_keyframes_with_cache(&mut cache, &params)?;
+
+    // 解码阶段进度条（时间轴，走 stderr）。total==0 时退化为无总量进度。
+    let total_ms = cache.total_duration_ms().max(0) as u64;
+    let pb = ProgressBar::new(total_ms);
+    if total_ms == 0 {
+        // 未知总时长：隐藏长度，仅显示已处理时间。
+        pb.set_style(
+            ProgressStyle::with_template("[{elapsed_precise}] 解码 {pos}ms")
+                .unwrap_or_else(|_| ProgressStyle::default_bar()),
+        );
+    } else {
+        pb.set_style(
+            ProgressStyle::with_template(
+                "[{elapsed_precise}] [{bar:30.cyan/blue}] {pos}/{len} ({eta})",
+            )
+            .unwrap_or_else(|_| ProgressStyle::default_bar())
+            .progress_chars("=> "),
+        );
+    }
+    let kfs = subtitle_finder::state::find_keyframes_with_cache_progress(
+        &mut cache,
+        &params,
+        &mut |cur, _total| {
+            pb.set_position(cur);
+        },
+    )?;
+    pb.finish_and_clear();
 
     if profile {
         if let Some(pf) = cache.profiler() {
@@ -121,9 +149,17 @@ fn main() -> anyhow::Result<()> {
 
     let mut timeline = String::new();
     let mut json = Vec::new();
+    // 落盘进度条（按关键帧数）。逐帧明细降级为 trace!（默认 info 不过滤，
+    // 避免 per-frame println 的终端 flush 抖动 + 与 stderr 进度条混用）。
+    let save_pb = ProgressBar::new(kfs.len() as u64);
+    save_pb.set_style(
+        ProgressStyle::with_template("[{elapsed_precise}] 落盘 [{bar:30.green}] {pos}/{len}")
+            .unwrap_or_else(|_| ProgressStyle::default_bar())
+            .progress_chars("=> "),
+    );
     for (i, kf) in kfs.iter().enumerate() {
         let name = format!("{}_{}_{}", kf.start_ms, kf.end_ms, i);
-        println!("  [{}] {}ms - {}ms", i, kf.start_ms, kf.end_ms);
+        trace!("  [{}] {}ms - {}ms", i, kf.start_ms, kf.end_ms);
 
         if write_frames {
             // 保存原始帧 PNG（BGR → RGB，含背景）。
@@ -144,7 +180,9 @@ fn main() -> anyhow::Result<()> {
         if write_timeline {
             timeline.push_str(&format!("{},{}\n", kf.start_ms, kf.end_ms));
         }
+        save_pb.inc(1);
     }
+    save_pb.finish_and_clear();
 
     if write_timeline {
         std::fs::write(out_dir.join("timeline.txt"), timeline)?;

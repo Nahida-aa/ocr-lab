@@ -6433,6 +6433,7 @@ dependencies = [
  "ffmpeg-next",
  "geometry",
  "image",
+ "indicatif",
  "ndarray",
  "opencv",
  "serde",

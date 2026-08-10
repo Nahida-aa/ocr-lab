@@ -32,3 +32,5 @@ ffmpeg-next = { workspace = true }
 # 结构化调试日志（对齐项目约定：调试日志用 tracing）。
 tracing = { workspace = true }
 tracing-subscriber.workspace = true
+# 进度条（走 stderr，与 tracing/stdout 解耦，对齐 subtitle-ocr）。
+indicatif = { workspace = true }

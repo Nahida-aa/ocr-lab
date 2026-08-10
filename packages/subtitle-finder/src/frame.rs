@@ -29,6 +29,7 @@ pub struct FrameStepper {
     next_packet: Option<Packet>, // 预取的一包，跨越续接边界
     sent_eof: bool,
     decoded_count: i32, // 已产出帧数（用于无 PTS 兜底估算）
+    total_duration_ms: i64, // 视频总时长（毫秒），open 时从 ictx.duration() 取
 }
 
 impl FrameStepper {
@@ -59,6 +60,10 @@ impl FrameStepper {
         )
         .context("创建颜色/尺寸转换失败")?;
 
+        // 视频总时长（毫秒）：ffmpeg 的 ictx.duration() 单位为 AV_TIME_BASE（微秒），
+        // 返回 i64（个别封装格式为 0，罕见）→ 记 0，调用方据此退化进度条。
+        let total_duration_ms = ictx.duration() / 1000;
+
         Ok(Self {
             ictx,
             decoder,
@@ -67,7 +72,13 @@ impl FrameStepper {
             next_packet: None,
             sent_eof: false,
             decoded_count: 0,
+            total_duration_ms,
         })
+    }
+
+    /// 视频总时长（毫秒）。0 表示未知（封装未提供 duration）。
+    pub fn total_duration_ms(&self) -> i64 {
+        self.total_duration_ms
     }
 
     /// 拉下一帧（BGR `Array3`），EOF 返回 `None`。
