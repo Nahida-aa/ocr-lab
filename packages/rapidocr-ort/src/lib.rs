@@ -281,8 +281,8 @@ mod tests {
         let model_dir = root.join("models/rapidocr");
         let fixtures = root.join("tests/fixtures");
 
-        let mut engine = OcrEngine::from_profile(ModelProfile::V3, &model_dir)
-            .expect("加载 v3 引擎失败（确认 models/rapidocr 权重已就绪）");
+        let mut engine = OcrEngine::from_profile(ModelProfile::V4, &model_dir)
+            .expect("加载 v4 引擎失败（确认 models/rapidocr 权重已就绪）");
 
         let cases = [
             ("ui_stable1.png", "Count"),

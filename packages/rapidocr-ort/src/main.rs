@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 #[command(name = "rapidocr-ort", about = "PP-OCR 文字识别（基于 ONNX Runtime）")]
 struct Cli {
     /// 模型套件：v3 / v6-tiny / v6-medium
-    #[arg(long, value_enum, default_value_t = ModelProfile::V3)]
+    #[arg(long, value_enum, default_value_t = ModelProfile::V4)]
     model: ModelProfile,
 
     /// 输入图片路径
