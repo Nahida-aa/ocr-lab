@@ -27,7 +27,7 @@ edition = "2024"
 license = "Apache-2.0"
 publish = false
 # 仓库 description 的唯一源（GitHub 仓库简介 + crates.io 共用一句话）。
-description = "OCR 工具链 + 屏幕自动化 agent：字幕识别与看/操作分离（ydotool + KWin）"
+description = "OCR 工具链 + 屏幕自动化 agent：视频字幕识别 / GUI 测试 / 智能操作（看/操作分离，ydotool + KWin）"
 
 # GitHub 仓库元数据的唯一源（description 见上方，topics 见下）。
 # 用自定义 metadata 段，不污染 crates.io 的 keywords 语义（后者限 5 个）。

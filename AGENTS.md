@@ -20,7 +20,7 @@
 
 - `crates/capturer` —— 屏幕抓取（ScreenCast 窗口流 / 全屏）。
 - `crates/ocr-layout` —— 截图 → 控件候选（OCR + 颜色/布局分析）。
-- `crates/ocr-agent` —— 业务执行层：「看」（识别/定位）+「操作」（点击），两条链路解耦。
+- `packages/ocr-agent` —— 业务执行层：「看」（识别/定位）+「操作」（点击），两条链路解耦（GUI 智能操作方向的 agent，当前未完善/未入 workspace）。
 - `crates/screen-operator` —— 鼠标/键盘输入注入（ydotool 封装），含已知坑文档于 `docs/`。
 
 ## 约定
