@@ -55,3 +55,5 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 # 进度条（UX 层反馈，独立于 tracing 诊断日志）。
 indicatif.workspace = true
+# 读取视频高度（ocr-segment-adjust 的 Y 偏移惩罚归一化分母），从视频文件取而非手填。
+ffmpeg-next = { workspace = true }

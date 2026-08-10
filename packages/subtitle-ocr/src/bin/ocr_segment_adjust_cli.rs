@@ -1,19 +1,18 @@
-//! 命令行：`ocr-segment-adjust <input.json> [--out PATH]`
+//! 命令行：`ocr-segment-adjust --segments <merged.json> --frames <filtered.json> --video <video> [--out PATH]`
 //!
-//! 读入一个打包 JSON（结构见 [`Input`]），包含：
-//! - `segments`：`OcrSegment[]`（合并后的字幕段，由 `merge-frames` 产出）；
-//! - `frames`：`FrameResult[]`（逐帧识别结果，由主 CLI `/ adjust-box` 产出）；
-//! - `video_height`：视频像素高度（Y 偏移惩罚归一化的分母）；
-//! - `y_stats`：（可选）[`YStats`]，缺省时由 `frames` 经 `compute_box_y_stats` 推导；
-//! - `args`：（可选）[`OcrSegmentAdjustArgs`]，缺省时全取默认。
+//! 读两份输入 + 视频路径：
+//! - `--segments`：`OcrSegment[]`（合并后的字幕段，`merge-frames` 输出）；
+//! - `--frames`：`FrameResult[]`（干净逐帧识别结果，`ocr-frames-filter-box` 输出，
+//!   已剔除离群框，供孤立惩罚 / Y 偏移统计用）；
+//! - `--video`：视频文件路径，用 ffmpeg 读视频像素高度（Y 偏移惩罚归一化的分母）。
 //!
 //! 跑 [`subtitle_ocr::ocr_segment_adjust`] 给每段补上 `adjusted_text_confidence` /
 //! `y_penalty` / `iso_penalty`，输出 `OcrSegmentWithAdjust[]`。结果默认到 stdout；
 //! 指定 `--out` 时落盘到文件、不再向 stdout 打印。
 //!
 //! 对齐 LocalDub `computeSegmentAdjust(segments, frameResults, yStats, videoHeight, args)`：
-//! 孤立惩罚依赖逐帧时间轴查找相邻非空帧，故 `frames` 必填；`y_stats` 缺省时按 TS 习惯
-//! 由 `computeBoxYStats(frameResults)` 得到。
+//! 孤立惩罚依赖逐帧时间轴查找相邻非空帧，故 `frames` 必填；`y_stats` 由
+//! `computeBoxYStats(frameResults)` 推导。
 
 use anyhow::{Context, Result};
 use clap::Parser;
@@ -88,6 +87,50 @@ impl InputFrame {
     }
 }
 
+/// 兼容 segments 输入的两种形态：裸 `OcrSegment[]` 数组，或 `{ text, segments }`
+///（`merge-frames` 输出形状）。
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum InputSegments {
+    Wrapped { segments: Vec<InputSegment> },
+    Bare(Vec<InputSegment>),
+}
+
+impl InputSegments {
+    fn into_segments(self) -> Vec<subtitle_ocr::OcrSegment> {
+        match self {
+            InputSegments::Wrapped { segments } => {
+                segments.into_iter().map(InputSegment::into_ocr_segment).collect()
+            }
+            InputSegments::Bare(segments) => {
+                segments.into_iter().map(InputSegment::into_ocr_segment).collect()
+            }
+        }
+    }
+}
+
+/// 兼容 frames 输入的两种形态：裸 `FrameResult[]` 数组，或 `{ frames, meta }`
+///（`ocr-frames-filter-box` 输出形状）。
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum InputFrames {
+    Wrapped { frames: Vec<InputFrame> },
+    Bare(Vec<InputFrame>),
+}
+
+impl InputFrames {
+    fn into_frames(self) -> Vec<FrameResult> {
+        match self {
+            InputFrames::Wrapped { frames } => {
+                frames.into_iter().map(InputFrame::into_frame_result).collect()
+            }
+            InputFrames::Bare(frames) => {
+                frames.into_iter().map(InputFrame::into_frame_result).collect()
+            }
+        }
+    }
+}
+
 /// 输入里单条字幕段（仅消费 [`subtitle_ocr::OcrSegment`] 实际读取的字段；该类型未 derive
 /// `Deserialize`，故单独定义 DTO）。
 #[derive(Debug, Deserialize)]
@@ -121,16 +164,20 @@ impl InputSegment {
     }
 }
 
-/// 打包输入：段 + 逐帧结果 + 视频高度 + 可选 `y_stats` / `args`。
-#[derive(Debug, Deserialize)]
-struct Input {
-    segments: Vec<InputSegment>,
-    frames: Vec<InputFrame>,
-    video_height: f32,
-    #[serde(default)]
-    y_stats: Option<YStats>,
-    #[serde(default)]
-    args: Option<OcrSegmentAdjustArgs>,
+/// 读视频文件获取像素高度（Y 偏移惩罚归一化分母），不手填。
+fn video_height(video: &std::path::Path) -> Result<f32> {
+    ffmpeg_next::init().context("ffmpeg 初始化失败")?;
+    let ictx = ffmpeg_next::format::input(video).context("打开视频失败")?;
+    let input = ictx
+        .streams()
+        .best(ffmpeg_next::media::Type::Video)
+        .ok_or_else(|| anyhow::anyhow!("视频没有视频流"))?;
+    let decoder = ffmpeg_next::codec::context::Context::from_parameters(input.parameters())
+        .context("创建解码上下文失败")?
+        .decoder()
+        .video()
+        .context("创建视频解码器失败")?;
+    Ok(decoder.height() as f32)
 }
 
 #[derive(Parser, Debug)]
@@ -139,8 +186,17 @@ struct Input {
     about = "字幕段置信度调整：给合并段补 Y 偏移/孤立惩罚与调整后置信度"
 )]
 struct Cli {
-    /// 打包输入 JSON 路径：含 `segments` / `frames` / `video_height`，可选 `y_stats` / `args`。
-    input: PathBuf,
+    /// 合并段 JSON 文件路径（`merge-frames` 输出，含 `segments`）。
+    #[arg(long)]
+    segments: PathBuf,
+
+    /// 干净逐帧 JSON 文件路径（`ocr-frames-filter-box` 输出，含逐帧 `frames` 与 boxes）。
+    #[arg(long)]
+    frames: PathBuf,
+
+    /// 视频文件路径：用于读取视频高度（Y 偏移惩罚归一化分母），不手填。
+    #[arg(long)]
+    video: PathBuf,
 
     /// 把调整结果写出到指定文件路径；指定后不再向 stdout 打印。便于落盘对接下游
     /// `ocr-segment-filter`。
@@ -173,34 +229,34 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
 
     let repo_root = current_exe_repo_root()?;
-    let input = resolve_path(&repo_root, &cli.input);
+    let segments_path = resolve_path(&repo_root, &cli.segments);
+    let frames_path = resolve_path(&repo_root, &cli.frames);
+    let video_path = resolve_path(&repo_root, &cli.video);
 
-    let raw = std::fs::read_to_string(&input)
-        .with_context(|| format!("读取输入文件失败: {}", input.display()))?;
-    let parsed: Input = serde_json::from_str(&raw)
-        .context("解析打包 JSON 失败（需含 segments/frames/video_height）")?;
-
-    let segments: Vec<subtitle_ocr::OcrSegment> = parsed
-        .segments
-        .into_iter()
-        .map(InputSegment::into_ocr_segment)
-        .collect();
-    let frames: Vec<FrameResult> = parsed
-        .frames
-        .into_iter()
-        .map(InputFrame::into_frame_result)
-        .collect();
-
-    // y_stats 缺省时由逐帧结果推导（对齐 TS `computeBoxYStats(frameResults)`）。
-    let y_stats: YStats = match parsed.y_stats {
-        Some(y) => y,
-        None => compute_box_y_stats(&frames),
+    let segments: Vec<subtitle_ocr::OcrSegment> = {
+        let raw = std::fs::read_to_string(&segments_path)
+            .with_context(|| format!("读取 segments 文件失败: {}", segments_path.display()))?;
+        // 兼容裸数组或 { text, segments }（merge-frames 输出形状）。
+        let parsed: InputSegments = serde_json::from_str(&raw)
+            .context("解析 segments JSON 失败（需为 OcrSegment[] 或 {text,segments}）")?;
+        parsed.into_segments()
+    };
+    let frames: Vec<FrameResult> = {
+        let raw = std::fs::read_to_string(&frames_path)
+            .with_context(|| format!("读取 frames 文件失败: {}", frames_path.display()))?;
+        // 兼容裸数组或 { frames, meta }（ocr-frames-filter-box 输出形状）。
+        let parsed: InputFrames = serde_json::from_str(&raw)
+            .context("解析 frames JSON 失败（需为 FrameResult[] 或 {frames,meta}）")?;
+        parsed.into_frames()
     };
 
-    let args = parsed.args.unwrap_or_default();
+    // y_stats 由逐帧结果推导（对齐 TS `computeBoxYStats(frameResults)`）。
+    let y_stats: YStats = compute_box_y_stats(&frames);
+
+    let video_height = video_height(&video_path)?;
 
     let result: Vec<OcrSegmentWithAdjust> =
-        ocr_segment_adjust(&segments, &frames, &y_stats, parsed.video_height, &args);
+        ocr_segment_adjust(&segments, &frames, &y_stats, video_height, &OcrSegmentAdjustArgs::default());
 
     if let Some(out) = &cli.out {
         let path = resolve_path(&repo_root, out);
