@@ -48,6 +48,6 @@ profile video="/tmp/clip5s.mp4" out="":
 test:
     cargo test -p subtitle-finder
 
-# ---- 清空 out/（关键帧产物） ----
+# ---- 清空 out/（关键帧产物：frames/、mask/、timeline、json） ----
 out-clean:
-    @rm -f out/*.png out/timeline.txt out/keyframes.json
+    @rm -rf out/frames out/mask out/timeline.txt out/keyframes.json

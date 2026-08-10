@@ -11,6 +11,7 @@ pub mod compare;
 pub mod filter;
 pub mod frame;
 pub mod imgops;
+pub mod output;
 pub mod params;
 pub mod preprocess;
 pub mod state;
@@ -36,7 +37,8 @@ pub struct Keyframe {
 /// `video` 为视频路径；`params` 为筛选参数（对齐 VideoSubFinder 默认值，
 /// 见 `params::Params::default()`）。
 ///
-/// TODO(state)：状态机（FastSearchSubtitles）尚未完全接入，当前解码全部帧后返回空列表。
+/// 拿到 [`Vec<Keyframe>`] 后，可用 [`output::write_artifacts`] 落盘（帧图 /
+/// 掩码 / timeline / json），或用 `Keyframe.frame` / `.mask` 自行处理。
 pub fn find_keyframes(video: &std::path::Path, params: &params::Params) -> Result<Vec<Keyframe>> {
     state::find_keyframes(video, params)
 }
