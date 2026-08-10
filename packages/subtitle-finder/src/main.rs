@@ -133,10 +133,10 @@ fn main() -> anyhow::Result<()> {
             pb.set_position(decoded);
         },
     )?;
-    // 进度条动画行清屏；耗时用 eprintln 单独打一行（finish_with_message 在部分
-    // 终端/流上消息不可靠，而 stderr 直写一定落盘，便于事后回看最终耗时）。
+    // 保留进度条满格那一行（不消失，对齐 subtitle-ocr 的 finish 行为）；
+    // 耗时用 eprintln 另起一行（stderr 直写一定落盘，便于事后回看总耗时）。
     let decode_elapsed = pb.elapsed();
-    pb.finish_and_clear();
+    pb.finish();
     eprintln!("解码完成 {} 帧，耗时 {:.1}s", cache.len(), decode_elapsed.as_secs_f64());
 
     if profile {
@@ -201,7 +201,7 @@ fn main() -> anyhow::Result<()> {
         save_pb.inc(1);
     }
     let save_elapsed = save_pb.elapsed();
-    save_pb.finish_and_clear();
+    save_pb.finish();
     eprintln!("落盘完成 {} 张，耗时 {:.1}s", kfs.len(), save_elapsed.as_secs_f64());
 
     if write_timeline {
