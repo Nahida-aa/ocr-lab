@@ -8,7 +8,7 @@
 //! benchmark 同理）。不污染 stdout 的 JSON 数组。
 //!
 //! 本 CLI 只做「逐图/批量 OCR」，不输出时间轴、不做帧合并——带时间戳的字幕段
-//! 由知道视频结构的上游（自行补 `start`/`end` 后调用 `subtitle-ocr-merge`）负责。
+//! 由知道视频结构的上游（自行补 `start`/`end` 后调用 `merge-frames`）负责。
 
 use anyhow::{Context, Result};
 use clap::Parser;

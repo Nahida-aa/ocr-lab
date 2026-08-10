@@ -103,7 +103,7 @@ pub use rapidocr_ort::OcrBoxResult;
 /// 产出两个 `FrameResult`（各自带 start/end 时刻、内容相同）。
 ///
 /// 本库仍只吃一张图、不知道图片整体来源结构；把多个 `FrameResult` 合并成
-/// 带时间轴的字幕段由独立合并层 `subtitle-ocr-merge` 负责。
+/// 带时间轴的字幕段由 `ocr_post::merge_frames`（`merge-frames` CLI）负责。
 #[derive(Clone, Debug, Serialize)]
 pub struct FrameResult {
     /// 该图识别文本（多行按出现顺序拼接，用空格分隔）。
