@@ -9,11 +9,13 @@ use std::path::Path;
 use crate::{FrameTimes, OcrEntry};
 
 /// 批量模式下，文件名不符合时间格式时的处理策略。
+///
+/// CLI 默认 [`BadNameAction::Error`]（直接终止）；库调用方可按需选 [`BadNameAction::Warn`]。
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
 pub enum BadNameAction {
-    /// 跳过该文件并打警告（默认）。
-    Skip,
-    /// 直接报错终止。
+    /// 跳过该文件并打印警告（不终止）。
+    Warn,
+    /// 直接报错终止（CLI 默认）。
     Error,
 }
 
@@ -71,8 +73,8 @@ pub fn list_frames(dir: &Path, on_bad: BadNameAction) -> Result<Vec<OcrEntry>> {
             match parse_name_times(stem) {
                 Some(times) => entries.push(OcrEntry { path: p, times }),
                 None => match on_bad {
-                    BadNameAction::Skip => {
-                        eprintln!("跳过（文件名不符合 ms/ms_ms 格式）: {}", p.display());
+                    BadNameAction::Warn => {
+                        eprintln!("警告（文件名不符合 ms/ms_ms 格式，已跳过）: {}", p.display());
                     }
                     BadNameAction::Error => {
                         anyhow::bail!("文件名不符合 ms/ms_ms 时间格式: {}", p.display());
@@ -148,7 +150,7 @@ mod tests {
             "00300_00350.png", // ms_ms：双时刻
             "ignore.txt",      // 非图片，跳过
         ]);
-        let entries = list_frames(&dir, BadNameAction::Skip).unwrap();
+        let entries = list_frames(&dir, BadNameAction::Warn).unwrap();
         // 按主时刻排序：100, 300(eff), 500。
         assert_eq!(entries.len(), 3);
         assert_eq!(entries[0].times, FrameTimes::Single(100));
@@ -168,7 +170,7 @@ mod tests {
     #[test]
     fn list_frames_bad_name_skip() {
         let dir = make_tmp_dir("bad_name_skip", &["00100_00150.png", "badname.png"]);
-        let entries = list_frames(&dir, BadNameAction::Skip).unwrap();
+        let entries = list_frames(&dir, BadNameAction::Warn).unwrap();
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].times, FrameTimes::Range(100, 150));
         let _ = std::fs::remove_dir_all(&dir);
