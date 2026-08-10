@@ -178,10 +178,10 @@ fn main() -> Result<()> {
 }
 
 /// 初始化 tracing subscriber：日志打到 stderr，级别由 `RUST_LOG` 环境变量控制
-/// （默认 `warn`，即仅显示警告及以上；设 `info` 可看到写出进度等提示）。
+/// （默认 `info`，即显示进度/写出提示；设 `warn` 可仅看警告，`debug` 看更细）。
 fn init_tracing() {
     use tracing_subscriber::EnvFilter;
-    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("warn"));
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
     tracing_subscriber::fmt()
         .with_writer(std::io::stderr)
         .with_env_filter(filter)
