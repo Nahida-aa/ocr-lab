@@ -27,20 +27,17 @@ edition = "2024"
 license = "Apache-2.0"
 publish = false
 # 仓库 description 的唯一源（GitHub 仓库简介 + crates.io 共用一句话）。
-description = "OCR + 屏幕自动化 agent：看/操作分离，ydotool + KWin"
+description = "OCR 工具链 + 屏幕自动化 agent：字幕识别与看/操作分离（ydotool + KWin）"
 
 # GitHub 仓库元数据的唯一源（description 见上方，topics 见下）。
 # 用自定义 metadata 段，不污染 crates.io 的 keywords 语义（后者限 5 个）。
-# 同步命令见仓库根 sync-github-meta.sh：改这里一处即可刷到 GitHub。
+# 同步命令：node scripts/sync-github-meta.mjs（改这里一处即刷到 GitHub，需 gh 已登录）。
 [workspace.metadata.github]
 topics = [
     "ocr",
+    "subtitle",
     "screen-automation",
     "computer-use",
-    "agent",
-    "ydotool",
-    "wayland",
-    "kwin",
     "rust",
 ]
 
@@ -52,6 +49,7 @@ serde_json = "1"
 tracing = "0.1"
 # 结构化日志订阅端（RUST_LOG 过滤），各 CLI / dev-dependencies 共用。
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+indicatif = "0.17"
 # 张量/HWC u8 图像缓冲：版本须统一（ort rc.13 内部锁定 ndarray 0.17）。
 ndarray = "0.17"
 rust-embed = { version = "8.11", features = ["include-exclude"] }

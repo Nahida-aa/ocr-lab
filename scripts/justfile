@@ -3,3 +3,9 @@
 #   extra-args 透传给脚本：--prefix <p> / --dry-run
 rename_strip dir="../tmp/4/asr_frames" extra_args="":
     bun rename_strip_prefix.mjs {{dir}} {{extra_args}}
+
+# ---- 把根 Cargo.toml 的 description/topics 同步到 GitHub 仓库元数据 ----
+# 唯一源在 Cargo.toml 的 [workspace.package].description + [workspace.metadata.github]。
+# 前置：gh 已登录（gh auth login）。
+sync_meta:
+    node sync-github-meta.mjs

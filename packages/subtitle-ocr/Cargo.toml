@@ -54,4 +54,4 @@ clap.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 # 进度条（UX 层反馈，独立于 tracing 诊断日志）。
-indicatif = "0.17"
+indicatif.workspace = true
