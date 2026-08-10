@@ -3,7 +3,8 @@
 //! 读入 `ocr-frames-adjust-box` 产出的调整后 JSON（`OcrBoxAdjustResult`，即
 //! `FrameResultBoxWithAdjust[]` 带 `meta`），跑 [`subtitle_ocr::ocr_frames_filter_box`]
 //! 剔除 `is_outlier` 的框、重聚合得到干净帧，输出 [`subtitle_ocr::OcrFramesBoxFilteredResult`]
-//! （`{ frames, meta }`）到 stdout。
+//! （`{ frames, meta }`）。结果默认到 stdout；指定 `--out` 时落盘到文件、不再向
+//! stdout 打印（结果较大）。
 //!
 //! 与 cpp 对齐：输入是 adjust 步骤的输出（含 `is_outlier` 标记），输出是离群剔除后的干净
 //! 逐帧结果，可继续喂给 `merge-frames` 做时间轴合并。
@@ -142,7 +143,7 @@ struct Cli {
     /// 的 adjust 输出。
     input: PathBuf,
 
-    /// 把过滤结果额外写出到指定文件路径（同时仍向 stdout 打印）。便于落盘对接下游。
+    /// 把过滤结果写出到指定文件路径；指定后不再向 stdout 打印（结果较大）。便于落盘对接下游。
     #[arg(long)]
     out: Option<PathBuf>,
 }
@@ -194,10 +195,15 @@ fn main() -> Result<()> {
             serde_json::to_string_pretty(&result).context("序列化 OcrFramesBoxFilteredResult 失败")?;
         std::fs::write(&path, json).with_context(|| format!("写入失败: {}", path.display()))?;
         info!(path = %path.display(), frames = result.meta.frame_count, "已写出帧");
+        // 显式打印落盘位置（绝对路径），方便确认输出去了哪（结果本身不打印到 stdout）。
+        println!("已写入: {}", path.display());
     }
 
-    // 主输出：过滤结果 JSON 到 stdout。
-    println!("{}", serde_json::to_string_pretty(&result)?);
+    // 主输出：过滤结果 JSON 到 stdout。指定了 --out 时结果已落盘，不再向
+    // stdout 重复打印（结果较大，避免刷屏 + 与文件重复）。
+    if cli.out.is_none() {
+        println!("{}", serde_json::to_string_pretty(&result)?);
+    }
 
     Ok(())
 }
