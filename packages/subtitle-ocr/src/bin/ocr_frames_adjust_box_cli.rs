@@ -178,6 +178,8 @@ fn main() -> Result<()> {
         let json = serde_json::to_string_pretty(&result).context("序列化 OcrBoxAdjustResult 失败")?;
         std::fs::write(&path, json).with_context(|| format!("写入失败: {}", path.display()))?;
         info!(path = %path.display(), frames = result.frames.len(), "已写出帧");
+        // 显式打印落盘位置（绝对路径），方便确认输出去了哪（结果本身不打印到 stdout）。
+        println!("已写入: {}", path.display());
     }
 
     // 主输出：调整结果 JSON 到 stdout。指定了 --out 时结果已落盘，不再向
