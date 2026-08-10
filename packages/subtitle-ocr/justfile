@@ -36,7 +36,7 @@ run image="tmp/both_fullscreen_frame1.png":
 
 # ---- 批量识别（--dir，文件名须为 ms / ms_ms 时间格式） ----
 # 用法：just run-dir <dir>
-run_dir dir="tmp/asr_frames" out="tmp/out/asr_ocr_frames.json":
+run-dir dir="tmp/4/asr_frames" out="tmp/4/out/asr_ocr_frames.json":
     cargo run -p subtitle-ocr --release -- --dir {{dir}} --out {{out}}
 
 # ---- 单图识别并写出 OcrFramesResult 到调用方指定文件 ----

@@ -5,6 +5,8 @@ edition.workspace = true
 license.workspace = true
 publish.workspace = true
 description.workspace = true
+# 多 [[bin]] 时显式指定 cargo run 默认运行的二进制（否则 cargo run 报错无法确定）。
+default-run = "subtitle-ocr"
 
 # 既是库（供上层复用 OcrEngine + 字幕合并/计时）也是二进制（对标 cpp 的 CLI）。
 [lib]
@@ -51,3 +53,5 @@ clap.workspace = true
 # 日志：库内仅发 tracing 事件（不初始化 subscriber），二进制在 main 里初始化。
 tracing.workspace = true
 tracing-subscriber.workspace = true
+# 进度条（UX 层反馈，独立于 tracing 诊断日志）。
+indicatif = "0.17"

@@ -94,7 +94,7 @@ impl Default for OcrOptions {
 /// 单个文字识别区域（`rapidocr_ort::OcrBoxResult` 的 re-export）。
 ///
 /// 原先是自定义 `FrameLine` 结构体，字段几乎与 rapidocr-ort 的 `OcrResult`
-/// 相同（text/confidence/box_），仅多了 `y_center`（= `center[1]`）。后改为
+/// 相同（text/text_confidence/box_），仅多了 `y_center`（= `center[1]`）。后改为
 /// 类型别名，并统一命名为 `OcrBoxResult`（表示"一个识别区域/文本框"）。
 /// ⚠️ 坐标语义：`ocr_image` 返回前会把 box/center 的 y 加回 `y_offset`，
 /// 还原成原图坐标。
@@ -258,39 +258,49 @@ pub struct OcrEntry {
     pub times: FrameTimes,
 }
 
+/// 处理单个 [`OcrEntry`]：读图 → 识别 → 聚合 → 按 `entry.times` 展开成
+/// `FrameResult` 列表（可能 1~2 个，取决于时刻形态）。
+///
+/// 抽出来是为了让 CLI 能在逐图循环里推进度条 / 计时，而不必把进度回调塞进
+/// [`ocr_entries`]。每张图**仅识别一次**：`ms_ms` 同一张图产出多个 `FrameResult`，
+/// 内容相同、仅 `timestamp` 不同。
+pub fn ocr_entry(ocr: &mut SubtitleOcr, entry: &OcrEntry) -> Result<Vec<FrameResult>> {
+    let rgb = rapidocr_ort::load_image(&entry.path)?;
+    let boxes = ocr.ocr_image(&rgb)?;
+    let aggregated = aggregate_boxes(&boxes);
+    // 按 times 的形态展开：直接 match 枚举，无时刻 / 单时刻都只产出一个
+    // FrameResult 且无需 clone；只有 Range 才复制一份（内容相同、仅时刻不同）。
+    let out = match entry.times {
+        FrameTimes::None => vec![aggregated],
+        FrameTimes::Single(t) => vec![FrameResult {
+            timestamp: t,
+            ..aggregated
+        }],
+        FrameTimes::Range(s, end) => vec![
+            FrameResult {
+                timestamp: s,
+                ..aggregated.clone()
+            },
+            FrameResult {
+                timestamp: end,
+                ..aggregated
+            },
+        ],
+    };
+    Ok(out)
+}
+
 /// 对一组 [`OcrEntry`] 跑 OCR 并聚合，返回按时刻展开的 [`FrameResult`] 列表。
 ///
 /// 这是「读图 → 识别 → 聚合 → 按时刻展开」的核心流程，供 CLI / benchmark / 测试
-/// 直接复用，无需各自照抄。每张图**仅识别一次**：`ms_ms` 同一张图产出多个
-/// `FrameResult`，内容相同、仅 `timestamp` 不同（避免对同一 boxes 重复聚合）。
+/// 直接复用，无需各自照抄。逐图处理复用 [`ocr_entry`]。
 ///
 /// 本函数不含：耗时测量（调用方在 `ocr_image` 前后自行 `Instant`）、JSON 序列化、
 /// 目录扫描 / 文件名解析（这些留给调用方；CLI 见 `subtitle_ocr::util::list_frames`）。
 pub fn ocr_entries(ocr: &mut SubtitleOcr, entries: &[OcrEntry]) -> Result<Vec<FrameResult>> {
     let mut out = Vec::with_capacity(entries.len());
     for e in entries {
-        let rgb = rapidocr_ort::load_image(&e.path)?;
-        let boxes = ocr.ocr_image(&rgb)?;
-        let aggregated = aggregate_boxes(&boxes);
-        // 按 times 的形态展开：直接 match 枚举，无时刻 / 单时刻都只产出一个
-        // FrameResult 且无需 clone；只有 Range 才复制一份（内容相同、仅时刻不同）。
-        match e.times {
-            FrameTimes::None => out.push(aggregated),
-            FrameTimes::Single(t) => out.push(FrameResult {
-                timestamp: t,
-                ..aggregated
-            }),
-            FrameTimes::Range(s, end) => {
-                out.push(FrameResult {
-                    timestamp: s,
-                    ..aggregated.clone()
-                });
-                out.push(FrameResult {
-                    timestamp: end,
-                    ..aggregated
-                });
-            }
-        }
+        out.extend(ocr_entry(ocr, e)?);
     }
     Ok(out)
 }

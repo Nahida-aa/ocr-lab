@@ -1,7 +1,7 @@
 //! 命令行：`subtitle-ocr <image> [text_score]` 或 `subtitle-ocr --dir <dir> ...`
 //!
 //! 纯感知 OCR 工具，对标 cpp 的 `ocr_pipeline.cpp`：输出 JSON 数组，
-//! 每个元素含 `text` / `confidence` / `boxes` / `timestamp`。
+//! 每个元素含 `text` / `text_confidence` / `boxes` / `timestamp`。
 //!
 //! 不含任何耗时字段——推理耗时是旁路观测数据，由调用方自行计时（CLI 在
 //! `ocr_image` 调用前后 `Instant::now()` 测量，经 tracing 输出；benchmark 同理）。
@@ -12,6 +12,7 @@
 
 use anyhow::{Context, Result};
 use clap::Parser;
+use indicatif::{ProgressBar, ProgressStyle};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 use subtitle_ocr::util::{BadNameAction, list_frames};
@@ -76,8 +77,8 @@ struct Cli {
 
     /// 输出文件路径（完整文件名，由调用方决定，如 `asr_ocr_frames.json`）：写入
     /// `OcrFramesResult` 结构（各帧结果 + 溯源 meta），便于对接 LocalDub 的
-    /// `asr_ocr_frames.json` / `sf_ocr_frames.json` 等。不指定时仅向 stdout 打印逐帧
-    /// JSON 数组，行为与之前一致。两者可同时生效。
+    /// `asr_ocr_frames.json` / `sf_ocr_frames.json` 等。指定后结果仅落盘，不再向
+    /// stdout 打印逐帧 JSON 数组（避免与文件重复刷屏）；不指定时仅向 stdout 打印。
     #[arg(long)]
     out: Option<String>,
 }
@@ -141,8 +142,23 @@ fn main() -> Result<()> {
         anyhow::bail!("必须提供 <image> 或 --dir <dir>");
     };
 
-    // 核心流程（读图 → 识别 → 聚合 → 按时刻展开）复用库函数，避免各处照抄。
-    let frame_outs: Vec<subtitle_ocr::FrameResult> = subtitle_ocr::ocr_entries(&mut ocr, &entries)?;
+    // 核心流程：逐 entry 跑 OCR（读图 → 识别 → 聚合 → 按时刻展开），
+    // 用进度条反馈进度（UX 层，走 stderr，不污染 tracing 诊断日志）。
+    let total = entries.len();
+    let pb = ProgressBar::new(total as u64);
+    pb.set_style(
+        ProgressStyle::with_template(
+            "[{elapsed_precise}] [{bar:30.cyan/blue}] {pos}/{len} ({eta})",
+        )
+        .unwrap_or_else(|_| ProgressStyle::default_bar())
+        .progress_chars("=> "),
+    );
+    let mut frame_outs: Vec<subtitle_ocr::FrameResult> = Vec::with_capacity(total);
+    for e in &entries {
+        frame_outs.extend(subtitle_ocr::ocr_entry(&mut ocr, e)?);
+        pb.inc(1);
+    }
+    pb.finish_with_message("OCR 完成");
 
     // --out：额外落地 OcrFramesResult（文件名由调用方指定，如 asr_ocr_frames.json）
     if let Some(out) = &cli.out {
@@ -167,21 +183,28 @@ fn main() -> Result<()> {
     }
 
     // 主输出：与 cpp 同形状的 JSON 数组（逐图/批量，不带时间轴）。
-    let arr: Vec<Value> = frame_outs
-        .iter()
-        .map(|f| serde_json::to_value(f).unwrap_or(Value::Null))
-        .collect();
-
-    println!("{}", serde_json::to_string_pretty(&Value::Array(arr))?);
+    // 指定了 --out 时结果已落盘，不再向 stdout 重复打印（避免刷屏 + 与文件重复）。
+    if cli.out.is_none() {
+        let arr: Vec<Value> = frame_outs
+            .iter()
+            .map(|f| serde_json::to_value(f).unwrap_or(Value::Null))
+            .collect();
+        println!("{}", serde_json::to_string_pretty(&Value::Array(arr))?);
+    }
 
     Ok(())
 }
 
 /// 初始化 tracing subscriber：日志打到 stderr，级别由 `RUST_LOG` 环境变量控制
-/// （默认 `info`，即显示进度/写出提示；设 `warn` 可仅看警告，`debug` 看更细）。
+/// （默认 `info`，显示诊断/写出提示；设 `warn` 可仅看警告，`debug` 看更细）。
+/// 进度反馈走独立的 indicatif 进度条（见 main），不经由 tracing，避免被日志级别淹没。
 fn init_tracing() {
     use tracing_subscriber::EnvFilter;
-    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+    // 默认 info 级别，但 ort 把 onnxruntime 的 C 日志桥接成 tracing 事件，
+    // 噪声很大（每次建 Session 都刷一堆），单独压到 error 关掉。
+    // RUST_LOG 设了就用用户的（可整体或单独覆盖 ort::logging）。
+    let filter = EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| EnvFilter::new("info,ort::logging=error"));
     tracing_subscriber::fmt()
         .with_writer(std::io::stderr)
         .with_env_filter(filter)
