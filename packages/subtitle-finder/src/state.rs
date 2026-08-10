@@ -51,6 +51,8 @@ pub struct FrameCache<'a> {
     decoded_total: i32,
     /// 视频总时长（毫秒），stepper 打开时填入；0 表示未知。
     total_duration_ms: i64,
+    /// 视频总帧数，stepper 打开时填入；0 表示未知（进度条据此退化）。
+    total_frames: i64,
 }
 
 /// 窗口保留的最大帧数（覆盖状态机访问 [fn-1, fn+3*DL]，DL=6 → ~20 帧）。
@@ -72,6 +74,7 @@ impl<'a> FrameCache<'a> {
             window_start: 0,
             decoded_total: 0,
             total_duration_ms: 0,
+            total_frames: 0,
         }
     }
 
@@ -93,6 +96,7 @@ impl<'a> FrameCache<'a> {
         if self.stepper.is_none() {
             let stepper = frame::FrameStepper::open(self.path)?;
             self.total_duration_ms = stepper.total_duration_ms();
+            self.total_frames = stepper.total_frames();
             self.stepper = Some(stepper);
         }
         Ok(())
@@ -101,6 +105,11 @@ impl<'a> FrameCache<'a> {
     /// 视频总时长（毫秒），stepper 打开后有效；0 表示未知（进度条据此退化）。
     pub fn total_duration_ms(&self) -> i64 {
         self.total_duration_ms
+    }
+
+    /// 视频总帧数，stepper 打开后有效；0 表示未知。
+    pub fn total_frames(&self) -> i64 {
+        self.total_frames
     }
 
     /// 推进解码窗口，确保 [window_start, target] 已解码，并丢弃窗口外的旧帧。
@@ -398,8 +407,9 @@ pub fn find_keyframes(video: &Path, params: &Params) -> Result<Vec<Keyframe>> {
 /// 不再全量解码：先解码第一帧确定维度，再由 [`run_state_machine`] 在推进 `fn`
 /// 时按需 `advance_to` 逐帧解码（滑动窗口）。
 ///
-/// `on_progress` 为可选进度回调：每推进一帧调用一次 `(cur_ms, total_ms)`，
-/// 供 CLI 渲染进度条（默认空闭包，不影响性能与算法）。
+/// `on_progress` 为可选进度回调：每推进一帧调用一次 `(decoded, total)`，
+/// `decoded`=已解码帧数，`total`=视频总帧数（未知时为 0），供 CLI 渲染进度条
+/// （默认空闭包，不影响性能与算法）。
 pub fn find_keyframes_with_cache(
     cache: &mut FrameCache,
     params: &Params,
@@ -417,8 +427,8 @@ pub fn find_keyframes_with_cache_progress(
     cache.advance_to(FORWARD)?;
     let w = cache.w();
     let h = cache.h();
-    let total_ms = cache.total_duration_ms().max(0) as u64;
-    run_state_machine(cache, w, h, params, "", total_ms, on_progress)
+    let total = cache.total_frames().max(0) as u64;
+    run_state_machine(cache, w, h, params, "", total, on_progress)
 }
 
 /// 状态机本体：对 `cache` 逐帧筛选（按需 `advance_to` 流式解码），输出关键帧。
@@ -429,7 +439,7 @@ fn run_state_machine(
     h: usize,
     p: &Params,
     video_label: &str,
-    total_ms: u64,
+    total: u64,
     on_progress: &mut dyn FnMut(u64, u64),
 ) -> Result<Vec<Keyframe>> {
     let dl = p.dl;
@@ -837,8 +847,8 @@ fn run_state_machine(
 
         if found_sub != 0 {
             prev_im_ne = get_frame(&cache, fn_)?.ne.clone();
-            // 进度回调：当前帧真实 PTS / 总时长（cur_pos 为本帧真实时间戳）。
-            on_progress(cur_pos.max(0) as u64, total_ms);
+            // 进度回调：已解码帧数 / 总帧数（cache.len() 为真实已解码帧数）。
+            on_progress(cache.len() as u64, total);
             fn_ += 1;
             // 流式推进：确保 [fn_+1, fn_+FORWARD] 已解码（追踪阶段 fn_ 单调递增）。
             cache.advance_to(fn_ + FORWARD)?;

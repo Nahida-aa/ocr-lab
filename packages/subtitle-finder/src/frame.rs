@@ -30,6 +30,7 @@ pub struct FrameStepper {
     sent_eof: bool,
     decoded_count: i32, // 已产出帧数（用于无 PTS 兜底估算）
     total_duration_ms: i64, // 视频总时长（毫秒），open 时从 ictx.duration() 取
+    total_frames: i64, // 视频总帧数，open 时取（优先 nb_frames，否则 duration×fps），0=未知
 }
 
 impl FrameStepper {
@@ -64,6 +65,21 @@ impl FrameStepper {
         // 返回 i64（个别封装格式为 0，罕见）→ 记 0，调用方据此退化进度条。
         let total_duration_ms = ictx.duration() / 1000;
 
+        // 视频总帧数：优先用流的 nb_frames（封装常给 0）；否则用 duration×fps 估算。
+        // 两者皆无则记 0（进度条据此退化）。fps 取 avg_frame_rate（rational）。
+        let fps = {
+            let r = input.avg_frame_rate();
+            r.numerator() as f64 / r.denominator() as f64
+        };
+        let nb = input.frames();
+        let total_frames = if nb > 0 {
+            nb
+        } else if fps > 0.0 && total_duration_ms > 0 {
+            (total_duration_ms as f64 * fps / 1000.0).round() as i64
+        } else {
+            0
+        };
+
         Ok(Self {
             ictx,
             decoder,
@@ -73,12 +89,18 @@ impl FrameStepper {
             sent_eof: false,
             decoded_count: 0,
             total_duration_ms,
+            total_frames,
         })
     }
 
     /// 视频总时长（毫秒）。0 表示未知（封装未提供 duration）。
     pub fn total_duration_ms(&self) -> i64 {
         self.total_duration_ms
+    }
+
+    /// 视频总帧数。0 表示未知（nb_frames 与 duration×fps 皆不可得）。
+    pub fn total_frames(&self) -> i64 {
+        self.total_frames
     }
 
     /// 拉下一帧（BGR `Array3`），EOF 返回 `None`。

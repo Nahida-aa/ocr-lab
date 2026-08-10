@@ -103,20 +103,23 @@ fn main() -> anyhow::Result<()> {
     if profile {
         cache = cache.with_profiling();
     }
+    // 强制打开解码器（惰性），使 total_frames() 在进度条建条前已就绪。
+    cache.advance_to(0)?;
 
-    // 解码阶段进度条（时间轴，走 stderr）。total==0 时退化为无总量进度。
-    let total_ms = cache.total_duration_ms().max(0) as u64;
-    let pb = ProgressBar::new(total_ms);
-    if total_ms == 0 {
-        // 未知总时长：隐藏长度，仅显示已处理时间。
+    // 解码阶段进度条（按帧数，走 stderr；不依赖 duration，始终有总量）。
+    // total==0（nb_frames 与 duration×fps 皆不可得）时退化为无总量进度。
+    let total_frames = cache.total_frames().max(0) as u64;
+    let pb = ProgressBar::new(total_frames);
+    if total_frames == 0 {
+        // 未知总帧数：隐藏长度，仅显示已解码帧数 + 耗时。
         pb.set_style(
-            ProgressStyle::with_template("[{elapsed_precise}] 解码 {pos}ms")
+            ProgressStyle::with_template("[{elapsed_precise}] 解码 {pos} 帧")
                 .unwrap_or_else(|_| ProgressStyle::default_bar()),
         );
     } else {
         pb.set_style(
             ProgressStyle::with_template(
-                "[{elapsed_precise}] [{bar:30.cyan/blue}] {pos}/{len} ({eta})",
+                "[{elapsed_precise}] 解码 [{bar:30.cyan/blue}] {pos}/{len} 帧 ({eta})",
             )
             .unwrap_or_else(|_| ProgressStyle::default_bar())
             .progress_chars("=> "),
@@ -125,8 +128,8 @@ fn main() -> anyhow::Result<()> {
     let kfs = subtitle_finder::state::find_keyframes_with_cache_progress(
         &mut cache,
         &params,
-        &mut |cur, _total| {
-            pb.set_position(cur);
+        &mut |decoded, _total| {
+            pb.set_position(decoded);
         },
     )?;
     pb.finish_and_clear();
