@@ -21,3 +21,6 @@ tools/perf-compare/isa_compare
 
 packages/subtitle-finder/out
 tests/bench/subtitle-ocr/results
+
+# py
+.venv

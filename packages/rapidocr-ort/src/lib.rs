@@ -48,6 +48,8 @@ const BOX_THRESH: f32 = 0.6;
 pub enum ModelProfile {
     /// PP-OCRv3（成熟、参考多），det/rec/cls 均 v3，字典 ppocr_keys.json。
     V3,
+    /// PP-OCRv4（官方升级，det/rec 更准，形近字识别更好），字典 ppocr_keys.json。
+    V4,
     /// PP-OCRv6 tiny：快、体积小，字典 ppocrv6_tiny_dict.txt。
     V6Tiny,
     /// PP-OCRv6 medium：更准，模型较大，字典 ppocrv6_dict.txt。
@@ -63,6 +65,12 @@ impl ModelProfile {
                 "ch_PP-OCRv3_rec_infer.onnx",
                 "ch_ppocr_mobile_v2.0_cls_infer.onnx",
                 "ppocr_keys.json",
+            ),
+            ModelProfile::V4 => (
+                "ch_PP-OCRv4_det_infer.onnx",
+                "ch_PP-OCRv4_rec_infer.onnx",
+                "ch_ppocr_mobile_v2.0_cls_infer.onnx",
+                "ppocrv4_keys.json",
             ),
             ModelProfile::V6Tiny => (
                 "pp-ocrv6_tiny_det.onnx",
