@@ -13,8 +13,9 @@
 //!   - `timeline`：只写 `timeline.txt`，跳过 PNG / keyframes.json（纯算法计时用）。
 //!   - `frames`：仅写原始关键帧 PNG（含背景），不写掩码 / json / timeline。
 
+use anyhow::Context;
 use clap::{Parser, ValueEnum};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// 输出模式：控制落盘哪些产物。
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
@@ -38,13 +39,35 @@ struct Cli {
     #[arg(long, value_enum, default_value_t = OutputMode::Full)]
     output: OutputMode,
 
-    /// 输出目录（相对当前工作目录）；默认包内 out/。
+    /// 输出目录（相对仓库根；默认包内 out/）。
     #[arg(long)]
     out: Option<String>,
 
-    /// 输入视频路径。
+    /// 输入视频路径（相对仓库根，或绝对路径）。
     #[arg(required = true)]
     video: String,
+}
+
+/// 仓库根：二进制在 `target/release/subtitle-finder`，上溯两级到 workspace 根。
+fn repo_root() -> anyhow::Result<PathBuf> {
+    let exe = std::env::current_exe().context("获取当前可执行文件路径失败")?;
+    let exe_dir = exe.parent().context("可执行文件无父目录")?.to_path_buf();
+    let root = exe_dir
+        .join("..") // 去掉 target/release
+        .join("..") // 去掉 packages/subtitle-finder
+        .canonicalize()
+        .context("解析仓库根失败（确认从仓库内构建）")?;
+    Ok(root)
+}
+
+/// 相对路径相对仓库根解析；绝对路径原样返回。
+fn resolve_path(root: &Path, p: &str) -> PathBuf {
+    let path = PathBuf::from(p);
+    if path.is_absolute() {
+        path
+    } else {
+        root.join(path)
+    }
 }
 
 fn main() -> anyhow::Result<()> {
@@ -63,7 +86,11 @@ fn main() -> anyhow::Result<()> {
     let write_mask = cli.output == OutputMode::Full;
     let write_json = cli.output == OutputMode::Full;
     let write_timeline = cli.output == OutputMode::Full || cli.output == OutputMode::Timeline;
-    let video = PathBuf::from(&cli.video);
+
+    // 相对路径相对仓库根解析（与 subtitle-ocr 一致：二进制在 target/ 下，
+    // 上溯两级即仓库根），不依赖调用方当前工作目录。
+    let repo_root = repo_root()?;
+    let video = resolve_path(&repo_root, &cli.video);
     if !video.exists() {
         anyhow::bail!("视频不存在: {}", video.display());
     }
@@ -85,9 +112,9 @@ fn main() -> anyhow::Result<()> {
 
     println!("找到 {} 个关键帧", kfs.len());
 
-    // 输出目录：默认包内 out/；--out 指定（相对当前工作目录）。
-    let out_dir = match cli.out {
-        Some(d) => PathBuf::from(d),
+    // 输出目录：默认包内 out/（相对 manifest 目录）；--out 指定则相对仓库根解析。
+    let out_dir = match &cli.out {
+        Some(d) => resolve_path(&repo_root, d),
         None => PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("out"),
     };
     std::fs::create_dir_all(&out_dir)?;
