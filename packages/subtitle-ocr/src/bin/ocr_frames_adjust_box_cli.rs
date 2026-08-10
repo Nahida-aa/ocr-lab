@@ -3,7 +3,8 @@
 //! 读入主 CLI（`subtitle-ocr`）产出的逐帧 JSON（裸 `FrameResult[]` 数组，或
 //! `OcrFramesResult { frames, meta }`），先按各帧框统计纵向分布得到 [`YStats`]，再跑
 //! [`subtitle_ocr::ocr_frames_adjust_box`] 给每个框算偏离/噪声惩罚、标记离群，输出
-//! [`subtitle_ocr::OcrBoxAdjustResult`]（`{ frames, meta }`）到 stdout。
+//! [`subtitle_ocr::OcrBoxAdjustResult`]（`{ frames, meta }`）。结果默认到 stdout；
+//! 指定 `--out` 时落盘到文件、不再向 stdout 打印（结果较大）。
 //!
 //! 与 cpp 对齐：输入是 `asr_ocr_frames.json` / `sf_ocr_frames.json` 这类含 `boxes` 的逐帧
 //! JSON（调整依赖框几何，故必须带 `boxes`）；输出是调整后的框与 meta。
@@ -119,7 +120,7 @@ struct Cli {
     #[arg(long)]
     box_adjusted_threshold: Option<f32>,
 
-    /// 把调整结果额外写出到指定文件路径（同时仍向 stdout 打印）。便于落盘对接下游。
+    /// 把调整结果写出到指定文件路径；指定后不再向 stdout 打印（结果较大）。便于落盘对接下游。
     #[arg(long)]
     out: Option<PathBuf>,
 }
@@ -179,8 +180,11 @@ fn main() -> Result<()> {
         info!(path = %path.display(), frames = result.frames.len(), "已写出帧");
     }
 
-    // 主输出：调整结果 JSON 到 stdout。
-    println!("{}", serde_json::to_string_pretty(&result)?);
+    // 主输出：调整结果 JSON 到 stdout。指定了 --out 时结果已落盘，不再向
+    // stdout 重复打印（结果较大，避免刷屏 + 与文件重复）。
+    if cli.out.is_none() {
+        println!("{}", serde_json::to_string_pretty(&result)?);
+    }
 
     Ok(())
 }
