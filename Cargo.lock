@@ -6415,6 +6415,8 @@ dependencies = [
  "rapidocr-ort",
  "serde",
  "serde_json",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
