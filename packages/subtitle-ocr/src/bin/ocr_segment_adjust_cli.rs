@@ -22,6 +22,7 @@ use subtitle_ocr::{
     FrameResult, OcrBoxResult, OcrSegmentAdjustArgs, OcrSegmentWithAdjust, YStats,
     compute_box_y_stats, ocr_segment_adjust, SubtitlingSegment,
 };
+use tracing::info;
 
 /// 输入里单个框（仅消费 [`OcrBoxResult`] 实际读取的字段；`OcrBoxResult` 未 derive
 /// `Deserialize`，故单独定义 DTO，避免给上游 crate 强加 trait）。
@@ -167,6 +168,7 @@ fn resolve_path(repo_root: &std::path::Path, p: &std::path::Path) -> PathBuf {
 }
 
 fn main() -> Result<()> {
+    init_tracing();
     let cli = Cli::parse();
 
     let repo_root = current_exe_repo_root()?;
@@ -210,15 +212,21 @@ fn main() -> Result<()> {
         let json =
             serde_json::to_string_pretty(&result).context("序列化 OcrSegmentWithAdjust[] 失败")?;
         std::fs::write(&path, json).with_context(|| format!("写入失败: {}", path.display()))?;
-        eprintln!(
-            "[ocr-segment-adjust] 已写出 {} 段到 {}",
-            result.len(),
-            path.display()
-        );
+        info!(path = %path.display(), segments = result.len(), "已写出段");
     }
 
     // 主输出：调整后段 JSON 数组到 stdout。
     println!("{}", serde_json::to_string_pretty(&result)?);
 
     Ok(())
+}
+
+/// 初始化 tracing subscriber：日志打到 stderr，级别由 `RUST_LOG` 控制（默认 `warn`）。
+fn init_tracing() {
+    use tracing_subscriber::EnvFilter;
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("warn"));
+    tracing_subscriber::fmt()
+        .with_writer(std::io::stderr)
+        .with_env_filter(filter)
+        .init();
 }

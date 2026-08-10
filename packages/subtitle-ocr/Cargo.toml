@@ -48,3 +48,6 @@ ndarray.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 clap.workspace = true
+# 日志：库内仅发 tracing 事件（不初始化 subscriber），二进制在 main 里初始化。
+tracing.workspace = true
+tracing-subscriber.workspace = true

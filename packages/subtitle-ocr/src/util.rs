@@ -7,6 +7,7 @@ use anyhow::{Context, Result};
 use clap::ValueEnum;
 use std::path::Path;
 use crate::{FrameTimes, OcrEntry};
+use tracing::warn;
 
 /// 批量模式下，文件名不符合时间格式时的处理策略。
 ///
@@ -74,7 +75,7 @@ pub fn list_frames(dir: &Path, on_bad: BadNameAction) -> Result<Vec<OcrEntry>> {
                 Some(times) => entries.push(OcrEntry { path: p, times }),
                 None => match on_bad {
                     BadNameAction::Warn => {
-                        eprintln!("警告（文件名不符合 ms/ms_ms 格式，已跳过）: {}", p.display());
+                        warn!(path = %p.display(), "文件名不符合 ms/ms_ms 格式，已跳过");
                     }
                     BadNameAction::Error => {
                         anyhow::bail!("文件名不符合 ms/ms_ms 时间格式: {}", p.display());

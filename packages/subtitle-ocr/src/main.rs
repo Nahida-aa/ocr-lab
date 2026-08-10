@@ -4,8 +4,8 @@
 //! 每个元素含 `text` / `confidence` / `boxes` / `timestamp`。
 //!
 //! 不含任何耗时字段——推理耗时是旁路观测数据，由调用方自行计时（CLI 在
-//! `ocr_image` 调用前后 `Instant::now()` 测量，打到 stderr 的 `[ocr] ... det=...ms`；
-//! benchmark 同理）。不污染 stdout 的 JSON 数组。
+//! `ocr_image` 调用前后 `Instant::now()` 测量，经 tracing 输出；benchmark 同理）。
+//! 不污染 stdout 的 JSON 数组。
 //!
 //! 本 CLI 只做「逐图/批量 OCR」，不输出时间轴、不做帧合并——带时间戳的字幕段
 //! 由知道视频结构的上游（自行补 `start`/`end` 后调用 `merge-frames`）负责。
@@ -16,6 +16,7 @@ use serde_json::Value;
 use std::path::{Path, PathBuf};
 use subtitle_ocr::util::{BadNameAction, list_frames};
 use subtitle_ocr::{OcrDevice, OcrEntry, OcrFramesMeta, OcrFramesResult, OcrOptions, SubtitleOcr};
+use tracing::info;
 
 #[derive(Parser, Debug)]
 #[command(
@@ -109,6 +110,7 @@ fn resolve_path(repo_root: &Path, p: &str) -> PathBuf {
 /// `timestamp`；也不含耗时字段——推理耗时是旁路观测数据，由调用方自行计时
 /// （在 `ocr_image` 调用前后 `Instant::now()` 测量），不污染 JSON 结构。
 fn main() -> Result<()> {
+    init_tracing();
     let cli = Cli::parse();
 
     let repo_root = current_exe_repo_root()?;
@@ -161,11 +163,7 @@ fn main() -> Result<()> {
         };
         let json = serde_json::to_string_pretty(&result).context("序列化 OcrFramesResult 失败")?;
         std::fs::write(&path, json).with_context(|| format!("写入失败: {}", path.display()))?;
-        eprintln!(
-            "[ocr] 已写出 {} 帧到 {}",
-            result.frames.len(),
-            path.display()
-        );
+        info!(path = %path.display(), frames = result.frames.len(), "已写出帧");
     }
 
     // 主输出：与 cpp 同形状的 JSON 数组（逐图/批量，不带时间轴）。
@@ -177,4 +175,15 @@ fn main() -> Result<()> {
     println!("{}", serde_json::to_string_pretty(&Value::Array(arr))?);
 
     Ok(())
+}
+
+/// 初始化 tracing subscriber：日志打到 stderr，级别由 `RUST_LOG` 环境变量控制
+/// （默认 `warn`，即仅显示警告及以上；设 `info` 可看到写出进度等提示）。
+fn init_tracing() {
+    use tracing_subscriber::EnvFilter;
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("warn"));
+    tracing_subscriber::fmt()
+        .with_writer(std::io::stderr)
+        .with_env_filter(filter)
+        .init();
 }

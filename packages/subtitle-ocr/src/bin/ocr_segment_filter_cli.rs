@@ -17,6 +17,7 @@ use clap::Parser;
 use serde::Deserialize;
 use std::path::PathBuf;
 use subtitle_ocr::{OcrSegmentFilterResult, OcrSegmentWithAdjust, SubtitlingSegment};
+use tracing::info;
 
 /// 输入里单条调整后字幕段（镜像 [`OcrSegmentWithAdjust`]：`base`（`OcrSegment`，其内再 flatten
 /// `SubtitlingSegment`）字段平铺 + 三个调整附加字段）。`OcrSegmentWithAdjust` 未 derive
@@ -136,6 +137,7 @@ fn resolve_path(repo_root: &std::path::Path, p: &std::path::Path) -> PathBuf {
 }
 
 fn main() -> Result<()> {
+    init_tracing();
     let cli = Cli::parse();
 
     let repo_root = current_exe_repo_root()?;
@@ -180,11 +182,17 @@ fn write_out<T: serde::Serialize>(
         }
         let json = serde_json::to_string_pretty(value).context("序列化过滤结果失败")?;
         std::fs::write(&path, json).with_context(|| format!("写入失败: {}", path.display()))?;
-        eprintln!(
-            "[ocr-segment-filter] 已写出 {} 段到 {}",
-            segment_count,
-            path.display()
-        );
+        info!(path = %path.display(), segments = segment_count, "已写出段");
     }
     Ok(())
+}
+
+/// 初始化 tracing subscriber：日志打到 stderr，级别由 `RUST_LOG` 控制（默认 `warn`）。
+fn init_tracing() {
+    use tracing_subscriber::EnvFilter;
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("warn"));
+    tracing_subscriber::fmt()
+        .with_writer(std::io::stderr)
+        .with_env_filter(filter)
+        .init();
 }
