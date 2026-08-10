@@ -6,7 +6,7 @@
 use anyhow::{Context, Result};
 use clap::ValueEnum;
 use std::path::Path;
-use subtitle_ocr::{FrameTimes, OcrEntry};
+use crate::{FrameTimes, OcrEntry};
 
 /// 批量模式下，文件名不符合时间格式时的处理策略。
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]

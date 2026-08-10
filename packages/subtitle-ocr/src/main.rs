@@ -14,10 +14,8 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use serde_json::Value;
 use std::path::{Path, PathBuf};
+use subtitle_ocr::util::{BadNameAction, list_frames};
 use subtitle_ocr::{OcrDevice, OcrEntry, OcrFramesMeta, OcrFramesResult, OcrOptions, SubtitleOcr};
-
-mod util;
-use util::{BadNameAction, list_frames};
 
 #[derive(Parser, Debug)]
 #[command(

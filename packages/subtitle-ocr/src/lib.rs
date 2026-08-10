@@ -24,6 +24,11 @@ use std::path::PathBuf;
 pub(crate) mod geometry;
 pub(crate) mod ocr_post;
 pub(crate) mod ocr_util;
+/// 批量模式辅助：目录扫描 + 文件名时刻解析（`ms` / `ms_ms` 约定）。
+///
+/// 公开给外部 crate 直接复用（无需依赖 CLI 二进制）：例如 [`util::list_frames`]
+/// 把图片目录扫描成带时刻的 [`OcrEntry`] 序列，`util::parse_name_times` 解析单文件名。
+pub mod util;
 pub(crate) mod pipeline;
 
 // 模块保持 pub(crate)（内部分层是实现细节），仅把对外 API 提到 crate 根，
