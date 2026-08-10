@@ -28,9 +28,9 @@ pub struct FrameStepper {
     video_stream_index: usize,
     next_packet: Option<Packet>, // 预取的一包，跨越续接边界
     sent_eof: bool,
-    decoded_count: i32, // 已产出帧数（用于无 PTS 兜底估算）
+    decoded_count: i32,     // 已产出帧数（用于无 PTS 兜底估算）
     total_duration_ms: i64, // 视频总时长（毫秒），open 时从 ictx.duration() 取
-    total_frames: i64, // 视频总帧数，open 时取（优先 nb_frames，否则 duration×fps），0=未知
+    total_frames: i64,      // 视频总帧数，open 时取（优先 nb_frames，否则 duration×fps），0=未知
 }
 
 impl FrameStepper {
@@ -48,7 +48,10 @@ impl FrameStepper {
         let context_decoder =
             ffmpeg_next::codec::context::Context::from_parameters(input.parameters())
                 .context("创建解码上下文失败")?;
-        let decoder = context_decoder.decoder().video().context("创建视频解码器失败")?;
+        let decoder = context_decoder
+            .decoder()
+            .video()
+            .context("创建视频解码器失败")?;
 
         let scaler = ScalerContext::get(
             decoder.format(),
@@ -62,7 +65,7 @@ impl FrameStepper {
         .context("创建颜色/尺寸转换失败")?;
 
         // 视频总时长（毫秒）：ffmpeg 的 ictx.duration() 单位为 AV_TIME_BASE（微秒），
-        // 返回 i64（个别封装格式为 0，罕见）→ 记 0，调用方据此退化进度条。
+        // 返回 i64（个别封装格式为 0，罕见）→ 记 0，调用方据此退化进度条
         let total_duration_ms = ictx.duration() / 1000;
 
         // 视频总帧数：优先用流的 nb_frames（封装常给 0）；否则用 duration×fps 估算。
@@ -149,8 +152,7 @@ impl FrameStepper {
                                 .stream(self.video_stream_index)
                                 .expect("视频流存在")
                                 .time_base();
-                            (pts as f64 * tb.numerator() as f64 / tb.denominator() as f64
-                                * 1000.0)
+                            (pts as f64 * tb.numerator() as f64 / tb.denominator() as f64 * 1000.0)
                                 .round() as i64
                         })
                         .unwrap_or_else(|| {

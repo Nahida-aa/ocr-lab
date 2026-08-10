@@ -158,7 +158,7 @@ fn main() -> Result<()> {
         frame_outs.extend(subtitle_ocr::ocr_entry(&mut ocr, e)?);
         pb.inc(1);
     }
-    pb.finish_with_message("OCR 完成");
+    pb.finish();
 
     // --out：额外落地 OcrFramesResult（文件名由调用方指定，如 asr_ocr_frames.json）
     if let Some(out) = &cli.out {
