@@ -96,8 +96,8 @@ impl Default for OcrOptions {
 /// 原先是自定义 `FrameLine` 结构体，字段几乎与 rapidocr-ort 的 `OcrResult`
 /// 相同（text/text_confidence/box_），仅多了 `y_center`（= `center[1]`）。后改为
 /// 类型别名，并统一命名为 `OcrBoxResult`（表示"一个识别区域/文本框"）。
-/// ⚠️ 坐标语义：`ocr_image` 返回前会把 box/center 的 y 加回 `y_offset`，
-/// 还原成原图坐标。
+/// ⚠️ 坐标语义：`ocr_image` 返回前会把 box/center/y_range 的 y 加回 `y_offset`，
+/// 还原成原图坐标（y_range 漏还原会导致下游坐标不一致——见 `ocr_image` 注释）。
 pub use rapidocr_ort::OcrBoxResult;
 
 /// 单图聚合结果（可携带单时刻时间戳）。
@@ -142,6 +142,19 @@ pub struct SubtitleOcr {
     opts: OcrOptions,
 }
 
+/// 把 `bottom_only` ROI 坐标还原回原图：box 每个顶点 y、center.y 与 y_range 都加 `dy`。
+///
+/// ⚠️ 三者必须一起还原——漏掉 `y_range` 会让它停留在 ROI 坐标、与 corners 不一致，
+/// 下游所有基于 `y_range` 的统计 / 几何惩罚 / 段调整都会用错坐标（曾致 Y 惩罚全为 1）。
+fn offset_box_y(b: &mut OcrBoxResult, dy: f32) {
+    for p in &mut b.box_ {
+        p[1] += dy;
+    }
+    b.center[1] += dy;
+    b.y_range[0] += dy;
+    b.y_range[1] += dy;
+}
+
 impl SubtitleOcr {
     /// 按模型套件构建（模型目录默认仓库根 `models/rapidocr`）。
     pub fn from_profile(
@@ -180,12 +193,9 @@ impl SubtitleOcr {
         let mut boxes: Vec<OcrBoxResult> = results
             .into_iter()
             .map(|mut r| {
-                // ROI 坐标还原回原图：box 每点 y 与 center.y 都加 y_offset。
+                // ROI 坐标还原回原图：box 每点 y、center.y 与 y_range 都加 y_offset。
                 if y_offset > 0 {
-                    for p in &mut r.box_ {
-                        p[1] += y_offset as f32;
-                    }
-                    r.center[1] += y_offset as f32;
+                    offset_box_y(&mut r, y_offset as f32);
                 }
                 r.text = r.text.trim().to_string();
                 r
@@ -303,4 +313,57 @@ pub fn ocr_entries(ocr: &mut SubtitleOcr, entries: &[OcrEntry]) -> Result<Vec<Fr
         out.extend(ocr_entry(ocr, e)?);
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rapidocr_ort::OcrBoxResult;
+
+    fn box_with_ys(corners_y: [f32; 4]) -> OcrBoxResult {
+        OcrBoxResult {
+            text: "a".into(),
+            text_confidence: 0.9,
+            box_confidence: 0.9,
+            // 左上、右上、右下、左下（y 用给定值）。
+            box_: [
+                [0.0, corners_y[0]],
+                [10.0, corners_y[1]],
+                [10.0, corners_y[2]],
+                [0.0, corners_y[3]],
+            ],
+            x_range: [0.0, 10.0],
+            // 初始 y_range 须与 corners 一致（模拟引擎已算好的 ROI 坐标）。
+            y_range: [corners_y[0], corners_y[2]],
+            center: [5.0, (corners_y[0] + corners_y[2]) / 2.0],
+        }
+    }
+
+    #[test]
+    fn offset_box_y_keeps_corners_and_y_range_consistent() {
+        let mut b = box_with_ys([209.0, 209.0, 248.0, 248.0]);
+        offset_box_y(&mut b, 432.0);
+        // 三个坐标维度都要还原，且互相一致（回归：曾漏还原 y_range）。
+        assert_eq!(b.box_[0][1], 641.0);
+        assert_eq!(b.box_[2][1], 680.0);
+        assert_eq!(b.y_range, [641.0, 680.0]);
+        assert_eq!(b.center[1], (641.0 + 680.0) / 2.0);
+        // 与 corners 一致（修复前 y_range 仍为 ROI 坐标 209-248，不一致）。
+        let cy: Vec<f32> = b.box_.iter().map(|p| p[1]).collect();
+        let (min_y, max_y) = (
+            cy.iter().cloned().fold(f32::INFINITY, f32::min),
+            cy.iter().cloned().fold(f32::NEG_INFINITY, f32::max),
+        );
+        assert_eq!(b.y_range, [min_y, max_y], "y_range 须与 box 顶点一致");
+    }
+
+    #[test]
+    fn offset_box_y_zero_is_noop() {
+        let mut b = box_with_ys([100.0, 100.0, 130.0, 130.0]);
+        let before = b.clone();
+        offset_box_y(&mut b, 0.0);
+        assert_eq!(b.box_, before.box_);
+        assert_eq!(b.y_range, before.y_range);
+        assert_eq!(b.center, before.center);
+    }
 }
