@@ -92,5 +92,5 @@ filter-segment in="tmp/3/sf_ocr_fix/segment_adjust.json" out="tmp/3/sf_ocr_fix/s
 # 输入 frames（逐帧 OCR JSON，subtitle-ocr --out 产出）与 video（视频路径，读高度）；
 # 各中间产物（frames_box_adjust.json / frames_box_filter.json / frames_merged.json /
 # segment_adjust.json / segment_filter.json）都写到 out 目录。--stop-at 可只跑到某一步。
-ocr-post frames="tmp/3/sf_ocr_fix/frames.json" video="tmp/3/video_source.mp4" out="tmp/3/sf_ocr_fix" threshold="0.6" stop_at="filter-segment":
+ocr-post frames="tmp/3/sf_ocr_fix/frames.json" video="tmp/3/video_source.mp4" out="tmp/3/sf_ocr_fix" threshold="0.5" stop_at="filter-segment":
     cargo run -p subtitle-ocr --bin ocr-post --release -- --frames {{frames}} --video {{video}} --out {{out}} --threshold {{threshold}} --stop-at {{stop_at}}
