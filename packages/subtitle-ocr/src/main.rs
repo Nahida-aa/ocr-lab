@@ -1,4 +1,4 @@
-//! 命令行：`subtitle-ocr <image> [text_score]` 或 `subtitle-ocr --dir <dir> ...`
+//! 命令行：`subtitle-ocr <image>` 或 `subtitle-ocr --dir <dir> ...`
 //!
 //! 纯感知 OCR 工具，对标 cpp 的 `ocr_pipeline.cpp`：输出 JSON 数组，
 //! 每个元素含 `text` / `text_confidence` / `boxes` / `timestamp`。
@@ -50,9 +50,9 @@ struct Cli {
     #[arg(long, value_enum, default_value_t = BadNameAction::Error)]
     on_bad_name: BadNameAction,
 
-    /// 识别置信度下限（cpp text_score，默认 0.5）
+    /// 识别置信度下限（对应 cpp 的 text_score / 下游 --text-confidence-threshold，默认 0.5）
     #[arg(long)]
-    text_score: Option<f32>,
+    text_confidence_threshold: Option<f32>,
 
     /// 仅保留画面底部比例区间的字幕框（cpp --subtitle-only）
     #[arg(long)]
@@ -121,7 +121,7 @@ fn main() -> Result<()> {
         bottom_only: !cli.full_frame,
         subtitle_only: cli.subtitle_only,
         use_nms: !cli.no_nms,
-        text_score: cli.text_score.unwrap_or(0.5),
+        text_confidence_threshold: cli.text_confidence_threshold.unwrap_or(0.5),
         use_warp_crop: cli.warp_crop,
     };
 

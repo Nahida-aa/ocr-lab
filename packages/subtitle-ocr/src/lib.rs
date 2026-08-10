@@ -72,8 +72,8 @@ pub struct OcrOptions {
     pub subtitle_only: bool,
     /// 重叠框 NMS 去重（cpp 默认 true，`--no-nms` 关闭）。
     pub use_nms: bool,
-    /// 识别置信度下限（cpp `text_score`，默认 0.5）。
-    pub text_score: f32,
+    /// 识别置信度下限（对应 cpp 的 `text_score` / 下游 `--text-confidence-threshold`，默认 0.5）。
+    pub text_confidence_threshold: f32,
     /// 是否用 cpp 同款的透视矫正裁剪（warpPerspective）替代轴对齐包围盒。
     /// 配合 det 几何 minAreaRect 一起用（两者耦合）；默认 false。
     pub use_warp_crop: bool,
@@ -85,7 +85,7 @@ impl Default for OcrOptions {
             bottom_only: true,
             subtitle_only: false,
             use_nms: true,
-            text_score: 0.5,
+            text_confidence_threshold: 0.5,
             use_warp_crop: false,
         }
     }
@@ -198,7 +198,7 @@ impl SubtitleOcr {
                         return false;
                     }
                 }
-                !r.text.is_empty() && r.text_confidence >= self.opts.text_score
+                !r.text.is_empty() && r.text_confidence >= self.opts.text_confidence_threshold
             })
             .collect();
 

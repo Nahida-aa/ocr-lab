@@ -30,7 +30,7 @@ README，这里聚焦字幕专属层。
   │     · ratio = y_center / H（画面底部字幕）
   │     ── 耗时：几乎 0（纯过滤）
   │
-  ├─[5] 丢弃空文本 & confidence < text_score 的框
+  ├─[5] 丢弃空文本 & text_confidence < text_confidence_threshold 的框
   │
   ├─[6] NMS（use_nms 默认开）：按面积降序，剔除被已保留大框覆盖 >70% 的小框
   │
