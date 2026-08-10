@@ -3,7 +3,7 @@
 > 大方向与架构见 [ROADMAP.md](./ROADMAP.md)。本文件只列「接下来具体做哪几件」，
 > 避免路线图被长清单拖垮、失真。勾选项保留近期已完成的 `[x]` 作为进度感，定期清理。
 
-## 目标 1：字幕识别（subtitle-ocr Rust）— 主体已实现，收尾中
+## 方向 1：视频字幕识别（核心，subtitle-ocr Rust）— 主体已实现，收尾中
 
 - [x] subtitle-ocr Rust 实现：OCR 引擎 + 后处理 CLI 链
       （ocr-frames-adjust/filter-box、merge-frames、ocr-segment-adjust/filter）
@@ -16,11 +16,14 @@
 - [ ] cls 方向分类接入（已加载未使用，旋转文本待支持）
 - [ ] 三实现横比基准：`tests/bench/subtitle-ocr` 的 `bin/bench.rs` 性能占位补实
 
-## 目标 2/3：GUI 自动操作 / 测试
+## 方向 2：GUI 自动化测试
 
-- [ ] ui_probe：OCR 结果 → 操作回灌最小闭环（waydroid 截图 → OCR → 断言）
 - [ ] opencv 视觉层：版面 / 图标 / 状态识别（文字层补充）
 - [ ] (可选) yolo 控件检测，降低纯 OCR 误判
+
+## 方向 3：GUI 智能操作
+
+- [ ] ui_probe：OCR 结果 → 操作回灌最小闭环（waydroid 截图 → OCR → 断言）
 
 ## 跨仓维护
 

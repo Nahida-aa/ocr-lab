@@ -4,19 +4,21 @@
 
 单仓库聚合**三个强相关的独立目标**（非包含关系，各自有独立交付物与验收）：
 
-1. **字幕识别**（目标 1）：从视频帧抽取字幕文字。
+1. **视频字幕识别**（核心方向）：从视频帧抽取字幕文字。由通用 OCR 能力孵化出的
+   垂直场景——字幕水平、底部、高对比的分布契合 PP-OCR，已沉淀专属后处理与时间轴
+   合并链路。
    - 实现变体：`packages/subtitle-ocr-cpp`（C++/ORT 直连，已实现）、
      `packages/subtitle-ocr-py`（Python/rapidocr，已实现）、
      `packages/subtitle-ocr`（Rust，已实现 OCR + 后处理 CLI 链）。
    - 横比基准：`tests/bench/subtitle-ocr`（`bin/test.rs` 正确性 + `bin/bench.rs` 性能占位）。
    - 参考素材：`tests/bench/subtitle-ocr/ref/`（video_source.mp4 + ocr_manual.json 人工标注）。
-2. **GUI 自动操作**（目标 2）：「看屏幕 → 理解 → 操作」闭环。
-   - 组合：`crates/capturer`（抓图）+ `crates/rapidocr-ort`（文字识别）+ `crates/screen-operator`（点击/输入回灌）。
-3. **GUI 自动化测试**（目标 3）：可复现 fixture + 识别/操作验证。
+2. **GUI 自动化测试**：可复现 fixture + 识别/操作验证。
    - `tools/gen_ui_img`（gpui 真实渲染 → capturer 抓图）→ `tests/fixtures/ui_*.png`。
+3. **GUI 智能操作**：「看屏幕 → 理解 → 操作」闭环。
+   - 组合：`crates/capturer`（抓图）+ `crates/rapidocr-ort`（文字识别）+ `crates/screen-operator`（点击/输入回灌）。
 
-三者共享底层 OCR 引擎与抓图/注入设施（故同仓），但**目标 1 的基准只服务字幕识别，
-不可误用作目标 2/3 的验收**。
+三者共享底层 OCR 引擎与抓图/注入设施（故同仓），但**视频字幕识别的基准只服务字幕识别，
+不可误用作 GUI 自动化测试 / GUI 智能操作的验收**。
 
 ```
                         ┌─────────────────────────────────────────┐
@@ -24,9 +26,10 @@
                         └─────────────────────────────────────────┘
             ┌──────────────────────┬──────────────────────┬──────────────────────┐
             ▼                      ▼                      ▼
-     目标1: 字幕识别         目标2: GUI 自动操作      目标3: GUI 自动化测试
-     subtitle-ocr-*          capturer+rapidocr-ort    gen_ui_img → fixtures
-     + bench/subtitle-ocr    + screen-operator        + 识别/操作验证
+   1: 视频字幕识别        2: GUI 自动化测试       3: GUI 智能操作
+   subtitle-ocr-*         gen_ui_img → fixtures   capturer+rapidocr-ort
+   + bench/subtitle-ocr   + 识别/操作验证          + screen-operator
+   （核心方向）
 ```
 
 ## 当前状态
@@ -85,7 +88,7 @@ ocr-lab/
 ├── packages/
 │   ├── subtitle-ocr-cpp/   # 目标 1：字幕识别 C++ 实现（ocr.test.ts + test.justfile）
 │   ├── subtitle-ocr-py/    # 目标 1：字幕识别 Python 实现
-│   └── subtitle-ocr/       # 目标 1：字幕识别 Rust 实现（已实现 OCR + 后处理 CLI 链）
+│   └── subtitle-ocr/       # 核心方向：字幕识别 Rust 实现（已实现 OCR + 后处理 CLI 链）
 ├── tools/
 │   ├── gen_fixtures.py     # 文字图片生成器（PIL/中文，确定性单元 fixture）
 │   └── gen_ui_img/         # gpui 真实渲染 → capturer 抓图 → 存 tests/fixtures/ui_*.png（目标 3）
