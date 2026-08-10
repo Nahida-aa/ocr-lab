@@ -173,9 +173,10 @@ pub fn ocr_segment_adjust(
 
             OcrSegmentWithAdjust {
                 base: seg.clone(),
-                adjusted_text_confidence: Some(round2(adjusted_confidence)),
-                y_penalty: Some(round2(y_penalty as f64)),
-                iso_penalty: Some(round2(iso_penalty as f64)),
+                // 不四舍五入，保留完整精度（对齐 cpp 的浮点透传）。
+                adjusted_text_confidence: Some(adjusted_confidence as f32),
+                y_penalty: Some(y_penalty),
+                iso_penalty: Some(iso_penalty),
             }
         })
         .collect()
@@ -229,11 +230,6 @@ fn compute_iso_penalty(seg: &OcrSegment, non_empty_ts: &[u64], iso_threshold_ms:
         (None, None) => f64::INFINITY,
     };
     ((nearest_gap / iso_threshold_ms as f64).min(1.0)) as f32
-}
-
-/// 四舍五入到 2 位小数（对齐 TS `Math.round(x * 100) / 100`）。
-fn round2(x: f64) -> f32 {
-    ((x * 100.0).round() / 100.0) as f32
 }
 
 #[cfg(test)]
@@ -392,12 +388,16 @@ mod tests {
         let args = OcrSegmentAdjustArgs::default();
         let out = ocr_segment_adjust(&segs, &frames, &y_stats(10.0, 30.0), 1080.0, &args);
         let iso = out[0].iso_penalty.unwrap();
-        // 100/1500=0.0666… 经 round2 取 0.07。
-        assert!((iso - 0.07).abs() < 1e-6, "iso_penalty ≈ 0.07, got {iso}");
+        // 100/1500=0.0666…（不四舍五入，保留完整精度）。
+        assert!((iso - 100.0 / 1500.0).abs() < 1e-6, "iso_penalty ≈ 0.0667, got {iso}");
         // 段质心=(10+30)/2=20 与 avgCentroid=20 重合 → y_penalty=0；
-        // 调整置信度 = 0.9 × (1 - (0.8·0 + 0.2·0.07)) = 0.9 × 0.986 = 0.8874 → round2 0.89。
+        // 调整置信度 = 0.9 × (1 - (0.8·0 + 0.2·(100/1500))) ≈ 0.888。
         assert_eq!(out[0].y_penalty.unwrap(), 0.0);
-        assert!((out[0].adjusted_text_confidence.unwrap() - 0.89).abs() < 1e-6);
+        let expected_adj = 0.9 * (1.0 - 0.2 * (100.0 / 1500.0));
+        assert!(
+            (out[0].adjusted_text_confidence.unwrap() - expected_adj as f32).abs() < 1e-5,
+            "adjusted ≈ {expected_adj}"
+        );
     }
 
     #[test]
@@ -430,8 +430,8 @@ mod tests {
         let args = OcrSegmentAdjustArgs::default();
         let out = ocr_segment_adjust(&segs, &[], &y_stats(10.0, 30.0), 1080.0, &args);
         let yp = out[0].y_penalty.unwrap();
-        // 40/86.4=0.46296… 经 round2 取 0.46。
-        assert!((yp - 0.46).abs() < 1e-2, "y_penalty ≈ 0.46, got {yp}");
+        // 40/86.4=0.46296…（不四舍五入，保留完整精度）。
+        assert!((yp - 40.0 / 86.4).abs() < 1e-4, "y_penalty ≈ 0.46296, got {yp}");
     }
 
     #[test]
