@@ -20,16 +20,22 @@
 三者共享底层 OCR 引擎与抓图/注入设施（故同仓），但**视频字幕识别的基准只服务字幕识别，
 不可误用作 GUI 自动化测试 / GUI 智能操作的验收**。
 
-```
-                        ┌─────────────────────────────────────────┐
-                        │  共用底层：rapidocr-ort / capturer / 注入  │
-                        └─────────────────────────────────────────┘
-            ┌──────────────────────┬──────────────────────┬──────────────────────┐
-            ▼                      ▼                      ▼
-   1: 视频字幕识别        2: GUI 自动化测试       3: GUI 智能操作
-   subtitle-ocr-*         gen_ui_img → fixtures   capturer+rapidocr-ort
-   + bench/subtitle-ocr   + 识别/操作验证          + screen-operator
-   （核心方向）
+```mermaid
+graph TD
+    subgraph base["共用底层（三方向共享）"]
+        OCR["rapidocr-ort<br/>PP-OCR 识别引擎"]
+        CAP["capturer<br/>抓图基础设施"]
+        INJ["输入注入<br/>screen-operator 后端"]
+    end
+
+    OCR --> S1
+    CAP --> S2
+    CAP --> S3
+    INJ --> S3
+
+    S1["① 视频字幕识别（核心方向）<br/>subtitle-ocr + bench/subtitle-ocr"]
+    S2["② GUI 自动化测试<br/>gen_ui_img → fixtures"]
+    S3["③ GUI 智能操作<br/>capturer + screen-operator 闭环"]
 ```
 
 ## 当前状态
