@@ -2,8 +2,8 @@
 //!
 //! 读入 `ocr-segment-adjust` 产出的调整后 JSON（`OcrSegmentWithAdjust[]` 数组，或
 //! `OcrSegmentFilterResult { meta, result }`），跑 [`subtitle_ocr::ocr_segment_filter`] /
-//! [`subtitle_ocr::ocr_segment_filter_with_meta`] 按置信度阈值过滤字幕段，把低于阈值的段丢弃，
-//! 输出到 stdout。
+//! [`subtitle_ocr::ocr_segment_filter_with_meta`] 按置信度阈值过滤字幕段，把低于阈值的段丢弃。
+//! 结果默认到 stdout；指定 `--out` 时落盘到文件、不再向 stdout 打印。
 //!
 //! 置信度优先级（对齐 TS `ocrSegmentFilter`）：段若带 `adjusted_text_confidence` 则优先用它，
 //! 否则退回 `text_confidence`；阈值 ≤ 0 时不过滤。`--bare` 输出纯 `OcrSegmentWithAdjust[]`
@@ -111,7 +111,7 @@ struct Cli {
     #[arg(long)]
     bare: bool,
 
-    /// 把过滤结果额外写出到指定文件路径（同时仍向 stdout 打印）。便于落盘对接下游。
+    /// 把过滤结果写出到指定文件路径；指定后不再向 stdout 打印。便于落盘对接下游。
     #[arg(long)]
     out: Option<PathBuf>,
 }
@@ -150,16 +150,21 @@ fn main() -> Result<()> {
     let segments = parsed.into_segments();
 
     // 默认输出带统计的 OcrSegmentFilterResult；--bare 则输出纯数组。
+    // 指定了 --out 时结果已落盘，不再向 stdout 重复打印（避免刷屏 + 与文件重复）。
     if cli.bare {
         let filtered: Vec<OcrSegmentWithAdjust> =
             subtitle_ocr::ocr_segment_filter(&segments, cli.text_confidence_threshold);
         write_out(&repo_root, &cli.out, &filtered, filtered.len())?;
-        println!("{}", serde_json::to_string_pretty(&filtered)?);
+        if cli.out.is_none() {
+            println!("{}", serde_json::to_string_pretty(&filtered)?);
+        }
     } else {
         let result: OcrSegmentFilterResult =
             subtitle_ocr::ocr_segment_filter_with_meta(&segments, cli.text_confidence_threshold);
         write_out(&repo_root, &cli.out, &result, result.meta.segment_count)?;
-        println!("{}", serde_json::to_string_pretty(&result)?);
+        if cli.out.is_none() {
+            println!("{}", serde_json::to_string_pretty(&result)?);
+        }
     }
 
     Ok(())
@@ -183,6 +188,8 @@ fn write_out<T: serde::Serialize>(
         let json = serde_json::to_string_pretty(value).context("序列化过滤结果失败")?;
         std::fs::write(&path, json).with_context(|| format!("写入失败: {}", path.display()))?;
         info!(path = %path.display(), segments = segment_count, "已写出段");
+        // 显式打印落盘位置（绝对路径），方便确认输出去了哪（结果本身不打印到 stdout）。
+        println!("已写入: {}", path.display());
     }
     Ok(())
 }

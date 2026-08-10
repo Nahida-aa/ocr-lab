@@ -2,7 +2,8 @@
 //!
 //! 读入主 CLI（`subtitle-ocr`）产出的逐帧 JSON（裸 `FrameResult[]` 数组，或
 //! `OcrFramesResult { frames, meta }`），跑 [`subtitle_ocr::merge_frames`] 的多段流水线，
-//! 把逐帧结果合并成带时间轴的字幕段 [`subtitle_ocr::MergeFramesResult`]，打印到 stdout。
+//! 把逐帧结果合并成带时间轴的字幕段 [`subtitle_ocr::MergeFramesResult`]。结果默认到
+//! stdout；指定 `--out` 时落盘到文件、不再向 stdout 打印。
 //!
 //! 与 cpp 对齐：输入是 `asr_ocr_frames.json` / `sf_ocr_frames.json` 这类逐帧 JSON，
 //! 输出是合并后的 `{ text, segments }`。
@@ -84,7 +85,7 @@ struct Cli {
     #[arg(long)]
     dedup_edit_distance: Option<u32>,
 
-    /// 把合并结果额外写出到指定文件路径（同时仍向 stdout 打印）。便于落盘对接下游。
+    /// 把合并结果写出到指定文件路径；指定后不再向 stdout 打印。便于落盘对接下游。
     #[arg(long)]
     out: Option<PathBuf>,
 }
@@ -140,10 +141,15 @@ fn main() -> Result<()> {
         let json = serde_json::to_string_pretty(&result).context("序列化 MergeFramesResult 失败")?;
         std::fs::write(&path, json).with_context(|| format!("写入失败: {}", path.display()))?;
         info!(path = %path.display(), segments = result.segments.len(), "已写出段");
+        // 显式打印落盘位置（绝对路径），方便确认输出去了哪（结果本身不打印到 stdout）。
+        println!("已写入: {}", path.display());
     }
 
-    // 主输出：合并结果 JSON 到 stdout。
-    println!("{}", serde_json::to_string_pretty(&result)?);
+    // 主输出：合并结果 JSON 到 stdout。指定了 --out 时结果已落盘，不再向
+    // stdout 重复打印（避免刷屏 + 与文件重复）。
+    if cli.out.is_none() {
+        println!("{}", serde_json::to_string_pretty(&result)?);
+    }
 
     Ok(())
 }
