@@ -5,7 +5,7 @@
 //! - `dedup_edit_distance`：`dedupOverlap` 的编辑距离阈值，edit_distance ≤ 此值则合并；
 //!   省略时默认 `1`。
 
-use crate::{FrameResult, SubtitlingSegment};
+use crate::{FrameResult, SubtitleSegment};
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -72,14 +72,14 @@ pub struct SegmentFrame {
 
 /// 一条字幕段（对齐 LocalDub `OcrSegment`）。
 ///
-/// TS 用 `extends SubtitlingSegment` 继承 `text` / `start_ms` / `end_ms`；Rust 无类型继承，
-/// 用 `#[serde(flatten)]` 内嵌 [`SubtitlingSegment`]，序列化后与 TS 字段平铺一致。
+/// TS 用 `extends SubtitleSegment` 继承 `text` / `start_ms` / `end_ms`；Rust 无类型继承，
+/// 用 `#[serde(flatten)]` 内嵌 [`SubtitleSegment`]，序列化后与 TS 字段平铺一致。
 /// 带 `?` 的字段（TS 可选）对应 `Option`，并以 `skip_serializing_if` 在输出时省略 `None`，
 /// 与「可选字段缺省」的语义对齐。
 #[derive(Clone, Debug, Serialize)]
 pub struct OcrSegment {
     #[serde(flatten)]
-    pub base: SubtitlingSegment,
+    pub base: SubtitleSegment,
     /// 字幕带纵向值域 `[min_y, max_y]`（可选）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub y_range: Option<[f32; 2]>,
@@ -214,7 +214,7 @@ pub fn base_merge_frames(
                      current_frames: Vec<SegmentFrame>,
                      segments: &mut Vec<OcrSegment>| {
         segments.push(OcrSegment {
-            base: SubtitlingSegment {
+            base: SubtitleSegment {
                 text: current_text.to_string(),
                 start_ms: current_start,
                 end_ms,
@@ -331,7 +331,7 @@ fn merge_two_segments(
     let mut frames = a.frames.clone().unwrap_or_default();
     frames.extend(b.frames.clone().unwrap_or_default());
     OcrSegment {
-        base: SubtitlingSegment {
+        base: SubtitleSegment {
             text,
             start_ms: a.base.start_ms.min(b.base.start_ms),
             end_ms: a.base.end_ms.max(b.base.end_ms),
@@ -428,7 +428,7 @@ pub fn remove_triplet_noise(segments: &[OcrSegment]) -> Vec<OcrSegment> {
         frames.extend(b.frames.unwrap_or_default());
         frames.extend(c.frames.unwrap_or_default());
         out[i] = OcrSegment {
-            base: SubtitlingSegment {
+            base: SubtitleSegment {
                 text: a.base.text,
                 start_ms: a.base.start_ms,
                 end_ms: c.base.end_ms,
@@ -623,10 +623,10 @@ mod tests {
 
     #[test]
     fn ocr_segment_serializes_flattened_with_optional_omitted() {
-        // 验证 OcrSegment 序列化后字段平铺（extends SubtitlingSegment 语义），
+        // 验证 OcrSegment 序列化后字段平铺（extends SubtitleSegment 语义），
         // 且可选字段（y_range/frame_count/frames）为 None 时不出现在 JSON 中。
         let seg = OcrSegment {
-            base: SubtitlingSegment {
+            base: SubtitleSegment {
                 text: "hello".into(),
                 start_ms: 100,
                 end_ms: 200,
@@ -650,7 +650,7 @@ mod tests {
     #[test]
     fn ocr_segment_serializes_with_optional_present() {
         let seg = OcrSegment {
-            base: SubtitlingSegment {
+            base: SubtitleSegment {
                 text: "hi".into(),
                 start_ms: 0,
                 end_ms: 500,
@@ -790,7 +790,7 @@ mod tests {
     /// 构造一个字幕段（其余字段占位）。
     fn segment(text: &str, start: u64, end: u64, y: [f32; 2], conf: f32) -> OcrSegment {
         OcrSegment {
-            base: SubtitlingSegment {
+            base: SubtitleSegment {
                 text: text.into(),
                 start_ms: start,
                 end_ms: end,

@@ -272,7 +272,7 @@ mod tests {
         // 且三个调整字段为 None 时不出现在 JSON 中。
         let seg = OcrSegmentWithAdjust {
             base: crate::OcrSegment {
-                base: crate::SubtitlingSegment {
+                base: crate::SubtitleSegment {
                     text: "你好".into(),
                     start_ms: 100,
                     end_ms: 200,
@@ -304,7 +304,7 @@ mod tests {
     fn ocr_segment_with_adjusted_serializes_with_optional_present() {
         let seg = OcrSegmentWithAdjust {
             base: crate::OcrSegment {
-                base: crate::SubtitlingSegment {
+                base: crate::SubtitleSegment {
                     text: "你好".into(),
                     start_ms: 100,
                     end_ms: 200,
@@ -335,7 +335,7 @@ mod tests {
         fc: Option<u32>,
     ) -> OcrSegment {
         OcrSegment {
-            base: crate::SubtitlingSegment {
+            base: crate::SubtitleSegment {
                 text: text.into(),
                 start_ms: start,
                 end_ms: end,
@@ -449,7 +449,7 @@ mod tests {
     fn compute_y_penalty_zero_when_no_y_range() {
         // 段无 y_range → 惩罚为 0。
         let seg_no_y = OcrSegment {
-            base: crate::SubtitlingSegment {
+            base: crate::SubtitleSegment {
                 text: "x".into(),
                 start_ms: 0,
                 end_ms: 100,

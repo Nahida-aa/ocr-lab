@@ -20,7 +20,7 @@ use serde::Deserialize;
 use std::path::PathBuf;
 use subtitle_ocr::{
     FrameResult, OcrBoxResult, OcrSegmentAdjustArgs, OcrSegmentWithAdjust, YStats,
-    compute_box_y_stats, ocr_segment_adjust, SubtitlingSegment,
+    compute_box_y_stats, ocr_segment_adjust, SubtitleSegment,
 };
 use tracing::info;
 
@@ -107,7 +107,7 @@ struct InputSegment {
 impl InputSegment {
     fn into_ocr_segment(self) -> subtitle_ocr::OcrSegment {
         subtitle_ocr::OcrSegment {
-            base: SubtitlingSegment {
+            base: SubtitleSegment {
                 text: self.text,
                 start_ms: self.start_ms,
                 end_ms: self.end_ms,

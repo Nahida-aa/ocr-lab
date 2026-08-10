@@ -103,13 +103,13 @@ pub fn ocr_segment_filter_with_meta(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{OcrSegment, SubtitlingSegment};
+    use crate::{OcrSegment, SubtitleSegment};
 
     /// 构造一个 OcrSegmentWithAdjust（惩罚字段默认 None，退回 text_confidence）。
     fn adj(text: &str, start: u64, end: u64, conf: f32) -> OcrSegmentWithAdjust {
         OcrSegmentWithAdjust {
             base: OcrSegment {
-                base: SubtitlingSegment {
+                base: SubtitleSegment {
                     text: text.into(),
                     start_ms: start,
                     end_ms: end,

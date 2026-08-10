@@ -16,15 +16,15 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use serde::Deserialize;
 use std::path::PathBuf;
-use subtitle_ocr::{OcrSegmentFilterResult, OcrSegmentWithAdjust, SubtitlingSegment};
+use subtitle_ocr::{OcrSegmentFilterResult, OcrSegmentWithAdjust, SubtitleSegment};
 use tracing::info;
 
 /// 输入里单条调整后字幕段（镜像 [`OcrSegmentWithAdjust`]：`base`（`OcrSegment`，其内再 flatten
-/// `SubtitlingSegment`）字段平铺 + 三个调整附加字段）。`OcrSegmentWithAdjust` 未 derive
+/// `SubtitleSegment`）字段平铺 + 三个调整附加字段）。`OcrSegmentWithAdjust` 未 derive
 /// `Deserialize`，故单独定义 DTO。
 #[derive(Debug, Deserialize)]
 struct InputSegmentWithAdjust {
-    // —— base: OcrSegment ——（flatten SubtitlingSegment：text/start_ms/end_ms）
+    // —— base: OcrSegment ——（flatten SubtitleSegment：text/start_ms/end_ms）
     text: String,
     start_ms: u64,
     end_ms: u64,
@@ -48,7 +48,7 @@ impl InputSegmentWithAdjust {
     fn into_ocr_segment_with_adjust(self) -> OcrSegmentWithAdjust {
         OcrSegmentWithAdjust {
             base: subtitle_ocr::OcrSegment {
-                base: SubtitlingSegment {
+                base: SubtitleSegment {
                     text: self.text,
                     start_ms: self.start_ms,
                     end_ms: self.end_ms,
