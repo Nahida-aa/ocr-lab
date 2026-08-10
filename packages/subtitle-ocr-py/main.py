@@ -6,7 +6,7 @@ engine = RapidOCR()
 def ocr_frame(
 	image_path: str,
 	bottom_only: bool = True,
-	text_score: float | None = None,
+	text_confidence_threshold: float | None = None,
 	subtitle_only: bool = False,
 	providers: list | None = None,
 ) -> tuple[list, float]:
@@ -28,8 +28,9 @@ def ocr_frame(
 		roi = img
 
 	kwargs = {}
-	if text_score is not None:
-		kwargs["text_score"] = text_score
+	# 注意：rapidocr_onnxruntime 库的参数固定叫 text_score，这里仅透传、不改键名。
+	if text_confidence_threshold is not None:
+		kwargs["text_score"] = text_confidence_threshold
 	if providers is not None:
 		kwargs["providers"] = providers
 	t0 = time.perf_counter()
@@ -56,18 +57,18 @@ def ocr_frame(
 
 if __name__ == "__main__":
 	if len(sys.argv) < 2:
-		print(json.dumps({"error": "Usage: python subtitle-py.py <image_path> [--full-frame] [--text-score <float>] [--subtitle-only] [--device cpu|cuda|dml|coreml]"}))
+		print(json.dumps({"error": "Usage: python subtitle-py.py <image_path> [--full-frame] [--text-confidence-threshold <float>] [--subtitle-only] [--device cpu|cuda|dml|coreml]"}))
 		sys.exit(1)
 
 	image_path = sys.argv[1]
 	bottom_only = "--full-frame" not in sys.argv
-	text_score = None
+	text_confidence_threshold = None
 	subtitle_only = "--subtitle-only" in sys.argv
 	device = "cpu"
-	if "--text-score" in sys.argv:
-		idx = sys.argv.index("--text-score")
+	if "--text-confidence-threshold" in sys.argv:
+		idx = sys.argv.index("--text-confidence-threshold")
 		if idx + 1 < len(sys.argv):
-			text_score = float(sys.argv[idx + 1])
+			text_confidence_threshold = float(sys.argv[idx + 1])
 	if "--device" in sys.argv:
 		idx = sys.argv.index("--device")
 		if idx + 1 < len(sys.argv):
@@ -85,7 +86,7 @@ if __name__ == "__main__":
 	providers = provider_map.get(device, ["CPUExecutionProvider"])
 
 	try:
-		lines, inference_ms = ocr_frame(image_path, bottom_only=bottom_only, text_score=text_score, subtitle_only=subtitle_only, providers=providers)
+		lines, inference_ms = ocr_frame(image_path, bottom_only=bottom_only, text_confidence_threshold=text_confidence_threshold, subtitle_only=subtitle_only, providers=providers)
 		print(json.dumps({"lines": lines, "inference_ms": round(inference_ms, 2)}, ensure_ascii=False))
 	except Exception as e:
 		print(json.dumps({"error": str(e)}, ensure_ascii=False))
