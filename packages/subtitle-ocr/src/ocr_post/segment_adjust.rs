@@ -10,7 +10,7 @@
 //! 的外部输入，不在此 struct 建模。
 //!
 //! 同模块还导出应用调整后的字幕段类型 [`OcrSegmentWithAdjust`]（在 [`OcrSegment`]
-//! 基础上补充 `adjusted_text_confidence` / `y_penalty` / `iso_penalty` 三个可选字段）。
+//! 基础上补充 `adjusted_confidence` / `y_penalty` / `iso_penalty` 三个可选字段）。
 
 use crate::{FrameResult, OcrSegment, YStats};
 use serde::Deserialize;
@@ -82,7 +82,7 @@ impl OcrSegmentAdjustArgs {
 /// TS 用 `extends OcrSegment` 继承全部字段；Rust 无类型继承，用 `#[serde(flatten)]`
 /// 内嵌 [`OcrSegment`]，序列化后与 TS 字段平铺一致。三个 `?` 字段（TS 可选）对应
 /// `Option`，并以 `skip_serializing_if` 在输出时省略 `None`，与「可选字段缺省」语义对齐：
-/// - `adjusted_text_confidence`：经 Y 偏移惩罚与孤立惩罚合成后的最终置信度；
+/// - `adjusted_confidence`：经 Y 偏移惩罚与孤立惩罚合成后的最终置信度；
 /// - `y_penalty`：Y 偏移惩罚分量（0~1，越大偏移越严重）；
 /// - `iso_penalty`：孤立程度惩罚分量（0~1，越大越孤立）。
 #[derive(Clone, Debug, Serialize)]
@@ -91,7 +91,7 @@ pub struct OcrSegmentWithAdjust {
     pub base: OcrSegment,
     /// 调整后的最终文本置信度（经 Y 偏移惩罚 + 孤立惩罚合成）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub adjusted_text_confidence: Option<f32>,
+    pub adjusted_confidence: Option<f32>,
     /// Y 偏移惩罚分量（0~1）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub y_penalty: Option<f32>,
@@ -131,7 +131,7 @@ pub fn ocr_segment_adjust(
             .iter()
             .map(|s| OcrSegmentWithAdjust {
                 base: s.clone(),
-                adjusted_text_confidence: None,
+                adjusted_confidence: None,
                 y_penalty: None,
                 iso_penalty: None,
             })
@@ -156,7 +156,7 @@ pub fn ocr_segment_adjust(
             if seg.frame_count.is_none() {
                 return OcrSegmentWithAdjust {
                     base: seg.clone(),
-                    adjusted_text_confidence: None,
+                    adjusted_confidence: None,
                     y_penalty: None,
                     iso_penalty: None,
                 };
@@ -174,7 +174,7 @@ pub fn ocr_segment_adjust(
             OcrSegmentWithAdjust {
                 base: seg.clone(),
                 // 不四舍五入，保留完整精度（对齐 cpp 的浮点透传）。
-                adjusted_text_confidence: Some(adjusted_confidence as f32),
+                adjusted_confidence: Some(adjusted_confidence as f32),
                 y_penalty: Some(y_penalty),
                 iso_penalty: Some(iso_penalty),
             }
@@ -278,7 +278,7 @@ mod tests {
                 frame_count: Some(2),
                 frames: None,
             },
-            adjusted_text_confidence: None,
+            adjusted_confidence: None,
             y_penalty: None,
             iso_penalty: None,
         };
@@ -289,7 +289,7 @@ mod tests {
         assert_eq!(v["end_ms"], 200);
         assert_eq!(v["text_confidence"], 0.9);
         assert!(
-            v.get("adjusted_text_confidence").is_none(),
+            v.get("adjusted_confidence").is_none(),
             "可选字段 None 应省略"
         );
         assert!(v.get("y_penalty").is_none());
@@ -310,13 +310,13 @@ mod tests {
                 frame_count: None,
                 frames: None,
             },
-            adjusted_text_confidence: Some(0.7),
+            adjusted_confidence: Some(0.7),
             y_penalty: Some(0.1),
             iso_penalty: Some(0.2),
         };
         let json = serde_json::to_string(&seg).unwrap();
         let v: serde_json::Value = serde_json::from_str(&json).unwrap();
-        assert_eq!(v["adjusted_text_confidence"], 0.7);
+        assert_eq!(v["adjusted_confidence"], 0.7);
         assert_eq!(v["y_penalty"], 0.1);
         assert_eq!(v["iso_penalty"], 0.2);
     }
@@ -376,7 +376,7 @@ mod tests {
         let segs = vec![seg("你好", 0, 100, [10.0, 30.0], 0.9, Some(1))];
         let out = ocr_segment_adjust(&segs, &[], &y_stats(0.0, 0.0), 1080.0, &args);
         assert_eq!(out.len(), 1);
-        assert!(out[0].adjusted_text_confidence.is_none());
+        assert!(out[0].adjusted_confidence.is_none());
         assert!(out[0].y_penalty.is_none());
     }
 
@@ -395,7 +395,7 @@ mod tests {
         assert_eq!(out[0].y_penalty.unwrap(), 0.0);
         let expected_adj = 0.9 * (1.0 - 0.2 * (100.0 / 1500.0));
         assert!(
-            (out[0].adjusted_text_confidence.unwrap() - expected_adj as f32).abs() < 1e-5,
+            (out[0].adjusted_confidence.unwrap() - expected_adj as f32).abs() < 1e-5,
             "adjusted ≈ {expected_adj}"
         );
     }
@@ -409,7 +409,7 @@ mod tests {
         let out = ocr_segment_adjust(&segs, &frames, &y_stats(10.0, 30.0), 1080.0, &args);
         assert_eq!(out[0].iso_penalty.unwrap(), 1.0, "全孤立单帧惩罚取满 1");
         // 调整置信度 = 0.9 × max(0, 1 - (0.8·0 + 0.2·1)) = 0.9 × 0.8 = 0.72。
-        assert!((out[0].adjusted_text_confidence.unwrap() - 0.72).abs() < 1e-6);
+        assert!((out[0].adjusted_confidence.unwrap() - 0.72).abs() < 1e-6);
     }
 
     #[test]
@@ -440,7 +440,7 @@ mod tests {
         let segs = vec![seg("你好", 0, 100, [10.0, 30.0], 0.9, None)];
         let args = OcrSegmentAdjustArgs::default();
         let out = ocr_segment_adjust(&segs, &[], &y_stats(10.0, 30.0), 1080.0, &args);
-        assert!(out[0].adjusted_text_confidence.is_none());
+        assert!(out[0].adjusted_confidence.is_none());
         assert!(out[0].y_penalty.is_none());
         assert!(out[0].iso_penalty.is_none());
     }

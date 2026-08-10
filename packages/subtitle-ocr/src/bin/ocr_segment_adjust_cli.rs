@@ -6,7 +6,7 @@
 //!   已剔除离群框，供孤立惩罚 / Y 偏移统计用）；
 //! - `--video`：视频文件路径，用 ffmpeg 读视频像素高度（Y 偏移惩罚归一化的分母）。
 //!
-//! 跑 [`subtitle_ocr::ocr_segment_adjust`] 给每段补上 `adjusted_text_confidence` /
+//! 跑 [`subtitle_ocr::ocr_segment_adjust`] 给每段补上 `adjusted_confidence` /
 //! `y_penalty` / `iso_penalty`，输出 `OcrSegmentWithAdjust[]`。结果默认到 stdout；
 //! 指定 `--out` 时落盘到文件、不再向 stdout 打印。
 //!

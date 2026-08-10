@@ -5,11 +5,11 @@
 //! [`subtitle_ocr::ocr_segment_filter_with_meta`] 按置信度阈值过滤字幕段，把低于阈值的段丢弃。
 //! 结果默认到 stdout；指定 `--out` 时落盘到文件、不再向 stdout 打印。
 //!
-//! 置信度优先级（对齐 TS `ocrSegmentFilter`）：段若带 `adjusted_text_confidence` 则优先用它，
+//! 置信度优先级（对齐 TS `ocrSegmentFilter`）：段若带 `adjusted_confidence` 则优先用它，
 //! 否则退回 `text_confidence`；阈值 ≤ 0 时不过滤。`--bare` 输出纯 `OcrSegmentWithAdjust[]`
 //! 数组（便于回灌下游），否则输出带 `meta` / `result` 的 `OcrSegmentFilterResult`。
 //!
-//! 与 cpp 对齐：输入是 adjust 步骤的输出（含 `adjusted_text_confidence`），输出是过滤后的
+//! 与 cpp 对齐：输入是 adjust 步骤的输出（含 `adjusted_confidence`），输出是过滤后的
 //! 字幕段，可继续喂给字幕拼装 / 导出。
 
 use anyhow::{Context, Result};
@@ -37,7 +37,7 @@ struct InputSegmentWithAdjust {
     frames: Option<Vec<serde_json::Value>>,
     // —— 调整附加字段 ——
     #[serde(default)]
-    adjusted_text_confidence: Option<f32>,
+    adjusted_confidence: Option<f32>,
     #[serde(default)]
     y_penalty: Option<f32>,
     #[serde(default)]
@@ -58,7 +58,7 @@ impl InputSegmentWithAdjust {
                 frame_count: self.frame_count,
                 frames: self.frames.map(|_| vec![]), // 帧明细不参与过滤，置空占位。
             },
-            adjusted_text_confidence: self.adjusted_text_confidence,
+            adjusted_confidence: self.adjusted_confidence,
             y_penalty: self.y_penalty,
             iso_penalty: self.iso_penalty,
         }

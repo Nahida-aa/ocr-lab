@@ -54,7 +54,7 @@ pub struct OcrBoxResultWithAdjust {
     /// 是否离群（调整后置信度低于阈值）。
     pub is_outlier: bool,
     /// 经几何噪声惩罚调整后的置信度（`text×0.3 + box×0.7` 加权值 × (1 - penalty)）。
-    pub adjusted_box_confidence: f32,
+    pub adjusted_confidence: f32,
 }
 
 /// 调整后的一帧：原 [`FrameResult`]（去掉 `boxes`） + 调整后的 `boxes`。
@@ -179,7 +179,7 @@ fn adjust_box(box_r: &OcrBoxResult, y_stats: &YStats, threshold: f32) -> OcrBoxR
             height: 0.0,
             height_ratio: 0.0,
             is_outlier: false,
-            adjusted_box_confidence: box_r.box_confidence,
+            adjusted_confidence: box_r.box_confidence,
         };
     }
 
@@ -235,7 +235,7 @@ fn adjust_box(box_r: &OcrBoxResult, y_stats: &YStats, threshold: f32) -> OcrBoxR
         height,
         height_ratio,
         is_outlier,
-        adjusted_box_confidence: adjusted,
+        adjusted_confidence: adjusted,
     }
 }
 
@@ -307,7 +307,7 @@ mod tests {
         let out = ocr_frames_adjust_box(&[f], &y, &BoxAdjustedArgs::default());
         let b = &out.frames[0].boxes[0];
         assert!(!b.is_outlier);
-        assert_eq!(b.adjusted_box_confidence, 0.9);
+        assert_eq!(b.adjusted_confidence, 0.9);
         assert_eq!(b.height, 0.0);
         assert_eq!(out.meta.frame_count, 1);
     }
@@ -327,7 +327,7 @@ mod tests {
         let out = ocr_frames_adjust_box(&[f], &y, &BoxAdjustedArgs::default());
         let b = &out.frames[0].boxes[0];
         assert!(b.is_outlier, "偏离典型位置过远的框应标记为离群");
-        assert!(b.adjusted_box_confidence < 0.9);
+        assert!(b.adjusted_confidence < 0.9);
         assert_eq!(b.height, 20.0);
         // meta 溯源字段正确回填。
         assert_eq!(out.meta.frame_count, 1);
@@ -351,7 +351,7 @@ mod tests {
         let out = ocr_frames_adjust_box(&[f], &y, &BoxAdjustedArgs::default());
         let b = &out.frames[0].boxes[0];
         assert!(b.is_outlier, "高度异常小的框应因 log2 高度惩罚被标记为离群");
-        assert!(b.adjusted_box_confidence < 0.5);
+        assert!(b.adjusted_confidence < 0.5);
         assert!(b.height_ratio < 0.5);
     }
 
@@ -371,7 +371,7 @@ mod tests {
         let b = &out.frames[0].boxes[0];
         assert!(!b.is_outlier, "高度正常且位置贴合的框不应被标记为离群");
         // band_drift=0、height_ratio=1 → 惩罚为 0，置信度不变。
-        assert!((b.adjusted_box_confidence - 0.9).abs() < 1e-6);
+        assert!((b.adjusted_confidence - 0.9).abs() < 1e-6);
     }
 
     #[test]
@@ -392,6 +392,6 @@ mod tests {
         let out = ocr_frames_adjust_box(&[f], &y, &BoxAdjustedArgs::default());
         let b = &out.frames[0].boxes[0];
         assert!(b.is_outlier, "中等偏移 + 低 text_confidence 的框应被判离群");
-        assert!(b.adjusted_box_confidence < 0.5);
+        assert!(b.adjusted_confidence < 0.5);
     }
 }

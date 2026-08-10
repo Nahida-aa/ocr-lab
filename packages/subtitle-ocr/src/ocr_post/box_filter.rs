@@ -94,7 +94,7 @@ mod tests {
             height: y_range[1] - y_range[0],
             height_ratio: 1.0,
             is_outlier,
-            adjusted_box_confidence: conf,
+            adjusted_confidence: conf,
         }
     }
 

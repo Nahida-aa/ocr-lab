@@ -2,11 +2,11 @@
 //!
 //! 对齐 LocalDub `packages/core/stages/ocr/utils.ts` 的 `ocrSegmentFilter` / `ocrSegmentFilterWithMeta`：
 //! 从合并/调整后的字幕段出发，按置信度阈值 `text_confidence_threshold` 过滤；段若带
-//! `adjusted_text_confidence`（Y 偏移 + 孤立惩罚合成后的置信度）则优先用它，否则退回
+//! `adjusted_confidence`（Y 偏移 + 孤立惩罚合成后的置信度）则优先用它，否则退回
 //! `text_confidence`。低于阈值者丢弃，`text_confidence_threshold` 为 0 时不过滤。
 //!
 //! 注：TS 入参是 `(OcrSegment | OcrSegmentWithAdjust)[]` 联合数组（两者字段可互读）。本库
-//! `OcrSegment` 无 `adjusted_text_confidence` 字段，故入参统一为 `&[OcrSegmentWithAdjust]`；
+//! `OcrSegment` 无 `adjusted_confidence` 字段，故入参统一为 `&[OcrSegmentWithAdjust]`；
 //! 纯 `OcrSegment` 调用方先包成 `OcrSegmentWithAdjust`（惩罚字段置 `None`，即退回 `text_confidence`）
 //! 即可，等价 TS 联合语义。
 
@@ -48,9 +48,9 @@ pub struct OcrSegmentFilterData {
 /// 按置信度过滤字幕段（对齐 LocalDub `ocrSegmentFilter`）。
 ///
 /// - `text_confidence_threshold` ≤ 0（含 0）视为不过滤，原样返回全部段。
-/// - 每个段取置信度优先级：`adjusted_text_confidence`（若 `Some`）→ 否则 `text_confidence`；
+/// - 每个段取置信度优先级：`adjusted_confidence`（若 `Some`）→ 否则 `text_confidence`；
 ///   该置信度 ≥ `text_confidence_threshold` 才保留（TS 里 `undefined` 也保留——本库 `text_confidence`
-///   必填，仅当 `adjusted_text_confidence` 为 `None` 时退回必填的 `text_confidence`，不存在 undefined 情况）。
+///   必填，仅当 `adjusted_confidence` 为 `None` 时退回必填的 `text_confidence`，不存在 undefined 情况）。
 ///
 /// 返回过滤后的段数组（不携带 `dropped` 统计；需要统计请用 [`ocr_segment_filter_with_meta`]）。
 pub fn ocr_segment_filter(
@@ -64,8 +64,8 @@ pub fn ocr_segment_filter(
     segments
         .iter()
         .filter(|s| {
-            // 优先 adjusted_text_confidence，否则退回 text_confidence（必填）。
-            let conf = s.adjusted_text_confidence.unwrap_or(s.base.text_confidence);
+            // 优先 adjusted_confidence，否则退回 text_confidence（必填）。
+            let conf = s.adjusted_confidence.unwrap_or(s.base.text_confidence);
             conf >= text_confidence_threshold
         })
         .cloned()
@@ -119,16 +119,16 @@ mod tests {
                 frame_count: Some(1),
                 frames: None,
             },
-            adjusted_text_confidence: None,
+            adjusted_confidence: None,
             y_penalty: None,
             iso_penalty: None,
         }
     }
 
-    /// 带 adjusted_text_confidence 的段。
+    /// 带 adjusted_confidence 的段。
     fn adj_with(text: &str, conf: f32, adjusted: f32) -> OcrSegmentWithAdjust {
         let mut s = adj(text, 0, 100, conf);
-        s.adjusted_text_confidence = Some(adjusted);
+        s.adjusted_confidence = Some(adjusted);
         s
     }
 

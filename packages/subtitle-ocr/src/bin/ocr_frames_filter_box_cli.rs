@@ -50,7 +50,7 @@ struct InputBoxWithAdjust {
     #[serde(default)]
     is_outlier: bool,
     #[serde(default)]
-    adjusted_box_confidence: f32,
+    adjusted_confidence: f32,
 }
 
 impl InputBoxWithAdjust {
@@ -70,7 +70,7 @@ impl InputBoxWithAdjust {
             height: self.height,
             height_ratio: self.height_ratio,
             is_outlier: self.is_outlier,
-            adjusted_box_confidence: self.adjusted_box_confidence,
+            adjusted_confidence: self.adjusted_confidence,
         }
     }
 }
