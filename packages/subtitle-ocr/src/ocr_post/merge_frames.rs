@@ -384,8 +384,9 @@ pub fn merge_substring_segments(segments: &[OcrSegment]) -> Vec<OcrSegment> {
 ///
 /// 对齐 LocalDub `utils.ts` 的 `removeTripletNoise`：对相邻三元组 `(a, b, c)`，
 /// 当 `a`/`c` 文本编辑距离 ≤ 2 且 b 与 a/c 的 y 值域都重叠时，判定 b 是否为噪声：
-/// - b 自身很短（≤ 1000ms）；或
-/// - b 与 a（或 c）编辑距离 ≤ 2 且字符数差 ≤ 2（中间插入一个字的噪声）。
+/// 阈值随 b 的置信度缩放——低置信段更容易被判为噪声（短段上限放宽到 ~1500ms、
+/// 同字幕编辑距离放宽到 3），高置信段需更极端才判（短段上限收紧到 500ms、
+/// 编辑距离须为 0 即完全相同），避免误伤真实字幕。
 /// 满足则把三段合并为一段（取 a 文本、a 起点、c 终点、a 的 y 值域，置信度取三者均值，
 /// frame_count 相加，frames 拼接 a/b/c），删除 b、c 并从当前位置重新检查。
 ///
@@ -409,11 +410,18 @@ pub fn remove_triplet_noise(segments: &[OcrSegment]) -> Vec<OcrSegment> {
             continue;
         }
         let dur_b = b.base.end_ms.saturating_sub(b.base.start_ms);
-        let is_short = dur_b <= 1000;
-        let b_near_a = edit_distance(&b.base.text, &a.base.text) <= 2
+        // 置信度作为调节因子：低置信段更可能为噪声闪烁，阈值放宽；高置信段
+        // 需更极端（更短 / 编辑距离更近）才判噪声，避免误伤真实字幕。
+        //   - 时间：短段上限 500ms（高置信）~ 1500ms（低置信）
+        //   - 编辑距离：同字幕阈值 0（高置信，须完全相同）~ 3（低置信）
+        let b_conf = b.text_confidence.clamp(0.0, 1.0);
+        let max_short_ms = 500.0 + (1.0 - b_conf) * 1000.0;
+        let is_short = dur_b as f32 <= max_short_ms;
+        let max_edit = (1.0 - b_conf) * 3.0;
+        let b_near_a = edit_distance(&b.base.text, &a.base.text) as f32 <= max_edit
             && (b.base.text.chars().count() as i32 - a.base.text.chars().count() as i32).abs()
                 <= 2;
-        let b_near_c = edit_distance(&b.base.text, &c.base.text) <= 2
+        let b_near_c = edit_distance(&b.base.text, &c.base.text) as f32 <= max_edit
             && (b.base.text.chars().count() as i32 - c.base.text.chars().count() as i32).abs()
                 <= 2;
         let is_noise = is_short || b_near_a || b_near_c;
@@ -883,6 +891,22 @@ mod tests {
         ];
         let out = remove_triplet_noise(&segs);
         assert_eq!(out.len(), 3, "y 不重叠应保留三段");
+    }
+
+    #[test]
+    fn remove_triplet_noise_keeps_high_conf_short_middle() {
+        // 复现「好吧」/「那我就开始了」/「请问」误合并：A/C 编辑距离 2（≤2）、
+        // 中间段 1000ms 卡在原 is_short 阈值，但置信度 0.95 高。
+        // 置信度缩放后：max_short = 500+0.05×1000=550ms，1000 > 550 → 不短；
+        // max_edit = 0.05×3=0.15，编辑距离 6 → 不近。→ 保留三段。
+        let segs = vec![
+            segment("好吧", 26300, 26467, [626.0, 671.0], 0.998),
+            segment("那我就开始了", 27900, 28900, [629.0, 669.0], 0.95),
+            segment("请问", 29700, 30300, [627.0, 670.0], 0.99),
+        ];
+        let out = remove_triplet_noise(&segs);
+        assert_eq!(out.len(), 3, "高置信的真实中段不应被判为噪声折叠");
+        assert_eq!(out[1].base.text, "那我就开始了");
     }
 
     #[test]
