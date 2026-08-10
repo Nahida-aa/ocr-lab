@@ -37,6 +37,10 @@ path = "src/bin/ocr_segment_adjust_cli.rs"
 name = "ocr-segment-filter"
 path = "src/bin/ocr_segment_filter_cli.rs"
 
+[[bin]]
+name = "ocr-post"
+path = "src/bin/ocr_post_cli.rs"
+
 [dependencies]
 # OCR 引擎（det/rec/cls 推理 + 模型加载 + 字典），本包只做字幕专属逻辑。
 # 纯感知层（合并逻辑已迁入本包的 ocr_post::merge_frames / merge-frames CLI）。

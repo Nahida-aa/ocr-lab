@@ -11,6 +11,7 @@
 #   just filter-box <adj> [out]     # 离群框过滤：adjust 输出 → 干净逐帧结果
 #   just adjust-segment [seg] [frames] [video] [out]  # 字幕段置信度调整：合并段+干净帧+视频 → 带惩罚/调整后置信度
 #   just filter-segment <adj> [out] # 字幕段过滤：adjust 输出 → 按阈值丢弃低置信段
+#   just ocr-post [frames] [video] [out]  # 统合后处理管线：一条命令跑完全部 5 步
 #   just doc                   # 构建文档（带私有项，便于看内部模块）
 #
 # 输出：stdout 为与 cpp 同形状的 JSON 数组（text/confidence/boxes/timestamp）；
@@ -83,5 +84,13 @@ adjust-segment segments="tmp/3/sf_ocr_fix/frames_merged.json" frames="tmp/3/sf_o
 # 输入为 adjust-segment 步骤的输出（含 adjusted_text_confidence）；
 # 输出 OcrSegmentFilterResult { meta, result } 到 stdout（--out 额外落盘）；
 # 加 --bare 则输出纯 OcrSegmentWithAdjust[] 数组。
-filter-segment in="tmp/segment_adjusted.json" out="tmp/segment_filtered.json" threshold="0.6":
+filter-segment in="tmp/3/sf_ocr_fix/segment_adjust.json" out="tmp/3/sf_ocr_fix/segment_filter.json" threshold="0.6":
     cargo run -p subtitle-ocr --bin ocr-segment-filter --release -- {{in}} --text-confidence-threshold {{threshold}} --out {{out}}
+
+# ---- 统合后处理管线：一条命令串起 adjust-box → filter-box → merge → adjust-segment → filter-segment ----
+# 用法：just ocr-post [frames] [video] [out] [threshold] [stop_at]
+# 输入 frames（逐帧 OCR JSON，subtitle-ocr --out 产出）与 video（视频路径，读高度）；
+# 各中间产物（frames_box_adjust.json / frames_box_filter.json / frames_merged.json /
+# segment_adjust.json / segment_filter.json）都写到 out 目录。--stop-at 可只跑到某一步。
+ocr-post frames="tmp/3/sf_ocr_fix/frames.json" video="tmp/3/video_source.mp4" out="tmp/3/sf_ocr_fix" threshold="0.6" stop_at="filter-segment":
+    cargo run -p subtitle-ocr --bin ocr-post --release -- --frames {{frames}} --video {{video}} --out {{out}} --threshold {{threshold}} --stop-at {{stop_at}}
