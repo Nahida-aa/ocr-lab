@@ -11,7 +11,7 @@
 
 use super::imgops;
 use super::params::Params;
-use tracing::debug;
+use tracing::{debug, trace};
 
 /// `GetLinesInfo`：找 `im`（==255 白）的水平文字带，合并小带与近带。返回 `Vec<(lb, le)>`。
 /// 对齐 SSAlgorithms.cpp 2175-2294（含两轮带合并）。
@@ -406,9 +406,26 @@ fn filter_image(
 ) {
     loop {
         let prev = im_f.to_vec();
+        trace!(
+            n,
+            lb_first = lb.first().copied().unwrap_or(-1),
+            le_first = le.first().copied().unwrap_or(-1),
+            wc_before = im_f.iter().filter(|&&v| v == 255).count(),
+            ne_wc = im_ne.iter().filter(|&&v| v == 255).count(),
+            "filter_image: second_filtration 前"
+        );
         let res = super::filter::second_filtration(im_f, im_ne, lb, le, n, w, h, p);
+        trace!(
+            res,
+            wc_after_sf = im_f.iter().filter(|&&v| v == 255).count(),
+            "filter_image: second_filtration 后"
+        );
         if res == 1 {
             super::filter::clear_image_from_small_symbols(im_f, w, h, p);
+            trace!(
+                wc_after_clear = im_f.iter().filter(|&&v| v == 255).count(),
+                "filter_image: clear_image_from_small_symbols 后"
+            );
         }
         // 检查是否有变化。
         let mut changed = false;
