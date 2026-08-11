@@ -82,3 +82,24 @@
 - `5c10a58` — second_filtration 实现 Center 路径（段数 7→4）
 - `1ba7a5a` — get_intersect_images 跳过空字幕帧 + EOF 保存末尾段（段边界完全对齐）
 - `af26cdd` — 调查记录（`.agents/subtitle-finder-cpp-diff.md`）
+
+## 六、未解决的已知差异（幽灵带 → 丢字幕段）⚠️
+
+**症状**：Rust 漏字幕段 / 过度切分，跨视频复现：
+- 大/13：第一个"走吧"（11666-12465ms）丢失（C++ 有，Rust 无）
+- 大/11：末尾段 56600-58032 被切成两段（C++ 一整段）
+
+**已确认（逐层排除）**：
+- `get_lines_info`、`compare2`、`intersect_y_images`、`second_filtration`、
+  `get_intersect_images` 交集逻辑全部与 C++ 逐行一致。
+- **decoder 色彩非根因**：bt601 vs bt709 的 331-339 内容几乎一致
+  （单帧 TF：C++ 238 / Rust bt601 235 / bt709 225；C++ ImY 非零 11512）。
+- `analyse_image` 改 Center 无影响（has_text 不变）。
+
+**矛盾点（尚未锁定）**：
+- C++ 在 331-339 也有内容（TF 238 / ILA 11512），但仍能成段；
+  Rust 同区内容导致 compare 幽灵带（`cmb=0` → val3=false → 段不稳定）。
+- 幽灵带（`lb=331 le=339` 空带）的具体 compare 调用/阶段未隔离。
+
+**下一步方向**：隔离状态机各阶段 compare 调用（fast / Difficult / offset 搜索），
+逐段 dump im_res/带列表，与 C++ 状态机的 ImIntS 段内容构造逐点对比。
