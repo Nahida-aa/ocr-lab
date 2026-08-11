@@ -42,15 +42,15 @@
 - [ ] **末尾段 56600-58032 被 Rust 切成 56600-57033 + 57100-58000**（C++ 一整段）
       - 全程对比（C++ end=-1）：前 22 段完全对齐，唯一结构差异在**末尾**。
       - C++ 把 56600-58032（"你现在有两个选择"）当一整段；Rust 在 57100 处切成两段。
-      - **根因已定位到 val3 输入状态不一致**：失败 compare 的 `raw_im1=0`（im1 内容空）
-        但 `raw_ve1≈22k`（边图非空）→ im1_c=0 → val3=false → 误判内容变化 → 切段。
-      - **关键异常**：im1（im_int_s/SP 存储的段内容）为空，但 ve1（im_ne_s 边图）非空。
-        C++ 同点 `Im1` 白=8003（非空）。这是存储状态不一致——内容空、边图非空。
-      - **高度怀疑是 `get_intersect_images` 短路修复（760ac32）的副作用**：短路在
-        has_text=0 帧时返回 `(f0.im, f0.y, false)`（f0.im 为空），可能在段边界把
-        im_int_s 赋成空，而 im_ne_s 保留真实边图。需验证：
-        临时恢复 skip 行为看 56600 是否恢复（但会带回 52833）——需要更精确的
-        段边界 im_int_s 赋值处理，而非简单回退。
+      - **根因已定位（caller=TRACK 逐帧对比）**：fn=1698 的 tracking compare，`compare_two_subs`
+        快路径 `raw_im1=3638`（非空），fast 判"changed" → 进 DifficultCompareTwoSubs2 →
+        `filter_image`+`filter_image_analyse` 后 `ff1 ∩ ila1 = 0`（ff1_wc=0）→ 第二趟
+        `compare_two_subs(ff1,ff2)` 的 `raw_im1=0` → val3=false → 判内容变化 → 切段。
+      - **即 DifficultCompareTwoSubs2 的过滤在 Rust 把段内容清空**，C++ 保留。嫌疑：
+        `filter_image_analyse`（832df55 加的 AnalyseImage 逐带过滤）或 `filter_image`
+        （second_filtration）。ff1 过滤后 ∩ ila1 为空，但 ila1 非空（raw_ila1≈797k），
+        所以是 ff1 被清空。需对比 C++ DifficultCompareTwoSubs2 的过滤对同帧 ff1 是否清空。
+      - 假设证伪记录：get_intersect_images 短路非 56600 原因（skip 验证）。
 
 ## 已修复（全部对齐 C++）
 

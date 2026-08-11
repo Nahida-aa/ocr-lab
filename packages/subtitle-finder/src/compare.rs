@@ -364,13 +364,29 @@ pub fn compare_two_subs_optimal(
     if let Some(ila2) = ila2 {
         imgops::intersect_two_images_inplace(&mut ff2, ila2, 0u8);
     }
+    debug!(
+        ff1_after_ila = ff1.iter().filter(|&&v| v == 255).count(),
+        ff2_after_ila = ff2.iter().filter(|&&v| v == 255).count(),
+        n,
+        "difficult: ILA 求交后白点"
+    );
     if n > 0 {
         filter_image(&mut ff1, ve1, w, h, p, &lb, &le, n);
         filter_image(&mut ff2, ve2, w, h, p, &lb, &le, n);
     }
+    debug!(
+        ff1_after_fimg = ff1.iter().filter(|&&v| v == 255).count(),
+        ff2_after_fimg = ff2.iter().filter(|&&v| v == 255).count(),
+        "difficult: FilterImage 后白点"
+    );
     // VideoSubFinder 在 FilterImage 后还有 filter_image（AnalyseImage 逐带过滤）。
     filter_image_analyse(&mut ff1, w, h, p);
     filter_image_analyse(&mut ff2, w, h, p);
+    debug!(
+        ff1_after_ana = ff1.iter().filter(|&&v| v == 255).count(),
+        ff2_after_ana = ff2.iter().filter(|&&v| v == 255).count(),
+        "difficult: AnalyseImage 带过滤后白点"
+    );
 
     let res = compare_two_subs(&ff1, ila1, ve1, ve1b, &ff2, ila2, ve2, w, h, p);
     debug!("compare_optimal: difficult res={}", res);

@@ -267,17 +267,17 @@ pub(crate) fn get_intersect_images(
     // 只要有一帧 has_text=0 → bln=0（立即短路），pImInt 只取第一帧（不交集）。全部
     // has_text=1 才做交集 + AnalyseImage。之前 Rust 跳过了 has_text=0 帧，只对
     // has_text=1 帧交集 → 残留帧（has_text 交替 1/0）时可能误判有字幕 → 段过度切分。
+    // 对齐 C++ `AddIntersectImagesTask`（SSAlgorithms.cpp:820-838）：遍历 [fn, fn+DL-1]，
+    // 只要有一帧 has_text=0 → bln=0（立即短路），pImInt 只取第一帧（不交集）。全部
+    // has_text=1 才做交集 + AnalyseImage。
     let f0 = try_frame(cache, fn_ as i32)?;
     if !f0.has_text {
-        // 第一帧无字幕 → bln=false（C++ 循环第一个 i=0 就 bln&=0）。
         return Some((f0.im.clone(), f0.y.clone(), false));
     }
-    // 检查 [fn, fn+DL-1] 是否全部 has_text=1。
     for i in 1..dl {
         match try_frame(cache, (fn_ + i) as i32) {
             Some(f) if f.has_text => {}
             Some(_) => {
-                // 有 has_text=0 帧 → bln=false，pImInt = 第一帧（不交集）。
                 return Some((f0.im.clone(), f0.y.clone(), false));
             }
             None => break,
@@ -331,6 +331,13 @@ pub(crate) fn compare_by_offset(
     };
 
     let f_off = try_frame(cache, (fn_ + offset) as i32)?;
+    trace!(
+        caller = "OFFSET",
+        fn_, offset,
+        im1 = im_int_s.iter().filter(|&&v| v == 255).count(),
+        ve1 = ne_s.iter().filter(|&&v| v == 255).count(),
+        "compare 输入"
+    );
     let mut bln = compare::compare_two_subs_optimal(
         im_int_s,
         Some(y_s),
@@ -642,6 +649,13 @@ fn run_state_machine(
                     im_fs = f0.bgr.clone();
                 } else {
                     // CompareTwoSubsOptimal(ImIntS, &ImYS, ImNES, prevImNE, ImInt, &ImYInt, ImNE)
+                    trace!(
+                        caller = "TRACK",
+                        fn_, bf,
+                        im1 = im_int_s.iter().filter(|&&v| v == 255).count(),
+                        ve1 = im_ne_s.iter().filter(|&&v| v == 255).count(),
+                        "compare 输入"
+                    );
                     bln = compare::compare_two_subs_optimal(
                         &im_int_s, Some(&im_y_s), &im_ne_s, Some(&prev_im_ne),
                         &im_int, Some(&y_int), &f0.ne, w, h, 0, w as i32 - 1, p,
