@@ -281,6 +281,29 @@ pub fn compare_two_subs(
         let raw_ila1 = ila1.iter().filter(|&&v| v != 0).count();
         let raw_ve1 = ve1.iter().filter(|&&v| v == 255).count();
         let ff1_wc = im_ff1.iter().filter(|&&v| v == 255).count();
+        // 诊断：中屏噪声带（rows 331-339）的内容来源。
+        let rows: Vec<usize> = (331..340).collect();
+        let mut im1_noise = 0;
+        let mut ila1_noise = 0;
+        let mut ff1_noise = 0;
+        let mut ve1_noise = 0;
+        let mut im2_noise = 0;
+        let mut ff2_noise = 0;
+        for &y in &rows {
+            let ib = y * w;
+            for x in 0..w {
+                let i = ib + x;
+                if im1[i] == 255 { im1_noise += 1; }
+                if ila1[i] != 0 { ila1_noise += 1; }
+                if im_ff1[i] == 255 { ff1_noise += 1; }
+                if ve1[i] == 255 { ve1_noise += 1; }
+                if im2[i] == 255 { im2_noise += 1; }
+                if im_ff2[i] == 255 { ff2_noise += 1; }
+            }
+        }
+        if ff1_noise > 0 || ff2_noise > 0 {
+            debug!(im1_noise, ila1_noise, ff1_noise, ve1_noise, im2_noise, ff2_noise, rows = format!("{:?}", rows), "中屏噪声带 331-339 内容");
+        }
         // Im1 = ImFF1 ∩ VE1（∩ VE12 if different）
         let mut im1_c = im_ff1.clone();
         imgops::intersect_two_images_inplace(&mut im1_c, ve1, 0u8);
