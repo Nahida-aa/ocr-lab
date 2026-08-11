@@ -410,6 +410,14 @@ pub(crate) fn second_filtration(
                             let cnt = (seg_le[ll as usize] - seg_lb[ll as usize] + 1) as usize;
                             im[start..start + cnt].iter_mut().for_each(|v| *v = 0);
                         }
+                        if ll == 0 {
+                            // 移除 lb[0]：C++ 把数组整体左移一位（lb[i]=lb[i+1]），
+                            // 后续 mpd/mpned 循环看到的是移位后的段数组。我们同样左移。
+                            for i in 0..l3 {
+                                seg_lb[i as usize] = seg_lb[(i + 1) as usize];
+                                seg_le[i as usize] = seg_le[(i + 1) as usize];
+                            }
+                        }
                         l3 -= 1;
                         if seg_lb[0] >= real_im_x_center {
                             bln_c = 0;

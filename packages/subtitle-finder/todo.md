@@ -36,6 +36,9 @@
         保存判定、finded_prev / bf / pbf 交互。
 
 - [ ] **sobel N-edge up_l 系数**（我们 10 vs VideoSubFinder 7），确认与状态机差异叠加。
+      - ✅ **2026-08-11 已核实源码**：C++ `FastImprovedSobelNEdge`（IPAlgorithms.cpp:985）
+        `val = 3*val1 + 10*val2`，up_l 系数是 **10**，不是 7。我们 Rust（sobel.rs:157 `+10*(up_l-dn_r)`）
+        也是 10 → **一致，无需改**。此前 todo/DESIGN 记的"7"是误读，待更新 DESIGN。
 
 ## 背景 / 已排除
 
@@ -43,3 +46,9 @@
 - 已试 mpn 调低 / mpned Any 跳过 / sobel up_l 系数 / Any-skip 对齐清理，
   均未完全修复（见 DESIGN.md「已知局限」）
 - GetImNE / ApplyModerateThreshold 结构与 VideoSubFinder 一致
+- **✅ 2026-08-11 重大澄清：`g_text_alignment` 默认是 `Center`（IPAlgorithms.cpp:170），
+  不是 `Any`**。CLI（cli_main.cpp）未设置它 → 用户跑的 VideoSubFinder 实际是 **Center**
+  对齐，不是 Any。因此之前"Any-skip 对齐"的方向（Design line 215"本实现固定 Any"、
+  跳过 line 2014/2208/2357）是**错的**——它把 Rust 改成 Any，反而不对齐 C++ 的 Center。
+  正确方向：Rust `second_filtration` 应实现 **Center**（commit 5c10a58 已做，段数 7→4
+  对齐 C++）。has_text 抖动需在 Center 模式下继续排查（不是 Any）。
