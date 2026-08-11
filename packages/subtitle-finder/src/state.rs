@@ -509,13 +509,16 @@ fn run_state_machine(
                     Err(_) => break 'outer, // 帧越界 → 结束
                 };
                 let bln1 = f1.has_text;
+                // C++：bln1/bln2 都是 GetConvertImage 的返回（帧存在且有字幕）。
+                // bln2 需在 else 分支复用（决定 fn_start 走 ddl 还是 2*ddl），故提级。
+                let mut bln2 = false;
                 let mut bln = false;
                 if bln1 {
                     let f2 = match get_frame(&cache, fn_start + ddl2_ofset as i32) {
                         Ok(f) => f.clone(),
                         Err(_) => break 'outer,
                     };
-                    let bln2 = f2.has_text;
+                    bln2 = f2.has_text;
                     if bln2 {
                         // ImInt = ImForward[fn_start+ddl1_ofset] ∩ ImForward[fn_start+ddl2_ofset]
                         let mut im_int = f1.im.clone();
@@ -546,8 +549,8 @@ fn run_state_machine(
                     break;
                 } else {
                     if bln1 {
-                        // 需要确认 bln2；这里简化：用 f2 是否可取得来判断。
-                        let bln2 = get_frame(&cache, fn_start + ddl2_ofset as i32).is_ok();
+                        // C++ line 1396：`if (bln2)` 用的是该帧 has_text，不是「帧是否存在」。
+                        // 之前误用 `.is_ok()`（帧存在即 true）→ 无字幕帧也走 ddl 步，检测步进错。
                         fn_start += if bln2 { ddl as i32 } else { 2 * ddl as i32 };
                     } else {
                         fn_start += ddl as i32;
