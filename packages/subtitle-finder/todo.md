@@ -42,14 +42,14 @@
 - [ ] **末尾段 56600-58032 被 Rust 切成 56600-57033 + 57100-58000**（C++ 一整段）
       - 全程对比（C++ end=-1）：前 22 段完全对齐，唯一结构差异在**末尾**。
       - C++ 把 56600-58032（"你现在有两个选择"）当一整段；Rust 在 57100 处切成两段。
-      - **根因已定位（caller=TRACK 逐帧对比）**：fn=1698 的 tracking compare，`compare_two_subs`
-        快路径 `raw_im1=3638`（非空），fast 判"changed" → 进 DifficultCompareTwoSubs2 →
-        `filter_image`+`filter_image_analyse` 后 `ff1 ∩ ila1 = 0`（ff1_wc=0）→ 第二趟
-        `compare_two_subs(ff1,ff2)` 的 `raw_im1=0` → val3=false → 判内容变化 → 切段。
-      - **即 DifficultCompareTwoSubs2 的过滤在 Rust 把段内容清空**，C++ 保留。嫌疑：
-        `filter_image_analyse`（832df55 加的 AnalyseImage 逐带过滤）或 `filter_image`
-        （second_filtration）。ff1 过滤后 ∩ ila1 为空，但 ila1 非空（raw_ila1≈797k），
-        所以是 ff1 被清空。需对比 C++ DifficultCompareTwoSubs2 的过滤对同帧 ff1 是否清空。
+      - **严格验证受阻（CPP_SF_NNE dump 被混杂）**：C++ SecondFiltration 的 nNE<mpn
+        清空遍布很多行（0-440，共 33156 条），是**主流水线** has_text 判定的正常现象，
+        无法单独隔离 compare 路径（DifficultCompareTwoSubs2 的 FilterImage）对 rows
+        371-434 的行为。Rust trace12 的 rows 371-434 nNE=7-49 来自 compare 路径。
+      - **已确认**：Rust/C++ 的 second_filtration 逻辑一致（都清 nNE<mpn 带），差异在
+        compare 路径的具体输入（band lb/le 或 im_ne 或 clear_image）。
+      - 需给 C++ FilterImage 加"是否来自 DifficultCompareTwoSubs2"标记，隔离 compare
+        路径的 nNE。此前"decoder 差异"结论**未证实**。
       - 假设证伪记录：get_intersect_images 短路非 56600 原因（skip 验证）。
 
 ## 已修复（全部对齐 C++）
