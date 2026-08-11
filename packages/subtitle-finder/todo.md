@@ -61,17 +61,17 @@
         层面) 均非差异；带生产层面 im_res 行级差异是最终定位。
 
 - [ ] **新发现：Rust 漏字幕段（大/13 第一个"走吧" 11666-12465，C++ 有 Rust 无）**
-      - C++ 段含 `11666-12465`（OCR="走吧"），Rust timeline 无此段（10233_11333 直接
-        跳 13200_13967）。
-      - Rust has_text 显示 11600-12667 全 has_text=1（isa≈2500-3000）→ **检测到字幕帧
-        但没成段**。
-      - **根因 = 与 56600 同一个幽灵带问题**：fn=351 的 fast compare，
-        `compare2: 带 cmb=0 k=1 lb=331 le=339 b_im1=0 b_im2=0` → val3=false → 判内容
-        变化 → bf 每帧重置 → 段长度 < DL 无法保存。
-      - C++ 同段不判变化（成段）。差异在 get_lines_info 带生产：Rust 产生空带
-        （im_res union 有白点但 Im1/Im2 掩码后空），C++ 不产生。
-      - **这是一个明确的 Rust get_lines_info bug**（跨视频复现：大/11 56600 + 大/13
-        走吧）。待查 get_lines_info 为何产生空带。
+      - C++ 段含 `11666-12465`（OCR="走吧"），Rust timeline 无此段。
+      - **get_lines_info 已对齐**（C++ SSAlgorithms.cpp:2179 与 Rust compare.rs:18 的
+        band 扫描 + 小带合并 + 近带合并逻辑一致）。
+      - **根因 = 段内容中屏孤立白点**：Rust `im_res` 在 331-339 有 1-3 孤立白点
+        （im1≈13、im2≈11，im∩ila 各留 1-2 点）→ get_lines_info 产生幽灵带 → compare2
+        空带 cmb=0 → val3=false → bf 每帧重置 → 段无法成段。C++ ImRES 该区干净
+        （只出 [623-672] 单带）。
+      - 这 1-3 点来自段内容 `im_int_s`（get_intersect_images 交集 + analyse_image_flat）
+        保留了 ~13 中屏背景像素（稳定 UI/图形），C++ 无。解码器 BGR 微差的又一处体现。
+      - 跨视频复现（大/11 56600 过度切分 + 大/13 走吧缺失）。待修方向：让 analyse/
+        get_lines_info 不把极小孤立白点成带，或对齐 C++ 段内容构造。
 
 ## 已修复（全部对齐 C++）
 
