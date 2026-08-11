@@ -343,6 +343,9 @@ pub fn compare_two_subs_optimal(
         filter_image(&mut ff1, ve1, w, h, p, &lb, &le, n);
         filter_image(&mut ff2, ve2, w, h, p, &lb, &le, n);
     }
+    // VideoSubFinder 在 FilterImage 后还有 filter_image（AnalyseImage 逐带过滤）。
+    filter_image_analyse(&mut ff1, w, h, p);
+    filter_image_analyse(&mut ff2, w, h, p);
 
     compare_two_subs(&ff1, ila1, ve1, ve1b, &ff2, ila2, ve2, w, h, p)
 }
@@ -374,6 +377,27 @@ fn filter_image(
         }
         if !changed {
             break;
+        }
+    }
+}
+
+/// VideoSubFinder `DifficultCompareTwoSubs2` 的 `filter_image`：对每个文字带裁剪子图，
+/// `AnalyseImage` 判定该带无文字则清空。这是 CompareTwoSubsOptimal 里被我们之前遗漏的一步
+/// （对比 SSAlgorithms.cpp 2323-2337）：若缺这一步，噪声带没被清掉，CompareTwoSubs 可能
+/// 误判字幕内容变化（bln=0）→ 字幕段被提前结束/不保存。
+fn filter_image_analyse(im_f: &mut [u8], w: usize, h: usize, p: &Params) {
+    let bands = get_lines_info(im_f, w, h, p.segh);
+    for (lb, le) in bands {
+        let hh = (le - lb + 1) as usize;
+        let sub: Vec<u8> = (lb as usize..=le as usize)
+            .flat_map(|y| im_f[y * w..y * w + w].to_vec())
+            .collect();
+        let arr = ndarray::Array2::from_shape_vec((hh, w), sub).expect("带子图尺寸");
+        if !crate::preprocess::analyse_image(&arr, p) {
+            // 该带无文字 → 清空。
+            for y in (lb as usize)..=(le as usize) {
+                im_f[y * w..y * w + w].iter_mut().for_each(|v| *v = 0);
+            }
         }
     }
 }
