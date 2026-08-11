@@ -205,12 +205,13 @@ C++ 的 `GetTransformedImage` 里这 3 个算子用 `run_in_parallel`，我们�
   段数 7→4 对齐 C++）；(2) sobel N-edge `up_l` 系数实为 10（C++ line 985
   `val=3*val1+10*val2`），不是 7——Rust 的 10 正确。
 
-### 决策：段尾 PTS 用旧句最后可见帧真实 PTS（正向，非 C++ 的 -1ms 近似）
+### 决策：段尾 PTS 用 C++ 语义 `PosForward[offset]-1`（实测更准，`5384414`）
 
-C++ 段尾 `et = PosForward[offset] - 1`（新句首帧 PTS - 1ms，SSAlgorithms.cpp:1815）；
-Rust 用 `frame(fn+offset-1).pos`（旧内容最后可见帧的真实 PTS，state.rs:778-785）。
-30fps 下差 ~1 帧（~33ms）。
+C++ 段尾 `et = PosForward[offset] - 1`（新句首帧 PTS - 1ms，SSAlgorithms.cpp:1815）。
+Rust 先试过「旧句最后可见帧真实 PTS」（state.rs 旧版，frame(fn+offset-1).pos），
+当时误判为「更贴真实段尾的正向决策」。**实测推翻**：改用 C++ 语义后，段尾 PTS 与 C++
+对齐到差 **1ms**（改前差 ~32ms / 1 帧）：
+  17533,20366 vs C++ 17533-20365；49967,52832 vs 49966-52832；53433,56066 vs 53433-56065。
+段数由 `ef`（帧索引）决定，与 `et` PTS 无关，故 52833 误保存段仍在（需另治）。
 
-**判定：正向决策**。Rust 取的是旧句真正最后显示帧的 PTS，更贴近真实段尾；C++ 的
--1ms 只是「新句首帧前一刻」的近似。间隔从 1ms 拉到 ~1 帧，只要 `et < 下一段 bt`
-（30fps 下恒成立）就不粘连。无副作用，保留 Rust 版本。
+**结论**：段尾 PTS 对齐 C++ 语义（`frame(fn+offset).pos - 1`），保留。
