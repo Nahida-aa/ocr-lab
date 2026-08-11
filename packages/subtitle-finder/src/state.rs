@@ -546,6 +546,7 @@ fn run_state_machine(
                 if bln {
                     found_sub = 1;
                     fn_ = fn_start;
+                    trace!(fn_start, "检测: 判定新字幕起点");
                     break;
                 } else {
                     if bln1 {
@@ -816,6 +817,7 @@ fn run_state_machine(
 
                     if ef - bf + 1 >= dl as i32 {
                         if bf != pbf {
+                            trace!(fn_, bf, ef, bt, et, "段结束: 保存段 (bf!=pbf)");
                             if filter::analize_for_sub_presence(&im_ne_s, &mut im_int_s, &im_y_s, w, h, p) == 1 {
                                 save_keyframe(&im_fs, &im_int_s, bt, et);
                             }
@@ -829,6 +831,7 @@ fn run_state_machine(
 
                 finded_prev = 0;
                 bf = -2;
+                trace!(fn_, "段结束: 已保存/跳过, bf 重置");
 
                 if fn_ > ef {
                     if fn_ - fn_start >= dl as i32 {
