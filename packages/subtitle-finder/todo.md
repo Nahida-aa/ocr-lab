@@ -15,11 +15,14 @@
       - filter_image_analyse 修了段内容误判，但 "你开窍..."段 start 仍 20033（应 17.5s）。
       - 根因：second_filtration 的 mpd（点密度）在 Any 下被我们执行（VideoSubFinder
         line 2014 `if (g_text_alignment != Any)` 跳过），清空字幕条带 → has_text 抖动。
-      - Any-skip（跳过 mpd）让 has_text 全 1（17-20.5s 稳定），但**连无字幕帧也判 1**，
-        状态机 15-24s 全丢。说明 VideoSubFinder 的 has_text 靠 `n_ne < mpn`（Any 下唯一
-        保留的检查）区分字幕/无字幕，我们 Any-skip 后可能 `n_ne<mpn` 未正确区分。
-      - 需对比：VideoSubFinder 在 Any 下的 has_text 序列（字幕区 1/无字幕区 0）
-        vs 我们原始（字幕区抖动）/ Any-skip（全 1）。
+      - **已用 VideoSubFinder 重编输出 has_text（16.5-21s，163 帧）确认其模式**：
+        字幕区（17.3-20.4s "你开窍..."）**稳定 1**；段边界无字幕区 fn=23(17267ms)、
+        fn=116-126(20367-20700ms) 为 0。
+      - 我们差异：原始版字幕区抖动（部分 0）→ start 偏晚；Any-skip 全 1（连段边界 0
+        也没了）→ 状态机段边界错乱、丢段。
+      - **需对齐 VideoSubFinder 的 has_text = 字幕区稳定 1 + 段边界 0**。确认我们
+        Any-skip 在段边界（20367-20700ms）为何判 1（是 color_filtration n==0 还是
+        n_ne<mpn 未触发）。
 
 - [ ] **完整对比状态机 FastSearchSubtitles vs run_state_machine**
       - 重点：bln（GetIntersectImages）/ cur_pos-prev_pos 段边界、AnalizeImageForSubPresence
