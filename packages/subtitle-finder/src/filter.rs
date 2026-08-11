@@ -13,6 +13,7 @@
 
 use super::imgops;
 use super::params::Params;
+use tracing::trace;
 
 /// 一个连通域（8 邻接）及其边界框。
 struct Figure {
@@ -515,6 +516,10 @@ pub(crate) fn second_filtration(
                         }
                     }
                     if n_ne < mpn {
+                        trace!(
+                            ia = ia / w as i32, ln, n_ne, mpn, s, mpned = mpned * s as f32,
+                            "second_filtration: nNE < mpn 移除所有子段"
+                        );
                         // 移除所有子段。
                         for y in 0..segh {
                             let start = (ia as usize) + y * w + seg_lb[0] as usize;
