@@ -13,6 +13,10 @@
         与 run_state_machine（state.rs），重点：
         - bln（GetIntersectImages）与 cur_pos/prev_pos 的段边界判定
         - AnalizeImageForSubPresence 保存判定
+        - **CompareTwoSubsOptimal（段内容变化判定 bln）**：其 DifficultCompareTwoSubs2
+          分支（compare.rs 343-344）内部调用 `filter_image` → `second_filtration`。
+          若 second_filtration 与 VideoSubFinder 有差异（如 Any-skip），会误判段内容
+          变化（bln=0）→ 段提前结束/不保存（帧 526 段的候选根因）。
         - finded_prev / bf / pbf 交互
       - 参考已定位的 Any-skip 修复（跳过 second_filtration 对齐模式段清理，line 2014
         起 `if (g_text_alignment != Any)`），但该修复让 has_text 正确却暴露了状态机问题。
