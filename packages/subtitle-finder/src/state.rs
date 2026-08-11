@@ -263,37 +263,44 @@ pub(crate) fn get_intersect_images(
     let h = cache.h();
     let dl = p.dl;
 
-    // 收集 [fn, fn+DL-1] 中**有字幕**（has_text）的帧（只存引用切片，不整帧拷贝）。
-    // 第一帧越界 → 真·无数据（返回 None）。只对 has_text=1 的帧做交集：空字幕帧
-    // （has_text=0）不参与，避免把交集清空导致段提前结束（C++ 异步下同样能看到
-    // 段延伸到最后一个有字幕帧）。全部无字幕 → bln=false。
+    // 对齐 C++ `AddIntersectImagesTask`（SSAlgorithms.cpp:820-838）：遍历 [fn, fn+DL-1]，
+    // 只要有一帧 has_text=0 → bln=0（立即短路），pImInt 只取第一帧（不交集）。全部
+    // has_text=1 才做交集 + AnalyseImage。之前 Rust 跳过了 has_text=0 帧，只对
+    // has_text=1 帧交集 → 残留帧（has_text 交替 1/0）时可能误判有字幕 → 段过度切分。
     let f0 = try_frame(cache, fn_ as i32)?;
-    let mut ims: Vec<&[u8]> = Vec::with_capacity(dl);
-    let mut imys: Vec<&[u16]> = Vec::with_capacity(dl);
-    if f0.has_text {
-        ims.push(&f0.im);
-        imys.push(&f0.y);
+    if !f0.has_text {
+        // 第一帧无字幕 → bln=false（C++ 循环第一个 i=0 就 bln&=0）。
+        return Some((f0.im.clone(), f0.y.clone(), false));
     }
+    // 检查 [fn, fn+DL-1] 是否全部 has_text=1。
     for i in 1..dl {
         match try_frame(cache, (fn_ + i) as i32) {
-            Some(f) if f.has_text => {
-                ims.push(&f.im);
-                imys.push(&f.y);
+            Some(f) if f.has_text => {}
+            Some(_) => {
+                // 有 has_text=0 帧 → bln=false，pImInt = 第一帧（不交集）。
+                return Some((f0.im.clone(), f0.y.clone(), false));
             }
-            Some(_) => {} // 无字幕帧跳过
             None => break,
         }
     }
-    if ims.is_empty() {
-        // 窗口内无字幕帧 → bln=false（段结束）。
-        return Some((vec![0u8; w * h], vec![0u16; w * h], false));
+
+    // 全部 has_text=1 → 交集 [fn, fn+DL-1]。
+    let mut im_int = f0.im.clone();
+    let mut y_int = f0.y.clone();
+    let mut ims: Vec<&[u8]> = Vec::with_capacity(dl);
+    let mut imys: Vec<&[u16]> = Vec::with_capacity(dl);
+    ims.push(&f0.im);
+    imys.push(&f0.y);
+    for i in 1..dl {
+        match try_frame(cache, (fn_ + i) as i32) {
+            Some(f) => {
+                ims.push(&f.im);
+                imys.push(&f.y);
+            }
+            None => break,
+        }
     }
-
-    // 用第一帧数据作为工作缓冲，就地与其余帧相交（避免重复整帧拷贝）。
-    let mut im_int = ims[0].to_vec();
     intersect_images_range(&mut im_int, &ims, 1, ims.len() - 1, w, h);
-
-    let mut y_int = imys[0].to_vec();
     intersect_y_images_range(&mut y_int, &imys, 1, imys.len() - 1, p);
 
     let bln = analyse_image_flat(&im_int, Some(&y_int), w, h, p);
