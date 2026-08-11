@@ -42,7 +42,9 @@
 - [ ] **状态机剩余对齐（段 25 vs C++ 22）**
       - 末尾 Rust 多 56600+ 段（C++ 测试截断在 56s，非真差异）。
       - 53033 处 Rust 多一段、52833-53033（C++ 无）。
-      - 段尾 PTS：C++ 用 `PosForward[offset]-1`，Rust 用实际末帧 PTS，差 ±33ms。
+      - ✅ 段尾 PTS 差异已定性为**正向决策**（见 DESIGN.md）：Rust 用旧句最后可见帧
+        真实 PTS，比 C++ 的 `PosForward[offset]-1` 更贴真实段尾，间隔从 1ms 拉到
+        ~1 帧且不粘连，保留 Rust 版本，不再追平。
       - 确认 finded_prev / pbf / cmp_prev 的段合并逻辑是否与 C++ 完全一致。
 
 ## 背景 / 已排除
