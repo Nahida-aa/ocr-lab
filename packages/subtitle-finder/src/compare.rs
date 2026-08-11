@@ -302,6 +302,11 @@ pub fn compare_two_subs(
         let wc_im1 = im1_c.iter().filter(|&&v| v == 255).count();
         let wc_im2 = im2_c.iter().filter(|&&v| v == 255).count();
         let wc_ilaint = ila_int.iter().filter(|&&v| v != 0).count();
+        let bands_str: Vec<String> = lb.iter().zip(le.iter()).map(|(a, b)| format!("{}-{}", a, b)).collect();
+        debug!(
+            wc_im1, wc_im2, wc_ilaint, ln, bands = bands_str.join(","),
+            "compare2: 带列表"
+        );
         let (v3, dif3) = compare_ila(&lb, &le, ln, w, ilaple, &im2_c, &im1_c);
         debug!(
             wc_im1, wc_im2, wc_ilaint, ln, v3, dif3,
