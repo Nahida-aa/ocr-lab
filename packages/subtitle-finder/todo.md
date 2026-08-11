@@ -2,29 +2,30 @@
 
 > 目标：完整复刻 VideoSubFinder，功能不丢。当前已知差异见 `DESIGN.md`「已知局限」。
 
+## 已修复
+
+- [x] **CompareTwoSubsOptimal 补 AnalyseImage 带过滤**（`832df55`）
+      DifficultCompareTwoSubs2 在 FilterImage(second_filtration)后还有 filter_image
+      （逐带裁剪子图用 AnalyseImage 判定无文字则清空）。之前 Rust 漏了这步 → 误判段
+      内容变化（bln=0）→ 段提前结束/不保存。加后段数恢复正常（36 段，不再 15-24s 全丢）。
+
 ## 待办
 
-- [ ] **完整对比状态机 FastSearchSubtitles vs run_state_machine**
-      - 问题：Any-skip 修复后 has_text 在 17-20.5s 稳定为 1（符合 VideoSubFinder），
-        但状态机 detect 到帧 526（17.5s，"你开窍..."段起始）后未保存该段，
-        15-24s 段全丢；相邻段（494"所以"、621"而你自己..."）正常。
-      - 已定位：问题在 run_state_machine 的 track 段结束/保存逻辑，非 second_filtration。
-      - 需逐块对比 VideoSubFinder FastSearchSubtitles（SSAlgorithms.cpp 1413-2200）
-        与 run_state_machine（state.rs），重点：
-        - bln（GetIntersectImages）与 cur_pos/prev_pos 的段边界判定
-        - AnalizeImageForSubPresence 保存判定
-        - **CompareTwoSubsOptimal（段内容变化判定 bln）**：其 DifficultCompareTwoSubs2
-          分支（compare.rs 343-344）内部调用 `filter_image` → `second_filtration`。
-          若 second_filtration 与 VideoSubFinder 有差异（如 Any-skip），会误判段内容
-          变化（bln=0）→ 段提前结束/不保存（帧 526 段的候选根因）。
-        - finded_prev / bf / pbf 交互
-      - 参考已定位的 Any-skip 修复（跳过 second_filtration 对齐模式段清理，line 2014
-        起 `if (g_text_alignment != Any)`），但该修复让 has_text 正确却暴露了状态机问题。
+- [ ] **has_text 不稳定 → "你开窍..."段 start 偏晚**（仍存在）
+      - filter_image_analyse 修了段内容误判，但 "你开窍..."段 start 仍 20033（应 17.5s）。
+      - 根因：second_filtration 的 mpd（点密度）在 Any 下被我们执行（VideoSubFinder
+        line 2014 `if (g_text_alignment != Any)` 跳过），清空字幕条带 → has_text 抖动。
+      - Any-skip（跳过 mpd）让 has_text 全 1（17-20.5s 稳定），但**连无字幕帧也判 1**，
+        状态机 15-24s 全丢。说明 VideoSubFinder 的 has_text 靠 `n_ne < mpn`（Any 下唯一
+        保留的检查）区分字幕/无字幕，我们 Any-skip 后可能 `n_ne<mpn` 未正确区分。
+      - 需对比：VideoSubFinder 在 Any 下的 has_text 序列（字幕区 1/无字幕区 0）
+        vs 我们原始（字幕区抖动）/ Any-skip（全 1）。
 
-- [ ] **second_filtration 对齐确认**（当前 Any-skip 会丢段，需确认 VideoSubFinder
-      在 Any 下到底跳过哪些清理，避免误跳过）
-- [ ] **sobel N-edge up_l 系数**（我们 10 vs VideoSubFinder 7），确认是否与状态机
-      差异叠加
+- [ ] **完整对比状态机 FastSearchSubtitles vs run_state_machine**
+      - 重点：bln（GetIntersectImages）/ cur_pos-prev_pos 段边界、AnalizeImageForSubPresence
+        保存判定、finded_prev / bf / pbf 交互。
+
+- [ ] **sobel N-edge up_l 系数**（我们 10 vs VideoSubFinder 7），确认与状态机差异叠加。
 
 ## 背景 / 已排除
 
