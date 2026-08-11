@@ -192,3 +192,19 @@ C++ 的 `GetTransformedImage` 里这 3 个算子用 `run_in_parallel`，我们�
 
 **剩余热点**（并行后）：filter(连通域 BFS) 与 im_ff(并行) 各 ~40%。连通域 BFS 是
 8 邻接逐像素串行，难进一步并行/SIMD，收益递减。
+
+### 已知局限
+
+- **长字幕 `has_text` 检测不稳定（段起始时间错乱）**：对某些长字幕（如
+  "你开窍后获得了它的斩击能力"）逐帧 `has_text` 在 1/0 间抖动——字幕完整显示
+  但 `second_filtration` 在部分帧误判为无字幕。后果：detect 阶段无法稳定捕获字幕
+  起始，段被 `has_text=0` 间隙打断，记录的 `start_ms` 比实际晚数秒、漏掉字幕前段
+  （实测 2.3s）。其他字幕（短句）`has_text` 稳定，未受影响。
+  - 定位：`second_filtration`（`filter.rs`）的 `mpned` 检查里
+    `if n_ne < mpn`（`mpn=50`）把长字幕的窄条带过度清空。逐 `segh=3` 条带
+    时，长字幕在字缝/笔画碎片区的水平段边缘点数 `n_ne` 常仅 23-35（<50），
+    触发整条带清空 → 该帧 `has_text=0`。同一句字幕逐帧抖动（边缘点够/不够）。
+    `color_filtration` 正常（`n_bands` 2-4），问题只在 `second_filtration`。
+  - 修复候选：调低 `mpn`（50→~20）或 `mpned`。需实验验证（改后重跑对比
+    17700 帧是否恢复 + 是否有回归），有回归风险。
+  - 状态：已定位（`n_ne < mpn`），待调参实验（见根 `todo.md`）。

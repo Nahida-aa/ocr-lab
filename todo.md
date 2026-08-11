@@ -12,6 +12,10 @@
 - [x] 修正 README/ROADMAP 里 subtitle-ocr「待实现」过期描述 → 已实现
 - [ ] v3 识别掉字调参（扩张比例 / rec 输入高度 / 双线性），目标不丢字
       （环境变量 `OCR_EXPAND` 可覆盖扩张比例调试）
+- [ ] subtitle-finder 长字幕 has_text 不稳定（段起始偏晚数秒）：
+      `second_filtration` 的 `mpned` 检查 `n_ne < mpn(50)` 清空长字幕窄条带
+      → 需调低 mpn/mpned 实验验证（有回归风险）
+      （详见 `packages/subtitle-finder/DESIGN.md`「已知局限」）
 - [ ] 补 v6 rec 预处理（当前占位 0.5/0.5，识别不准，标记实验性）
 - [ ] cls 方向分类接入（已加载未使用，旋转文本待支持）
 - [ ] 三实现横比基准：`tests/bench/subtitle-ocr` 的 `bin/bench.rs` 性能占位补实
