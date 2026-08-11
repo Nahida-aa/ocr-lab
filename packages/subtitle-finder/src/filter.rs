@@ -8,8 +8,10 @@
 //! - `RestoreStillExistLines`：按行邻域恢复。
 //! - `ExtendImFWithDataFromImNF`：用边缘图扩展文字行。
 //!
-//! `g_text_alignment` 默认为 `Any`，故 `SecondFiltration` 中对齐相关分支（Center/Left/Right）
-//! 不生效；本实现只复刻 `Any` 路径。
+//! `g_text_alignment` 在 VideoSubFinder CLI 默认是 `Center`（IPAlgorithms.cpp:170，
+//! cli_main.cpp 未覆写）。故 `SecondFiltration` 中对齐相关分支（Center 的段合并/中心
+//! 偏移/mpd/mpned）都应生效。本实现实现 **Center** 路径（非 Any）。
+//! ⚠️ 旧注释曾写"只复刻 Any 路径"，与代码不符（代码含 real_im_x_center 等 Center 逻辑），已更正。
 
 use super::imgops;
 use super::params::Params;
