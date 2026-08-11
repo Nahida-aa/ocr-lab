@@ -87,6 +87,13 @@
       - 跨视频复现（大/11 56600 过度切分 + 大/13 走吧缺失）。待修方向：对齐 C++ 的
         get_intersect_images 交集 / analyse_image_flat 段内容构造（为何 C++ 保留
         331-339 少于 Rust），或让 compare2/get_lines_info 容错极小孤立白点带。
+      - **✅ bgr_to_yuv 改用 OpenCV cvtColor（4443773）**：Rust 浮点 BGR2YUV 的 V 通道
+        与 OpenCV 整数实现差 ±1（(331,560) V=131 vs 132）→ get_im_ff 阈值边缘像素
+        FF 判定不同 → im∩ILA 重叠 4 vs 0。改用 cvtColor 后 FF 对齐、get_intersect_images
+        的 im∩ILA 331-339 重叠=0（同 C++）。**但仍未完全解决**：大/13 走吧段、
+        大/11 56600 仍异常。剩余差异：fn=351 的 im2∩ila2（当前帧）331-339 仍有
+        5 白点（ff2_noise=5），im_res 331-339 带仍在（cmb=0）。即使 YUV 完全对齐，
+        交集/ILA 交叠后仍有 ~5 像素差异。待继续追 fn=351 交集后 im∩y_int 为何 C++ 0。
 
 ## 已修复（全部对齐 C++）
 
