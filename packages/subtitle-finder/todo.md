@@ -69,9 +69,15 @@
         空带 cmb=0 → val3=false → bf 每帧重置 → 段无法成段。C++ ImRES 该区干净
         （只出 [623-672] 单带）。
       - 这 1-3 点来自段内容 `im_int_s`（get_intersect_images 交集 + analyse_image_flat）
-        保留了 ~13 中屏背景像素（稳定 UI/图形），C++ 无。解码器 BGR 微差的又一处体现。
-      - 跨视频复现（大/11 56600 过度切分 + 大/13 走吧缺失）。待修方向：让 analyse/
-        get_lines_info 不把极小孤立白点成带，或对齐 C++ 段内容构造。
+        保留了 ~13 中屏背景像素（稳定 UI/图形），C++ 无。
+      - **❌ 解码器色彩假设已证伪（Step0 实验）**：bt601 vs bt709 的 BGR 42.94% 像素
+        差 ±8，但喂给 `get_transformed_image` 后 331-339 白点几乎一致（235 vs 225）、
+        bands 完全相同（都含 282-354/360-423）。幽灵带**不是** decoder 色彩差异导致，
+        OpenCV 改写不解决问题（已放弃该方案）。注意 331-339 单帧白点 235 但段内容
+        (交集) 只 13——幽灵带是多帧交集/analyse_image_flat 段内容构造问题。
+      - 跨视频复现（大/11 56600 过度切分 + 大/13 走吧缺失）。待修方向：对齐 C++ 的
+        get_intersect_images 交集 / analyse_image_flat 段内容构造（为何 C++ 保留
+        331-339 少于 Rust），或让 compare2/get_lines_info 容错极小孤立白点带。
 
 ## 已修复（全部对齐 C++）
 
