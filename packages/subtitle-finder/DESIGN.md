@@ -211,7 +211,16 @@ C++ 的 `GetTransformedImage` 里这 3 个算子用 `run_in_parallel`，我们�
       `&& g_text_alignment != Any`）：无效，`20033` 未变。
     - **sobel N-edge up_l 系数 10→7**（对齐 VideoSubFinder FastImprovedSobelNEdge
       `3*(up-up_l+left-right-down)+10*(up_l-dn_r)`，up_l 系数实为 7）：段更碎
-      （36→57 段），更糟。说明 has_text 更敏感但段跟踪把完整字幕切成碎片，
-      差异可能在 has_text→段跟踪，而非 sobel 本身。
-  - 状态：已定位到 has_text 不稳定 + sobel 系数差异，但修复未对齐
-    VideoSubFinder 的"完整段"行为，需深挖 has_text→段跟踪（见根 `todo.md`）。
+      （36→57 段），更糟。
+    - **Any 模式跳过段合并/中心偏移/mpd**（对齐 VideoSubFinder line 2014
+      `if (g_text_alignment != Any)`，本实现固定 Any）：17700 帧 has_text 0→1、
+      17-20.5s has_text 稳定为 1（符合 VideoSubFinder），**但完整跑 15-24s 段全丢**
+      （49 段，0-13s/24-58s 正常）。
+  - **重大定位**：Any-skip 修复后 has_text 正确（17-20.5s 稳定 1），但状态机
+    detect 到帧 526（17.5s，"你开窍..."段起始）后**未保存该段**；相邻段
+    （494"所以"、621"而你自己..."）正常保存。**问题在 `run_state_machine` 的
+    track 段结束/保存逻辑**（`ef-bf+1 >= dl` 或 `analize_for_sub_presence` 判定），
+    不是 second_filtration / has_text。需对比 VideoSubFinder FastSearchSubtitles
+    的段保存逻辑定位差异。
+  - 状态：已定位到状态机 track 段保存失败（见根 `todo.md`），待深入
+    run_state_machine 段结束逻辑。
