@@ -45,9 +45,13 @@
       - C++ 把 56600-58032（"你现在有两个选择"）当一整段；Rust 在 57100 处切成两段。
       - OCR 确认两端内容相同（都是"你现在有两个选择"）。
       - has_text 全 1（1698-1741 帧，isa_wc≈25000）无空隙 → **非 has_text 差异**。
-      - 是 `compare_two_subs_optimal` 在帧 ~1712（pos 57067）**误判内容变化**（角色
-        运动致像素差超 veple 阈值），而 C++ 用 finded_prev/pbf 合并逻辑保留为一段。
-      - 需查 C++ 为何此处不切（finded_prev/cmp_prev/pbf 合并 vs compare 判定）。
+      - **finded_prev 合并逻辑已查：Rust 与 C++ 完全一致**（内容变化分支 pbf/pbt/
+        finded_prev，else-if 分支 `compare(ImIntSP,ImIntS)` 合并回 pbf）。merge 机制
+        Rust 有且同构。
+      - 差异在 merge 点 `compare(im_int_sp, im_int_s)` 结果：Rust 判"不同"（不合并），
+        C++ 判"相同"（合并）→ 是 compare 对角色运动的敏感性边界（同前几次过度切分
+        的根因），非状态机结构 bug。两端同文本，分两段不影响字幕捕获，仅多一个
+        重复关键帧。
 
 ## 已修复（全部对齐 C++）
 
