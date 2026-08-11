@@ -40,18 +40,17 @@
 ## 待办
 
 - [ ] **末尾段 56600-58032 被 Rust 切成 56600-57033 + 57100-58000**（C++ 一整段）
-      - 全程对比（C++ end=-1）：前 22 段完全对齐（段尾差 1ms 是 PTS 虚推已修），
-        唯一结构差异在**末尾**。
+      - 全程对比（C++ end=-1）：前 22 段完全对齐，唯一结构差异在**末尾**。
       - C++ 把 56600-58032（"你现在有两个选择"）当一整段；Rust 在 57100 处切成两段。
-      - OCR 确认两端内容相同（都是"你现在有两个选择"）。has_text 全 1 无空隙。
-      - **finded_prev 合并逻辑已查：Rust 与 C++ 完全一致**（merge 机制同构）。
-      - **val3 是差异点（已定位）**：Rust merge 点 `val1=true val2=true val3=false`
-        （文本相同但 ILA 比较失败）；C++ 末尾 compare 无 `val1=1 val2=1 val3=0`，
-        只有 `val1=0 val2=0 val3=0`（全失败）或 `val1=1 val2=1 val3=1`（全过）。
-        → **Rust 的 val3（ILA 比较）比 C++ 更严格**，在 val1/val2 通过时仍判 val3=0。
-      - val3 = compare2(Im2, Im1)，Im2 = dilate(Im1∩ILAInt)∩Im1∩VE2，ILAInt=ILA1∩Y ILA2。
-        compare2/intersect_y_images 阈值已对齐，差异在 ILA 掩码后的像素（cmb 计数）。
-        需进一步对比 merge 点 Im1/Im2/ILAInt 的像素，定位 Rust 为何 cmb 更小。
+      - **根因已定位到 val3 输入状态不一致**：失败 compare 的 `raw_im1=0`（im1 内容空）
+        但 `raw_ve1≈22k`（边图非空）→ im1_c=0 → val3=false → 误判内容变化 → 切段。
+      - **关键异常**：im1（im_int_s/SP 存储的段内容）为空，但 ve1（im_ne_s 边图）非空。
+        C++ 同点 `Im1` 白=8003（非空）。这是存储状态不一致——内容空、边图非空。
+      - **高度怀疑是 `get_intersect_images` 短路修复（760ac32）的副作用**：短路在
+        has_text=0 帧时返回 `(f0.im, f0.y, false)`（f0.im 为空），可能在段边界把
+        im_int_s 赋成空，而 im_ne_s 保留真实边图。需验证：
+        临时恢复 skip 行为看 56600 是否恢复（但会带回 52833）——需要更精确的
+        段边界 im_int_s 赋值处理，而非简单回退。
 
 ## 已修复（全部对齐 C++）
 

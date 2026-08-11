@@ -273,6 +273,11 @@ pub fn compare_two_subs(
         let ila1 = ila1.unwrap();
         let ila2 = ila2.unwrap();
         let ve1b = ve1b.unwrap_or(ve1);
+        // val3 输入原始白点（诊断 ILA 清空原因）
+        let raw_im1 = im1.iter().filter(|&&v| v == 255).count();
+        let raw_ila1 = ila1.iter().filter(|&&v| v != 0).count();
+        let raw_ve1 = ve1.iter().filter(|&&v| v == 255).count();
+        let ff1_wc = im_ff1.iter().filter(|&&v| v == 255).count();
         // Im1 = ImFF1 ∩ VE1（∩ VE12 if different）
         let mut im1_c = im_ff1.clone();
         imgops::intersect_two_images_inplace(&mut im1_c, ve1, 0u8);
@@ -297,6 +302,7 @@ pub fn compare_two_subs(
         let (v3, dif3) = compare_ila(&lb, &le, ln, w, ilaple, &im2_c, &im1_c);
         debug!(
             wc_im1, wc_im2, wc_ilaint, ln, v3, dif3,
+            raw_im1, raw_ila1, raw_ve1, ff1_wc,
             "compare2: ILA 掩码白点数"
         );
         v3

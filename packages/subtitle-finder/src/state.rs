@@ -701,6 +701,12 @@ fn run_state_machine(
 
                         if pef - pbf + 1 >= dl as i32 {
                             if !((finded_prev == 1) && (cmp_prev == 1)) {
+                                trace!(
+                                    fn_, bf, finded_prev, cmp_prev,
+                                    s_isa = im_int_s.iter().filter(|&&v| v == 255).count(),
+                                    s_y = im_y_s.iter().filter(|&&v| v != 0).count(),
+                                    "内容变化: 存 im_int_sp = im_int_s"
+                                );
                                 im_int_sp = im_int_s.clone();
                                 im_fsp = im_fs.clone();
                                 im_ne_sp = im_ne_s.clone();
