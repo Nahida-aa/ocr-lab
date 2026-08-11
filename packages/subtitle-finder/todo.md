@@ -39,29 +39,28 @@
 
 ## 待办
 
-- [ ] **状态机剩余对齐（段 25 vs C++ 22）**
-      - 末尾 Rust 多 56600+ 段（C++ 测试截断在 56s，非真差异）。
-      - **53033 处 Rust 多一段、52833-53066**（C++ 无）：
-        - 帧内容对比：`49967_52800.png` = "毁灭赋能概率实在太小了"（同 C++ 的
-          `49966-52832`），`52833_53033.png` = 纯人物背景、无字幕。
-        - **✅ 已重建 C++ 并加 has_text 输出确认（关键结论）**：C++ 与 Rust 的 has_text
-          **逐帧一致**（残留帧 1586-1589 / 1593-1595 两边都是 has_text=1，isa_wc≈2000-3400）。
-          即 **has_text 算法没差异**——残影帧两边都判 1。
-        - **真正的差异在状态机分段**：C++ 对残留帧（1586-1602）**不切段**（49966-52832
-          直接跳到 53433 下一句）；Rust 在 ~1585 处检测循环误判新字幕起点 → 切出
-          52833-53066。C++ has_text fn=1601-1602 为 1（Rust 为 0，~2 帧偏移）。
-        - 需查 Rust 检测循环为何对残留帧判定"新字幕"（C++ 不判）——大概率是
-          get_intersect_images 的 [fn,fn+DL-1] 交集 + AnalyseImage 对残留帧通过，
-          或检测重启 fn_start 的步进差异。
-      - ✅ 段尾 PTS 当前为 C++ 语义 `PosForward[offset]-1`（`5384414`），边界与 C++ 差
-        1ms。**注意：这不是"更准"，是"更贴 C++ 输出"**——它给段尾虚推 ~32ms（落在字幕
-        已消失后那帧）。逻辑上更准的是真实末帧 PTS（frame(fn+offset-1).pos）。是否回退
-        待定（倾向回退，见 DESIGN.md「段尾 PTS」）。
-      - 确认 finded_prev / pbf / cmp_prev 的段合并逻辑是否与 C++ 完全一致。
+- [ ] **末尾段 56600-58032 被 Rust 切成 56600-57033 + 57100-58000**（C++ 一整段）
+      - 全程对比（C++ end=-1）：前 22 段完全对齐（段尾差 1ms 是 PTS 虚推已修），
+        唯一结构差异在**末尾**。
+      - C++ 把 56600-58032（"你现在有两个选择"）当一整段；Rust 在 57100 处切成两段。
+      - OCR 确认两端内容相同（都是"你现在有两个选择"）。
+      - has_text 全 1（1698-1741 帧，isa_wc≈25000）无空隙 → **非 has_text 差异**。
+      - 是 `compare_two_subs_optimal` 在帧 ~1712（pos 57067）**误判内容变化**（角色
+        运动致像素差超 veple 阈值），而 C++ 用 finded_prev/pbf 合并逻辑保留为一段。
+      - 需查 C++ 为何此处不切（finded_prev/cmp_prev/pbf 合并 vs compare 判定）。
+
+## 已修复（全部对齐 C++）
+
+- ✅ get_intersect_images 短路（`760ac32`）：C++ 任一 has_text=0 帧 → bln=0。消除 52833 误段。
+- ✅ 段尾 offset 跑满=DL-1（`e96c7d4`）：C++ for 循环变量跑满后 offset=5。段尾恢复。
+- ✅ 段尾 et/pet 真实末帧 PTS（`f31825d`）：字幕最后可见帧 frame(fn+offset-1).pos，
+  不虚推。你开窍段尾 20333（OCR 证实字幕 20333 在、20365 无）。
+- ✅ 前 22 段结构 + 段尾 PTS 对齐 C++（差 ≤1ms 为取整）。
 
 ## 背景 / 已排除
 
 - 参数与 VideoSubFinder 完全一致（mpn=50 / mnthr=0.3 / segh=3 等）
 - GetImNE / ApplyModerateThreshold / sobel / color_filtration 结构与 VideoSubFinder 一致
+- has_text 逐帧一致（重建 C++ 确认）
 - 之前试过 mpn 调低 / mpned Any 跳过 / sobel up_l 改 7 / Any-skip 对齐清理，均基于
   g_text_alignment=Any 的错误前提（实际是 Center），无效/回归。
