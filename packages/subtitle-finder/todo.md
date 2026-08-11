@@ -50,15 +50,15 @@
         fast compare 的 Im1=8003（ImIntSP ∩ ILA1 ∩ VE1）非空 → val3=1 → 判"相同"
         → 不进入 Difficult。Rust 的 fast compare 在 merge 点 `val1=true val2=true
         val3=false` → 判"changed" → 进入 Difficult → 被 second_filtration 清空。
-      - **精确根因（fn=1712 tracking compare val3）**：compare2 在带 k=0 (rows 367-375)
-        `cmb=0`（dif1=0 dif2=0 cmb=0）→ val3=false。**该带 b_im1=0 b_im2=0**（Im1/Im2
-        都空）→ 是 get_lines_info 产生的"幽灵带"。带列表：fast compare bands="355-415,
-        612-676"，Difficult bands="371-397"（wc_im1=0）。im_res(union) 有白点→带存在，
-        但 Im1(im1∩ila1∩ve1) 经 ILA/边掩码后此带全空。C++ 同 fn Im1≈8667/8578 但 val3
-        通过→无此带或有内容。嫌疑：get_lines_info 带生产 或 ve1 边掩码此带清空。
-      - **影响评估**：这是 23 段里唯一结构差异，两端同文本，仅多一个重复关键帧。
-        深挖成本高（需对比 C++ GetLinesInfo 带列表/边掩码），收益小。用户认可"够用"。
-      - 假设证伪记录：get_intersect_images 短路、second_filtration、decoder 均非差异。
+      - **带列表对比（C++ 加 band dump）**：fn=1712 附近 fast bands，C++ `[391-426][616-676]`
+        / `[404-425][616-673]`（首带 ~391-449），Rust `355-415, 612-676`（首带 ~355）。
+        **带边界显著不同（偏移 ~36-50 行）** → im_res(union of ILA-masked content) 在
+        行级不同 → get_lines_info 带不同 → Rust compare2 在某带遇空（cmb=0）→ val3=false。
+        带差异源于 im1/im2/ila 的行级内容差异（decoder BGR→Y→ILA 微差）。
+      - **影响评估**：23 段唯一结构差异，两端同文本，仅多一个重复关键帧，深挖成本高
+        收益小，用户认可"够用"。
+      - 假设证伪记录：get_intersect_images 短路、second_filtration、decoder(second_filtration
+        层面) 均非差异；带生产层面 im_res 行级差异是最终定位。
 
 ## 已修复（全部对齐 C++）
 
