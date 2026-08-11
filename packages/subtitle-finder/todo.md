@@ -26,6 +26,10 @@
       - **段边界 has_text 差异**：VideoSubFinder 在"你开窍..."结束后 20367ms 立即 0
         （连续 11 帧）；我们 Any-skip 20367-20633 仍 1、20667 才 0（晚 ~300ms）。
         → 段 end 偏晚。需确认我们 20367-20633 帧为何判 1。
+      - **color_filtration 段边界差异**：20367-20600ms 我们 color_filtration 找到 n=1
+        文字带 → has_text=1；VideoSubFinder 同帧 has_text=0。差异可能在 color_filtration
+        （我们误判无字幕帧的残影/背景为文字带）或 second_filtration（未移除该 n=1 带）。
+        需对比 VideoSubFinder 同帧的 color_filtration n 定位。
 
 - [ ] **完整对比状态机 FastSearchSubtitles vs run_state_machine**
       - 重点：bln（GetIntersectImages）/ cur_pos-prev_pos 段边界、AnalizeImageForSubPresence
