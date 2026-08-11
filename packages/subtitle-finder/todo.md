@@ -42,15 +42,17 @@
 - [ ] **末尾段 56600-58032 被 Rust 切成 56600-57033 + 57100-58000**（C++ 一整段）
       - 全程对比（C++ end=-1）：前 22 段完全对齐，唯一结构差异在**末尾**。
       - C++ 把 56600-58032（"你现在有两个选择"）当一整段；Rust 在 57100 处切成两段。
-      - **严格验证受阻（CPP_SF_NNE dump 被混杂）**：C++ SecondFiltration 的 nNE<mpn
-        清空遍布很多行（0-440，共 33156 条），是**主流水线** has_text 判定的正常现象，
-        无法单独隔离 compare 路径（DifficultCompareTwoSubs2 的 FilterImage）对 rows
-        371-434 的行为。Rust trace12 的 rows 371-434 nNE=7-49 来自 compare 路径。
-      - **已确认**：Rust/C++ 的 second_filtration 逻辑一致（都清 nNE<mpn 带），差异在
-        compare 路径的具体输入（band lb/le 或 im_ne 或 clear_image）。
-      - 需给 C++ FilterImage 加"是否来自 DifficultCompareTwoSubs2"标记，隔离 compare
-        路径的 nNE。此前"decoder 差异"结论**未证实**。
-      - 假设证伪记录：get_intersect_images 短路非 56600 原因（skip 验证）。
+      - **决定性发现（CPP_SF_COMPARE 隔离 compare 路径）**：C++ 的 compare 路径
+        SecondFiltration 在 rows 371-434 也大量清空（5060 条 nNE<mpn，nNE 0-49），
+        与 Rust **完全一致** → **second_filtration 不是差异，decoder 也不是**（两边
+        nNE 都 < 50）。
+      - **真正的差异在 fast `compare_two_subs` 的 val3（ILA 比较）**：C++ merge 时
+        fast compare 的 Im1=8003（ImIntSP ∩ ILA1 ∩ VE1）非空 → val3=1 → 判"相同"
+        → 不进入 Difficult。Rust 的 fast compare 在 merge 点 `val1=true val2=true
+        val3=false` → 判"changed" → 进入 Difficult → 被 second_filtration 清空。
+      - 需对比 Rust fast compare 的 Im1（im_int_sp ∩ im_y_sp ∩ im_ne_sp）白点 vs
+        C++ 8003。val3 = compare2(Im2, Im1)，差异可能在 im_y_sp（ILA）或 im_ne_sp。
+      - 假设证伪记录：get_intersect_images 短路、second_filtration、decoder 均非差异。
 
 ## 已修复（全部对齐 C++）
 
