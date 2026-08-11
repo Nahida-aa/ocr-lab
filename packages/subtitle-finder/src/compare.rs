@@ -339,6 +339,15 @@ pub fn compare_two_subs_optimal(
     let n = lb.len();
     let mut ff1 = im1.to_vec();
     let mut ff2 = im2.to_vec();
+    // C++ DifficultCompareTwoSubs2（SSAlgorithms.cpp:2313-2326）在 FilterImage 前先把
+    // ImFF1/ImFF2 与各自 ILA 图求交（时间掩码），再 FilterImage。Rust 之前漏了这步，
+    // 对未掩码帧过滤 → 保留更多噪声 → CompareTwoSubs 更容易误判内容变化 → 段过度切分。
+    if let Some(ila1) = ila1 {
+        imgops::intersect_two_images_inplace(&mut ff1, ila1, 0u8);
+    }
+    if let Some(ila2) = ila2 {
+        imgops::intersect_two_images_inplace(&mut ff2, ila2, 0u8);
+    }
     if n > 0 {
         filter_image(&mut ff1, ve1, w, h, p, &lb, &le, n);
         filter_image(&mut ff2, ve2, w, h, p, &lb, &le, n);
