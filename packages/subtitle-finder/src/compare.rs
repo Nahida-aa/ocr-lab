@@ -193,6 +193,7 @@ fn compare_ila(
         let dif = if dif2 > dif1 { dif2 } else { dif1 };
         if cmb == 0 {
             max_dif = 10.0;
+            debug!(k, lb=lb[k], le=le[k], dif1, dif2, cmb, "compare2: 带 cmb=0 返回 false");
             return (false, max_dif);
         }
         let cur_dif = dif as f64 / cmb as f64;
@@ -200,6 +201,7 @@ fn compare_ila(
             max_dif = cur_dif;
         }
         if cur_dif > ilaple as f64 {
+            debug!(k, lb=lb[k], le=le[k], dif1, dif2, cmb, cur_dif, ilaple, "compare2: dif/cmb > ilaple 返回 false");
             return (false, max_dif);
         }
     }
@@ -289,7 +291,14 @@ pub fn compare_two_subs(
         imgops::intersect_two_images_inplace(&mut im2_c, &im1_c, 0u8);
         // Im2 = Im2 ∩ VE2
         imgops::intersect_two_images_inplace(&mut im2_c, ve2, 0u8);
-        let (v3, _) = compare_ila(&lb, &le, ln, w, ilaple, &im2_c, &im1_c);
+        let wc_im1 = im1_c.iter().filter(|&&v| v == 255).count();
+        let wc_im2 = im2_c.iter().filter(|&&v| v == 255).count();
+        let wc_ilaint = ila_int.iter().filter(|&&v| v != 0).count();
+        let (v3, dif3) = compare_ila(&lb, &le, ln, w, ilaple, &im2_c, &im1_c);
+        debug!(
+            wc_im1, wc_im2, wc_ilaint, ln, v3, dif3,
+            "compare2: ILA 掩码白点数"
+        );
         v3
     } else {
         true
@@ -330,6 +339,7 @@ pub fn compare_two_subs_optimal(
     if compare_two_subs(im1, ila1, ve1, ve1b, im2, ila2, ve2, w, h, p) {
         return true;
     }
+    debug!("compare_optimal: fast=changed, 进入 DifficultCompareTwoSubs2");
     // DifficultCompareTwoSubs2：过滤两帧后再比较。
     // C++ 用 `GetLinesInfo(AddTwoImages(ImF1,ImF2))` 得到真实文字带，再对两帧 FilterImage。
     let im_res = imgops::add_two_images(im1, im2, w * h);
@@ -356,7 +366,9 @@ pub fn compare_two_subs_optimal(
     filter_image_analyse(&mut ff1, w, h, p);
     filter_image_analyse(&mut ff2, w, h, p);
 
-    compare_two_subs(&ff1, ila1, ve1, ve1b, &ff2, ila2, ve2, w, h, p)
+    let res = compare_two_subs(&ff1, ila1, ve1, ve1b, &ff2, ila2, ve2, w, h, p);
+    debug!("compare_optimal: difficult res={}", res);
+    res
 }
 
 /// `FilterImage`：迭代执行 SecondFiltration + ClearImageFromSmallSymbols 直到稳定。

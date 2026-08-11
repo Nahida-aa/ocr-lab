@@ -735,6 +735,16 @@ fn run_state_machine(
             } else if (bln == false && cur_pos != prev_pos) || (bln == true && cur_pos == prev_pos) {
                 trace!(fn_, cur_pos, prev_pos, bln, bf, ef, "段尾分支: 进入 (bln 变化/帧停)");
                 if finded_prev == 1 {
+                    trace!(
+                        fn_,
+                        sp_isa = im_int_sp.iter().filter(|&&v| v == 255).count(),
+                        sp_y = im_y_sp.iter().filter(|&&v| v != 0).count(),
+                        sp_ne = im_ne_sp.iter().filter(|&&v| v == 255).count(),
+                        s_isa = im_int_s.iter().filter(|&&v| v == 255).count(),
+                        s_y = im_y_s.iter().filter(|&&v| v != 0).count(),
+                        s_ne = im_ne_s.iter().filter(|&&v| v == 255).count(),
+                        "段尾 merge: compare(im_int_sp, im_int_s) 输入白点"
+                    );
                     bln = compare::compare_two_subs_optimal(
                         &im_int_sp, Some(&im_y_sp), &im_ne_sp, Some(&im_ne_sp),
                         &im_int_s, Some(&im_y_s), &im_ne_s, w, h, 0, w as i32 - 1, p,
