@@ -24,11 +24,26 @@
         2. sobel N-edge `up_l` 系数实为 **10**（IPAlgorithms.cpp:985
            `val=3*val1+10*val2`），不是 7。Rust 的 10 正确，无需改。
 
+- [x] **DifficultCompareTwoSubs2 补 FilterImage 前 ILA 求交**（`7b66412`）
+      C++（SSAlgorithms.cpp:2313-2326）在 FilterImage 前把 ImFF1/ImFF2 与各自 ILA 图
+      求交（时间掩码）。Rust 之前漏了 → 对未掩码帧过滤 → 保留更多噪声 →
+      CompareTwoSubs 易误判内容变化 → 段过度切分（38 段 vs C++ 22）。
+      补后段数 38 → 25，关键段收敛：
+      - "你开窍..." 由 2 段合并为 1 段（17533,20333，对齐 C++ 17533-20365）。
+      - 8033-10467（对齐 8033-10665）、39767-42733（对齐 39766-42765）等合并。
+
+- [x] **检测循环 bln2 用 has_text 而非帧是否存在**（`c95c58a`）
+      C++ line 1396 `if (bln2)` 用该帧 has_text 决定 fn_start 走 ddl 还是 2*ddl 步。
+      Rust 之前误用 `.is_ok()`（帧存在即 true）→ 无字幕帧也走 ddl 步，检测步进与
+      C++ 不一致。改为提级的 `bln2 = f2.has_text`。本次视频输出不变，是步进正确性修复。
+
 ## 待办
 
-- [ ] **完整对比状态机 FastSearchSubtitles vs run_state_machine**
-      - 重点：bln（GetIntersectImages）/ cur_pos-prev_pos 段边界、AnalizeImageForSubPresence
-        保存判定、finded_prev / bf / pbf 交互。
+- [ ] **状态机剩余对齐（段 25 vs C++ 22）**
+      - 末尾 Rust 多 56600+ 段（C++ 测试截断在 56s，非真差异）。
+      - 53033 处 Rust 多一段、52833-53033（C++ 无）。
+      - 段尾 PTS：C++ 用 `PosForward[offset]-1`，Rust 用实际末帧 PTS，差 ±33ms。
+      - 确认 finded_prev / pbf / cmp_prev 的段合并逻辑是否与 C++ 完全一致。
 
 ## 背景 / 已排除
 
