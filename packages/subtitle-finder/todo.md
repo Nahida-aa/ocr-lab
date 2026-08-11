@@ -51,10 +51,11 @@
         → 不进入 Difficult。Rust 的 fast compare 在 merge 点 `val1=true val2=true
         val3=false` → 判"changed" → 进入 Difficult → 被 second_filtration 清空。
       - **精确根因（fn=1712 tracking compare val3）**：compare2 在带 k=0 (rows 367-375)
-        `cmb=0`（dif1=0 dif2=0 cmb=0，该带 Im1 无白点）→ val3=false。尽管
-        wc_im1=8661 整体非空。C++ 同 fn Im1≈8667/8578（相似）但 val3 通过。
-        → Rust 在 367-375 出现"幽灵带"（band 存在但 Im1 无内容），compare2 要求每带
-        cmb>0 → 失败。嫌疑：get_lines_info 带边界 或 该带 Im1(内容∩ILA∩边)被清。
+        `cmb=0`（dif1=0 dif2=0 cmb=0）→ val3=false。**该带 b_im1=0 b_im2=0**（Im1/Im2
+        都空）→ 是 get_lines_info 产生的"幽灵带"：im_res(union) 有白点 → 带存在，
+        但 Im1(im1∩ila1∩ve1) 和 Im2(im2∩ila2∩ve2) 经 ILA/边掩码后在此带全空。
+        C++ 同 fn Im1≈8667/8578（相似）但 val3 通过 → C++ 无此带或带内有内容。
+        嫌疑：get_lines_info 带生产 或 ve1 边掩码在此带清空。
       - 假设证伪记录：get_intersect_images 短路、second_filtration、decoder 均非差异。
 
 ## 已修复（全部对齐 C++）
