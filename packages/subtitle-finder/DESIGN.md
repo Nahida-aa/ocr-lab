@@ -195,32 +195,12 @@ C++ 的 `GetTransformedImage` 里这 3 个算子用 `run_in_parallel`，我们�
 
 ### 已知局限
 
-- **长字幕 `has_text` 检测不稳定（段起始时间错乱）**：对某些长字幕（如
-  "你开窍后获得了它的斩击能力"）逐帧 `has_text` 在 1/0 间抖动——字幕完整显示
-  但 `second_filtration` 在部分帧误判为无字幕。后果：detect 阶段无法稳定捕获字幕
-  起始，段被 `has_text=0` 间隙打断，记录的 `start_ms` 比实际晚数秒、漏掉字幕前段
-  （实测 2.3s）。其他字幕（短句）`has_text` 稳定，未受影响。
-  - 定位：`second_filtration`（`filter.rs`）的 `mpned` 检查里
-    `if n_ne < mpn`（`mpn=50`）把长字幕的窄条带过度清空。逐 `segh=3` 条带
-    时，长字幕在字缝/笔画碎片区的水平段边缘点数 `n_ne` 常仅 23-35（<50），
-    触发整条带清空 → 该帧 `has_text=0`。同一句字幕逐帧抖动（边缘点够/不够）。
-    `color_filtration` 正常（`n_bands` 2-4），问题只在 `second_filtration`。
-  - 已试修复（均失败/回归）：
-    - 调低 `mpn`（50→20）：部分改善但字幕段更碎（更多噪声段），回归。
-    - `mpned` 移除最远段在 Any 模式跳过（对齐 VideoSubFinder line 2357
-      `&& g_text_alignment != Any`）：无效，`20033` 未变。
-    - **sobel N-edge up_l 系数 10→7**（对齐 VideoSubFinder FastImprovedSobelNEdge
-      `3*(up-up_l+left-right-down)+10*(up_l-dn_r)`，up_l 系数实为 7）：段更碎
-      （36→57 段），更糟。
-    - **Any 模式跳过段合并/中心偏移/mpd**（对齐 VideoSubFinder line 2014
-      `if (g_text_alignment != Any)`，本实现固定 Any）：17700 帧 has_text 0→1、
-      17-20.5s has_text 稳定为 1（符合 VideoSubFinder），**但完整跑 15-24s 段全丢**
-      （49 段，0-13s/24-58s 正常）。
-  - **重大定位**：Any-skip 修复后 has_text 正确（17-20.5s 稳定 1），但状态机
-    detect 到帧 526（17.5s，"你开窍..."段起始）后**未保存该段**；相邻段
-    （494"所以"、621"而你自己..."）正常保存。**问题在 `run_state_machine` 的
-    track 段结束/保存逻辑**（`ef-bf+1 >= dl` 或 `analize_for_sub_presence` 判定），
-    不是 second_filtration / has_text。需对比 VideoSubFinder FastSearchSubtitles
-    的段保存逻辑定位差异。
-  - 状态：已定位到状态机 track 段保存失败（见根 `todo.md`），待深入
-    run_state_machine 段结束逻辑。
+- **长字幕 `has_text` 检测不稳定（段起始时间错乱）**：✅ **2026-08-11 已修**（`26dab27`）。
+  根因：`second_filtration` 的 Center 偏移块移除 `lb[0]` 时漏了 C++ 的段数组左移一位
+  （IPAlgorithms.cpp:2128-2133 `lb[i]=lb[i+1]`），使后续 mpd/mpned 循环看到的段数组/
+  S/段边界与 C++ 不一致，长字幕（如"你开窍后获得了它的斩击能力"）has_text 抖动，段
+  start 偏晚（实测 20033ms）。补左移后段 start 20033ms → 17533ms，段数 38。
+  顺带澄清两个之前的旧误解：(1) `g_text_alignment` 默认是 `Center`（IPAlgorithms.cpp:170），
+  不是 Any——之前"Any-skip"方向与 C++ 不一致，本包应为 Center（5c10a58 已切到 Center，
+  段数 7→4 对齐 C++）；(2) sobel N-edge `up_l` 系数实为 10（C++ line 985
+  `val=3*val1+10*val2`），不是 7——Rust 的 10 正确。
