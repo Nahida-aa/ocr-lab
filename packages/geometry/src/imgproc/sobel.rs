@@ -53,6 +53,10 @@ pub fn sobel_m_edge(src: &[u8], w: usize, h: usize) -> Vec<u16> {
 /// 写进调用方提供的 buffer（避免每次分配，供基准测纯计算）。
 pub fn sobel_m_edge_into(src: &[u8], w: usize, h: usize, out: &mut [u16]) {
     debug_assert!(out.len() >= w * h);
+    if std::env::var("SF_FORCE_SCALAR_SOBEL").is_ok() {
+        sobel_m_edge_scalar(src, w, h, out);
+        return;
+    }
     #[cfg(target_arch = "x86_64")]
     if std::arch::is_x86_feature_detected!("avx2") {
         unsafe { sobel_m_edge_avx2(src, w, h, out) }
