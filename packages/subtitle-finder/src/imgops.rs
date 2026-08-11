@@ -7,6 +7,7 @@
 //! 索引 `i = y*w + x`；3 通道像素在 `[i*3, i*3+3)`。
 
 use super::params::Params;
+use opencv::prelude::*;
 
 // geometry 的 SIMD 图像算子（Sobel 边缘，AVX2 快路径 + 标量回退）。
 use geometry::imgproc as gimg;
@@ -673,23 +674,33 @@ pub fn get_transformed_image(
 /// BGR → YUV（对齐 OpenCV `COLOR_BGR2YUV` 全量程公式）。
 /// C++ 用 `cv::cvtColor(COLOR_BGR2YUV)`，其 Y 全量程 0-255（非 BT.601 的 16-235）。
 fn bgr_to_yuv(bgr: &[u8], y: &mut [u8], u: &mut [u8], v: &mut [u8], w: usize, h: usize) {
+    // 用 OpenCV `cvtColor(COLOR_BGR2YUV)`，保证与 C++ GetTransformedImage 完全一致。
+    // 之前用浮点公式（Y=0.299R+0.587G+0.114B 等），V 通道在个别像素与 OpenCV 的
+    // 整数定点实现差 ±1 → FF 阈值边缘像素判定不同 → 幽灵带 → 字幕段丢失。
+    // 见 docs/cpp-alignment-notes.md「六、未解决的已知差异（幽灵带）」。
+    let mut src = opencv::core::Mat::new_rows_cols_with_default(
+        h as i32,
+        w as i32,
+        opencv::core::CV_8UC3,
+        opencv::core::Scalar::all(0.0),
+    )
+    .expect("Mat 创建失败");
+    src.data_bytes_mut()
+        .expect("取 Mat 数据失败")
+        .copy_from_slice(bgr);
+    let mut dst = opencv::core::Mat::default();
+    opencv::imgproc::cvt_color_def(
+        &src,
+        &mut dst,
+        opencv::imgproc::COLOR_BGR2YUV,
+    )
+    .expect("cvtColor 失败");
+    let data = dst.data_bytes().expect("取 YUV 数据失败");
     let size = w * h;
     for i in 0..size {
-        let b = bgr[i * 3] as f32;
-        let g = bgr[i * 3 + 1] as f32;
-        let r = bgr[i * 3 + 2] as f32;
-        // OpenCV COLOR_BGR2YUV（全量程）：
-        //   Y = 0.299R + 0.587G + 0.114B
-        //   U = -0.14713R - 0.28886G + 0.436B + 128
-        //   V = 0.615R - 0.51499G - 0.10001B + 128
-        // 四舍五入到最近整数（对齐 OpenCV saturate_cast<uchar> 的 round 语义）。
-        y[i] = (0.299 * r + 0.587 * g + 0.114 * b).round().clamp(0.0, 255.0) as u8;
-        u[i] = (-0.14713 * r - 0.28886 * g + 0.436 * b + 128.0)
-            .round()
-            .clamp(0.0, 255.0) as u8;
-        v[i] = (0.615 * r - 0.51499 * g - 0.10001 * b + 128.0)
-            .round()
-            .clamp(0.0, 255.0) as u8;
+        y[i] = data[i * 3];
+        u[i] = data[i * 3 + 1];
+        v[i] = data[i * 3 + 2];
     }
 }
 
