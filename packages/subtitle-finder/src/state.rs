@@ -687,11 +687,14 @@ fn run_state_machine(
                                 None => break 'outer,
                             };
                             pef = fn_ + offset as i32 - 1;
-                            // 段尾 pet：对齐 C++ line 1669 `pet = PosForward[offset] - 1`，
-                            // 即新句首帧 frame(fn_+offset) 的 PTS 减 1ms（"新字幕开始前一刻"）。
-                            match try_frame(&cache, fn_ + offset as i32) {
-                                Some(f_off) => new_pet = f_off.pos - 1,
-                                None => break 'outer,
+                            // 段尾 pet：用旧句最后可见帧 frame(fn_+offset-1) 的真实 PTS。
+                            // 与 et 同理，C++ 的 `PosForward[offset]-1` 虚推 ~1 帧。
+                            match try_frame(&cache, fn_ + offset as i32 - 1) {
+                                Some(f_prev) => new_pet = f_prev.pos,
+                                None => match try_frame(&cache, fn_ + offset as i32) {
+                                    Some(f) => new_pet = f.pos - 1,
+                                    None => break 'outer,
+                                },
                             }
                         }
                         pet = new_pet;
@@ -781,11 +784,15 @@ fn run_state_machine(
                             p_prev_ne = f_off.ne.clone();
                         }
                         ef = fn_ + offset as i32 - 1;
-                        // 段尾 et：对齐 C++ line 1815 `et = PosForward[offset] - 1`，
-                        // 即新句首帧 frame(fn_+offset) 的 PTS 减 1ms。
-                        match try_frame(&cache, fn_ + offset as i32) {
-                            Some(f) => et = f.pos - 1,
-                            None => et = cur_pos,
+                        // 段尾 et：用旧句最后可见帧 frame(fn_+offset-1) 的真实 PTS。
+                        // C++ `et = PosForward[offset] - 1`（新句首帧 PTS-1）会虚推 ~1 帧：
+                        // 实测字幕 20333 消失，C++ 标 20365。真实末帧 PTS 才准。
+                        match try_frame(&cache, fn_ + offset as i32 - 1) {
+                            Some(f) => et = f.pos,
+                            None => match try_frame(&cache, fn_ + offset as i32) {
+                                Some(f) => et = f.pos - 1,
+                                None => et = cur_pos,
+                            },
                         }
                     } else {
                         ef = fn_ - 1;
