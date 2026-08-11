@@ -679,18 +679,11 @@ fn run_state_machine(
                                 None => break 'outer,
                             };
                             pef = fn_ + offset as i32 - 1;
-                            // 段尾 = 旧句「最后可见帧」的真实 PTS（而非新句首帧 PTS - 1ms）。
-                            // 新句首帧为 frame(fn_+offset)，其前一帧 frame(fn_+offset-1)
-                            // 才是旧内容最后出现的帧，取它的真实 PTS 作为段尾。
-                            match try_frame(&cache, fn_ + offset as i32 - 1) {
-                                Some(f_prev) => new_pet = f_prev.pos,
-                                None => {
-                                    let f_off = match try_frame(&cache, fn_ + offset as i32) {
-                                        Some(f) => f,
-                                        None => break 'outer,
-                                    };
-                                    new_pet = f_off.pos - 1;
-                                }
+                            // 段尾 pet：对齐 C++ line 1669 `pet = PosForward[offset] - 1`，
+                            // 即新句首帧 frame(fn_+offset) 的 PTS 减 1ms（"新字幕开始前一刻"）。
+                            match try_frame(&cache, fn_ + offset as i32) {
+                                Some(f_off) => new_pet = f_off.pos - 1,
+                                None => break 'outer,
                             }
                         }
                         pet = new_pet;
@@ -775,13 +768,11 @@ fn run_state_machine(
                             p_prev_ne = f_off.ne.clone();
                         }
                         ef = fn_ + offset as i32 - 1;
-                        // 段尾 = 旧句最后可见帧的真实 PTS（见内容变化分支的同款修正）。
-                        match try_frame(&cache, fn_ + offset as i32 - 1) {
-                            Some(f_prev) => et = f_prev.pos,
-                            None => match try_frame(&cache, fn_ + offset as i32) {
-                                Some(f) => et = f.pos - 1,
-                                None => et = cur_pos,
-                            },
+                        // 段尾 et：对齐 C++ line 1815 `et = PosForward[offset] - 1`，
+                        // 即新句首帧 frame(fn_+offset) 的 PTS 减 1ms。
+                        match try_frame(&cache, fn_ + offset as i32) {
+                            Some(f) => et = f.pos - 1,
+                            None => et = cur_pos,
                         }
                     } else {
                         ef = fn_ - 1;
