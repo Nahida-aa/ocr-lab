@@ -43,15 +43,15 @@
       - 全程对比（C++ end=-1）：前 22 段完全对齐（段尾差 1ms 是 PTS 虚推已修），
         唯一结构差异在**末尾**。
       - C++ 把 56600-58032（"你现在有两个选择"）当一整段；Rust 在 57100 处切成两段。
-      - OCR 确认两端内容相同（都是"你现在有两个选择"）。
-      - has_text 全 1（1698-1741 帧，isa_wc≈25000）无空隙 → **非 has_text 差异**。
-      - **finded_prev 合并逻辑已查：Rust 与 C++ 完全一致**（内容变化分支 pbf/pbt/
-        finded_prev，else-if 分支 `compare(ImIntSP,ImIntS)` 合并回 pbf）。merge 机制
-        Rust 有且同构。
-      - 差异在 merge 点 `compare(im_int_sp, im_int_s)` 结果：Rust 判"不同"（不合并），
-        C++ 判"相同"（合并）→ 是 compare 对角色运动的敏感性边界（同前几次过度切分
-        的根因），非状态机结构 bug。两端同文本，分两段不影响字幕捕获，仅多一个
-        重复关键帧。
+      - OCR 确认两端内容相同（都是"你现在有两个选择"）。has_text 全 1 无空隙。
+      - **finded_prev 合并逻辑已查：Rust 与 C++ 完全一致**（merge 机制同构）。
+      - **val3 是差异点（已定位）**：Rust merge 点 `val1=true val2=true val3=false`
+        （文本相同但 ILA 比较失败）；C++ 末尾 compare 无 `val1=1 val2=1 val3=0`，
+        只有 `val1=0 val2=0 val3=0`（全失败）或 `val1=1 val2=1 val3=1`（全过）。
+        → **Rust 的 val3（ILA 比较）比 C++ 更严格**，在 val1/val2 通过时仍判 val3=0。
+      - val3 = compare2(Im2, Im1)，Im2 = dilate(Im1∩ILAInt)∩Im1∩VE2，ILAInt=ILA1∩Y ILA2。
+        compare2/intersect_y_images 阈值已对齐，差异在 ILA 掩码后的像素（cmb 计数）。
+        需进一步对比 merge 点 Im1/Im2/ILAInt 的像素，定位 Rust 为何 cmb 更小。
 
 ## 已修复（全部对齐 C++）
 
