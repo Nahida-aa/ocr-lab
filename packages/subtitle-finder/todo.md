@@ -60,6 +60,19 @@
       - 假设证伪记录：get_intersect_images 短路、second_filtration、decoder(second_filtration
         层面) 均非差异；带生产层面 im_res 行级差异是最终定位。
 
+- [ ] **新发现：Rust 漏字幕段（大/13 第一个"走吧" 11666-12465，C++ 有 Rust 无）**
+      - C++ 段含 `11666-12465`（OCR="走吧"），Rust timeline 无此段（10233_11333 直接
+        跳 13200_13967）。
+      - Rust has_text 显示 11600-12667 全 has_text=1（isa≈2500-3000）→ **检测到字幕帧
+        但没成段**。
+      - **根因 = 与 56600 同一个幽灵带问题**：fn=351 的 fast compare，
+        `compare2: 带 cmb=0 k=1 lb=331 le=339 b_im1=0 b_im2=0` → val3=false → 判内容
+        变化 → bf 每帧重置 → 段长度 < DL 无法保存。
+      - C++ 同段不判变化（成段）。差异在 get_lines_info 带生产：Rust 产生空带
+        （im_res union 有白点但 Im1/Im2 掩码后空），C++ 不产生。
+      - **这是一个明确的 Rust get_lines_info bug**（跨视频复现：大/11 56600 + 大/13
+        走吧）。待查 get_lines_info 为何产生空带。
+
 ## 已修复（全部对齐 C++）
 
 - ✅ get_intersect_images 短路（`760ac32`）：C++ 任一 has_text=0 帧 → bln=0。消除 52833 误段。
