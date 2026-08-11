@@ -205,6 +205,13 @@ C++ 的 `GetTransformedImage` 里这 3 个算子用 `run_in_parallel`，我们�
     时，长字幕在字缝/笔画碎片区的水平段边缘点数 `n_ne` 常仅 23-35（<50），
     触发整条带清空 → 该帧 `has_text=0`。同一句字幕逐帧抖动（边缘点够/不够）。
     `color_filtration` 正常（`n_bands` 2-4），问题只在 `second_filtration`。
-  - 修复候选：调低 `mpn`（50→~20）或 `mpned`。需实验验证（改后重跑对比
-    17700 帧是否恢复 + 是否有回归），有回归风险。
-  - 状态：已定位（`n_ne < mpn`），待调参实验（见根 `todo.md`）。
+  - 已试修复（均失败/回归）：
+    - 调低 `mpn`（50→20）：部分改善但字幕段更碎（更多噪声段），回归。
+    - `mpned` 移除最远段在 Any 模式跳过（对齐 VideoSubFinder line 2357
+      `&& g_text_alignment != Any`）：无效，`20033` 未变。
+    - **sobel N-edge up_l 系数 10→7**（对齐 VideoSubFinder FastImprovedSobelNEdge
+      `3*(up-up_l+left-right-down)+10*(up_l-dn_r)`，up_l 系数实为 7）：段更碎
+      （36→57 段），更糟。说明 has_text 更敏感但段跟踪把完整字幕切成碎片，
+      差异可能在 has_text→段跟踪，而非 sobel 本身。
+  - 状态：已定位到 has_text 不稳定 + sobel 系数差异，但修复未对齐
+    VideoSubFinder 的"完整段"行为，需深挖 has_text→段跟踪（见根 `todo.md`）。
