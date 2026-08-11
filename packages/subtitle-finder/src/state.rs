@@ -730,6 +730,7 @@ fn run_state_machine(
                     }
                 }
             } else if (bln == false && cur_pos != prev_pos) || (bln == true && cur_pos == prev_pos) {
+                trace!(fn_, cur_pos, prev_pos, bln, bf, ef, "段尾分支: 进入 (bln 变化/帧停)");
                 if finded_prev == 1 {
                     bln = compare::compare_two_subs_optimal(
                         &im_int_sp, Some(&im_y_sp), &im_ne_sp, Some(&im_ne_sp),
@@ -745,7 +746,10 @@ fn run_state_machine(
                 if bf != -2 {
                     if cur_pos != prev_pos {
                         // 逐个 offset 比较，找字幕结束。
-                        let mut offset = 0usize;
+                        // 对齐 C++ `for (offset = 0; offset < DL - 1; offset++)`：
+                        // 循环变量 offset 在**跑满**（全部 match）后值为 DL-1=5，不是 0。
+                        // Rust 之前只在 !bln 时改 offset，跑满后仍是 0 → ef 偏小 5 帧 → 段尾过早。
+                        let mut offset = dl - 1; // 默认=跑满后的终端值
                         let mut p_prev_ne = prev_im_ne.clone();
                         for off in 0..(dl - 1) {
                             let f_off = match try_frame(&cache, fn_ + off as i32) {
@@ -760,6 +764,7 @@ fn run_state_machine(
                                 &im_int_s, Some(&im_y_s), &f_off.ne,
                                 w, h, 0, w as i32 - 1, p,
                             );
+                            trace!(fn_, off, bln, fpos = f_off.pos, "段尾 offset 搜索: compare");
                             if !bln {
                                 // 交集重试。
                                 let mut ne_ff = f_off.ne.clone();
