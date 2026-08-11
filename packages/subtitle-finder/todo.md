@@ -49,8 +49,10 @@
         - 修法候选：(a) 检测循环对短段加 `min_dl` 门槛；(b) AnalizeImageForSubPresence
           加白点密度/水平投影拒绝纯背景帧；(c) 查为何 52833 帧 compare 判"内容变化"
           （C++ 不判）。
-      - ✅ 段尾 PTS 已改 C++ 语义 `PosForward[offset]-1`（`5384414`），边界对齐到 1ms。
-        之前误判为"正向决策"已更正（实测 C++ 语义更准，见 DESIGN.md）。
+      - ✅ 段尾 PTS 当前为 C++ 语义 `PosForward[offset]-1`（`5384414`），边界与 C++ 差
+        1ms。**注意：这不是"更准"，是"更贴 C++ 输出"**——它给段尾虚推 ~32ms（落在字幕
+        已消失后那帧）。逻辑上更准的是真实末帧 PTS（frame(fn+offset-1).pos）。是否回退
+        待定（倾向回退，见 DESIGN.md「段尾 PTS」）。
       - 确认 finded_prev / pbf / cmp_prev 的段合并逻辑是否与 C++ 完全一致。
 
 ## 背景 / 已排除
