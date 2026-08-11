@@ -50,8 +50,11 @@
         fast compare 的 Im1=8003（ImIntSP ∩ ILA1 ∩ VE1）非空 → val3=1 → 判"相同"
         → 不进入 Difficult。Rust 的 fast compare 在 merge 点 `val1=true val2=true
         val3=false` → 判"changed" → 进入 Difficult → 被 second_filtration 清空。
-      - 需对比 Rust fast compare 的 Im1（im_int_sp ∩ im_y_sp ∩ im_ne_sp）白点 vs
-        C++ 8003。val3 = compare2(Im2, Im1)，差异可能在 im_y_sp（ILA）或 im_ne_sp。
+      - **精确根因（fn=1712 tracking compare val3）**：compare2 在带 k=0 (rows 367-375)
+        `cmb=0`（dif1=0 dif2=0 cmb=0，该带 Im1 无白点）→ val3=false。尽管
+        wc_im1=8661 整体非空。C++ 同 fn Im1≈8667/8578（相似）但 val3 通过。
+        → Rust 在 367-375 出现"幽灵带"（band 存在但 Im1 无内容），compare2 要求每带
+        cmb>0 → 失败。嫌疑：get_lines_info 带边界 或 该带 Im1(内容∩ILA∩边)被清。
       - 假设证伪记录：get_intersect_images 短路、second_filtration、decoder 均非差异。
 
 ## 已修复（全部对齐 C++）
