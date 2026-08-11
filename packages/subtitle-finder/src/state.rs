@@ -304,6 +304,10 @@ pub(crate) fn get_intersect_images(
     intersect_y_images_range(&mut y_int, &imys, 1, imys.len() - 1, p);
 
     let bln = analyse_image_flat(&im_int, Some(&y_int), w, h, p);
+    // 诊断：交集后 331-339 内容（幽灵带来源）。
+    let wc331_im = im_int[331 * w..340 * w].iter().filter(|&&v| v == 255).count();
+    let wc331_y = y_int[331 * w..340 * w].iter().filter(|&&v| v != 0).count();
+    trace!(fn_, bln, wc331_im, wc331_y, "get_intersect_images: 331-339 交集后");
     Some((im_int, y_int, bln))
 }
 
