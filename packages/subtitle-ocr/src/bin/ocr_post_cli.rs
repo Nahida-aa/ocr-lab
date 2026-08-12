@@ -19,8 +19,8 @@ use serde::Deserialize;
 use std::path::PathBuf;
 use subtitle_ocr::{
     BoxAdjustedArgs, FrameResult, MergeFramesArgs, OcrBoxResult, OcrSegmentAdjustArgs,
-    compute_box_y_stats, merge_frames, ocr_frames_adjust_box, ocr_frames_filter_box,
-    ocr_segment_adjust, ocr_segment_filter_with_meta,
+    compute_box_x_stats, compute_box_y_stats, merge_frames, ocr_frames_adjust_box,
+    ocr_frames_filter_box, ocr_segment_adjust, ocr_segment_filter_with_meta,
 };
 use tracing::info;
 
@@ -217,7 +217,8 @@ fn main() -> Result<()> {
 
     // ─── 1. adjust-box ───
     let y_stats = compute_box_y_stats(&frames);
-    let adjust = ocr_frames_adjust_box(&frames, &y_stats, &BoxAdjustedArgs::default());
+    let x_stats = compute_box_x_stats(&frames);
+    let adjust = ocr_frames_adjust_box(&frames, &y_stats, &x_stats, &BoxAdjustedArgs::default());
     write_json(&out_dir, "frames_box_adjust.json", &adjust)?;
     println!(
         "[1/5] adjust-box: {} 帧，写出 frames_box_adjust.json",

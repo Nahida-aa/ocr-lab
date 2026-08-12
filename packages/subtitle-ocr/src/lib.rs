@@ -54,7 +54,9 @@ pub use crate::ocr_post::segment_filter::{
     OcrSegmentFilterData, OcrSegmentFilterMeta, OcrSegmentFilterResult, ocr_segment_filter,
     ocr_segment_filter_with_meta,
 };
-pub use crate::ocr_post::stats::{YStats, compute_box_y_stats};
+pub use crate::ocr_post::stats::{
+    XStats, YStats, compute_box_x_stats, compute_box_y_stats,
+};
 pub use crate::ocr_post::subtitle::SubtitleSegment;
 pub use crate::ocr_util::aggregate_boxes;
 pub use crate::pipeline::{OcrDevice, OcrFramesMeta, OcrFramesResult};

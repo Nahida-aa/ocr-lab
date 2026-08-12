@@ -1,7 +1,8 @@
 //! ocr_post：对 OCR 结果的修正 / 统计后处理（行对齐、离群剔除、y 统计等）。
 //!
 //! 子模块：
-//! - [`stats`]：字幕框纵向左统计（`compute_box_y_stats` / `YStats`）。
+//! - [`stats`]：字幕框纵向统计（`compute_box_y_stats` / `YStats`）与横向统计
+//!   （`compute_box_x_stats` / `XStats`）。
 //! - [`box_adjusted`]：行对齐后的框调整参数（`BoxAdjustedArgs` / `ocr_frames_adjust_box` /
 //!   `get_ocr_frames_box_filtered`）。
 //! - [`merge_frames`]：多帧合并参数（`MergeFramesArgs`）与字幕段类型（`OcrSegment` / `SegmentFrame`）。

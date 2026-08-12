@@ -16,8 +16,8 @@ use clap::Parser;
 use serde::Deserialize;
 use std::path::PathBuf;
 use subtitle_ocr::{
-    BoxAdjustedArgs, FrameResult, OcrBoxAdjustResult, OcrBoxResult, YStats, compute_box_y_stats,
-    ocr_frames_adjust_box,
+    BoxAdjustedArgs, FrameResult, OcrBoxAdjustResult, OcrBoxResult, XStats, YStats,
+    compute_box_x_stats, compute_box_y_stats, ocr_frames_adjust_box,
 };
 use tracing::info;
 
@@ -158,14 +158,16 @@ fn main() -> Result<()> {
         serde_json::from_str(&raw).context("解析逐帧 JSON 失败（需为 FrameResult[] 或 {frames,meta}）")?;
     let frames = parsed.into_frames();
 
-    // 先按各帧框统计纵向分布（对齐 TS 的 y_stats 来源）。
+    // 先按各帧框统计纵向分布（对齐 TS 的 y_stats 来源）与横向分布。
     let y_stats: YStats = compute_box_y_stats(&frames);
+    let x_stats: XStats = compute_box_x_stats(&frames);
 
     let args = BoxAdjustedArgs {
         box_adjusted_threshold: cli.box_adjusted_threshold,
     };
 
-    let result: OcrBoxAdjustResult = ocr_frames_adjust_box(&frames, &y_stats, &args);
+    let result: OcrBoxAdjustResult =
+        ocr_frames_adjust_box(&frames, &y_stats, &x_stats, &args);
 
     if let Some(out) = &cli.out {
         let path = resolve_path(&repo_root, out);

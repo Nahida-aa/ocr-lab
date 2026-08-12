@@ -5,7 +5,7 @@
 //! 为触发 box 调整的置信度阈值
 //! （低于此值的框进入调整流程），默认 0.5。
 
-use crate::{FrameResult, OcrBoxResult, YStats};
+use crate::{FrameResult, OcrBoxResult, XStats, YStats};
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -43,14 +43,28 @@ impl BoxAdjustedArgs {
 pub struct OcrBoxResultWithAdjust {
     #[serde(flatten)]
     pub base: OcrBoxResult,
-    /// 上边界相对典型上边界的偏离（以行高为单位）。
-    pub top_offset_ratio: f32,
-    /// 下边界相对典型下边界的偏离（以行高为单位）。
-    pub bot_offset_ratio: f32,
+    /// 框中心 y 相对典型中心（mode 中心）的偏离（以行高为单位）。
+    /// 配合 [`height_ratio`] 即可完整描述框相对典型字幕带的位置与大小。
+    pub y_center_offset_ratio: f32,
+    /// 框中心 x 相对典型 x 中心（mode）的偏离（以行高为单位）。
+    /// 与 [`y_center_offset_ratio`] 共同构成「出界」判定：横向偏移过大（如贴边噪声框）
+    /// 也会被罚。
+    pub x_center_offset_ratio: f32,
     /// 框高（像素）。
     pub height: f32,
     /// 框高相对典型行高的比值。
     pub height_ratio: f32,
+    /// 噪声惩罚分解（每项均经饱和放缩 `raw/(raw+C)` 映射到 `[0,1)`，严格小于 1，
+    /// 不硬截断，便于三者直接比较大小）：
+    /// y 方向中心偏移贡献 = `saturate((|y_center_offset_ratio| - BAND_THRESHOLD).max(0) * BAND_WEIGHT)`。
+    pub y_penalty: f32,
+    /// x 方向中心偏移贡献的惩罚（同 [`y_penalty`] 算法，作用于 x 偏移）。
+    pub x_penalty: f32,
+    /// 高度比偏离贡献的惩罚（`saturate(|log2(height_ratio)| * HEIGHT_LOG_WEIGHT)`，高度为 0 则饱和到近 1）。
+    pub height_penalty: f32,
+    /// 实际生效的总惩罚（= `saturate(y_raw + x_raw + h_raw)`，同样严格 <1），
+    /// 直接决定 `adjusted_confidence = weighted × (1 - total_penalty)`。
+    pub total_penalty: f32,
     /// 是否离群（调整后置信度低于阈值）。
     pub is_outlier: bool,
     /// 经几何噪声惩罚调整后的置信度（`text×0.3 + box×0.7` 加权值 × (1 - penalty)）。
@@ -104,6 +118,8 @@ impl From<FrameResultBoxWithAdjust> for FrameResult {
 pub struct OcrBoxAdjustResultMeta {
     /// 本次调整所用的纵向统计。
     pub y_stats: YStats,
+    /// 本次调整所用的横向统计。
+    pub x_stats: XStats,
     /// 帧数。
     pub frame_count: usize,
     /// 调整参数（原样回写，便于溯源）。
@@ -131,15 +147,16 @@ pub struct OcrFramesBoxFilteredResultMeta {
     pub frame_count: usize,
 }
 
-/// 对一组帧做字幕框调整：依据 [`YStats`] 估算的典型位置/行高，给每个框算
-/// 上/下边界偏离比、框高比，按「偏离 >1 行高才罚」给噪声惩罚，得到调整后置信度；
-/// 低于 `box_adjusted_threshold` 的框标记为离群。
+/// 对一组帧做字幕框调整：依据 [`YStats`] 估算的典型纵向位置/行高、[`XStats`]
+/// 估算的典型横向中心，给每个框算中心偏离比、框高比，按偏离给噪声惩罚，得到调整后
+/// 置信度；低于 `box_adjusted_threshold` 的框标记为离群。
 ///
-/// 返回 [`OcrBoxAdjustResult`]（含 `meta`：`y_stats` / `frame_count` / `args`），
+/// 返回 [`OcrBoxAdjustResult`]（含 `meta`：`y_stats` / `x_stats` / `frame_count` / `args`），
 /// 对齐 LocalDub `ocr_frames_adjust_box`。坐标保持 f32，不取整。
 pub fn ocr_frames_adjust_box(
     ocr_frames: &[FrameResult],
     y_stats: &YStats,
+    x_stats: &XStats,
     args: &BoxAdjustedArgs,
 ) -> OcrBoxAdjustResult {
     let threshold = args.threshold();
@@ -154,13 +171,14 @@ pub fn ocr_frames_adjust_box(
             boxes: f
                 .boxes
                 .iter()
-                .map(|box_r| adjust_box(box_r, y_stats, threshold))
+                .map(|box_r| adjust_box(box_r, y_stats, x_stats, threshold))
                 .collect(),
         })
         .collect();
     OcrBoxAdjustResult {
         meta: OcrBoxAdjustResultMeta {
             y_stats: *y_stats,
+            x_stats: *x_stats,
             frame_count: frames.len(),
             args: *args,
         },
@@ -169,15 +187,24 @@ pub fn ocr_frames_adjust_box(
 }
 
 /// 单个框的预处理调整（对齐 TS `build_ocr_frames_box_adjust` 内的 map 体）。
-fn adjust_box(box_r: &OcrBoxResult, y_stats: &YStats, threshold: f32) -> OcrBoxResultWithAdjust {
+fn adjust_box(
+    box_r: &OcrBoxResult,
+    y_stats: &YStats,
+    x_stats: &XStats,
+    threshold: f32,
+) -> OcrBoxResultWithAdjust {
     // 空文本框：直接透传，不罚、不标记离群。
     if box_r.text.trim().is_empty() {
         return OcrBoxResultWithAdjust {
             base: box_r.clone(),
-            top_offset_ratio: 0.0,
-            bot_offset_ratio: 0.0,
+            y_center_offset_ratio: 0.0,
+            x_center_offset_ratio: 0.0,
             height: 0.0,
             height_ratio: 0.0,
+            y_penalty: 0.0,
+            x_penalty: 0.0,
+            height_penalty: 0.0,
+            total_penalty: 0.0,
             is_outlier: false,
             adjusted_confidence: box_r.box_confidence,
         };
@@ -186,54 +213,81 @@ fn adjust_box(box_r: &OcrBoxResult, y_stats: &YStats, threshold: f32) -> OcrBoxR
     let top = box_r.y_range[0];
     let bottom = box_r.y_range[1];
     let height = bottom - top;
-    // 上下边界相对典型位置的偏离（以行高为单位）；行高无效时为 0。
-    let top_or = if y_stats.median_height > 0.0 {
-        (top - y_stats.mode[0]).abs() / y_stats.median_height
-    } else {
-        0.0
-    };
-    let bot_or = if y_stats.median_height > 0.0 {
-        (bottom - y_stats.mode[1]).abs() / y_stats.median_height
-    } else {
-        0.0
-    };
     let height_ratio = if y_stats.median_height > 0.0 {
         height / y_stats.median_height
     } else {
         0.0
     };
-    let band_drift = top_or.max(bot_or); // 上下边界偏离取大的
-    // 噪声惩罚：band 偏离 >1 行高才罚；高度比偏离也贡献。
-    // 高度比项用「对数差」|log2(height_ratio)|（基准为 1 的比值，按倍率对称，
-    // 缩小 3 倍与放大 3 倍等价偏离；且离 1 越远越陡，对高度异常小/大更敏感）。
-    const HEIGHT_LOG_WEIGHT: f32 = 0.3;
-    let height_pen = if height_ratio > 0.0 {
-        height_ratio.log2().abs() * HEIGHT_LOG_WEIGHT
+    // 框中心 y 相对典型中心（mode 中心）的偏离（以行高为单位）。
+    // 旧实现分别算上下边界偏离再取 max，会丢失「中心没偏但整框偏矮」的信号，
+    // 且与 height_ratio 重复表达高度维度；这里改为单一中心偏移，配合 height_ratio
+    // 即可正交地描述「位置 + 大小」，更简洁。
+    let y_center_offset_ratio = if y_stats.median_height > 0.0 {
+        let mode_center = (y_stats.mode[0] + y_stats.mode[1]) / 2.0;
+        (box_r.center[1] - mode_center) / y_stats.median_height
     } else {
-        1.0 // 高度为 0 或非法 → 最大惩罚（必然离群）
+        0.0
     };
-    // 噪声惩罚：band 偏离超过 BAND_THRESHOLD 行高即开始罚（原为 1 行高，对
-    // 0.3/0.3 这种"上下各偏一点"的框毫无惩罚；降到 0.05 让任何明显偏移都计入）。
-    // 权重 0.8（原 0.5）：中等偏移 + 低 text_confidence 的框（如 text 0.56/box 0.63、
-    // 偏 0.28 行高）也能被压到阈值下。
+    // 框中心 x 相对典型 x 中心（mode）的偏离（以行高为单位，量纲与 y 一致，
+    // 便于并入同一 band_drift）。用于捕捉横向贴边/跑出主流字幕水平区段的噪声框。
+    let x_center_offset_ratio = if y_stats.median_height > 0.0 {
+        (box_r.center[0] - x_stats.mode) / y_stats.median_height
+    } else {
+        0.0
+    };
+
+    // 噪声惩罚阈值/权重（对齐注释中的调参结论）。
     const BAND_THRESHOLD: f32 = 0.05;
     const BAND_WEIGHT: f32 = 0.8;
-    let noise_penalty = ((band_drift - BAND_THRESHOLD).max(0.0) * BAND_WEIGHT + height_pen).min(1.0);
+    const HEIGHT_LOG_WEIGHT: f32 = 0.3;
+    // 饱和放缩常数 C：原始惩罚 raw 达到 C 时，放缩后惩罚为 0.5（半饱和点）。
+    // raw = (|offset| - THRESH).max(0) * W（位置项）或 |log2(height_ratio)| * WH（高度项），
+    // 二者量纲均为「惩罚强度」，故共用同一 C。
+    const SAT_C: f32 = 1.0;
+    /// 饱和放缩：把无界的原始惩罚 `raw ≥ 0` 平滑映射到 `[0, 1)`（永远严格小于 1，
+    /// 不会溢出），`raw=0 → 0`、`raw=C → 0.5`、`raw→∞ → 1`（渐近）。
+    /// 用 `raw/(raw+C)` 而非硬截断 `.min(1.0)`，避免惩罚在 1.0 处突变卡死。
+    fn saturate(raw: f32) -> f32 {
+        let r = raw.max(0.0);
+        r / (r + SAT_C)
+    }
+    // 三项原始惩罚（线性、可能 >1），各自经饱和放缩到 [0,1)；y/x 各算各的，
+    // 便于排查「哪个因子主导了离群判定」：
+    //   y_penalty / x_penalty：位置偏移超过阈值的线性贡献。
+    //   height_penalty：高度比偏离的对数贡献（0 高度 → raw 置 1.0 必离群）。
+    let y_raw = ((y_center_offset_ratio.abs() - BAND_THRESHOLD).max(0.0)) * BAND_WEIGHT;
+    let x_raw = ((x_center_offset_ratio.abs() - BAND_THRESHOLD).max(0.0)) * BAND_WEIGHT;
+    let h_raw = if height_ratio > 0.0 {
+        height_ratio.log2().abs() * HEIGHT_LOG_WEIGHT
+    } else {
+        1.0 // 高度为 0 或非法 → 最大原始惩罚（必然离群）
+    };
+    let y_penalty = saturate(y_raw);
+    let x_penalty = saturate(x_raw);
+    let height_penalty = saturate(h_raw);
+    // 总惩罚：三项原始惩罚求和后做一次饱和放缩（同样严格 <1，不硬截断）。
+    // 这等价于「任一维度异常都贡献惩罚、叠加后渐近封顶」，比逐项截断再求和更平滑。
+    let total_raw = y_raw + x_raw + h_raw;
+    let total_penalty = saturate(total_raw);
     // 几何异常反映检测框可疑，惩罚作用在「加权置信度」上：
     //   weighted = text_confidence × 0.3 + box_confidence × 0.7
     // 兼顾识别置信度与检测置信度（box 占主导，因几何惩罚主要针对检测框）。
     const TEXT_W: f32 = 0.3;
     const BOX_W: f32 = 0.7;
     let weighted_conf = box_r.text_confidence * TEXT_W + box_r.box_confidence * BOX_W;
-    let adjusted = weighted_conf * (1.0 - noise_penalty);
+    let adjusted = weighted_conf * (1.0 - total_penalty);
     let is_outlier = adjusted < threshold;
 
     OcrBoxResultWithAdjust {
         base: box_r.clone(),
-        top_offset_ratio: top_or,
-        bot_offset_ratio: bot_or,
+        y_center_offset_ratio,
+        x_center_offset_ratio,
         height,
         height_ratio,
+        y_penalty,
+        x_penalty,
+        height_penalty,
+        total_penalty,
         is_outlier,
         adjusted_confidence: adjusted,
     }
@@ -304,7 +358,16 @@ mod tests {
     fn empty_text_box_passthrough() {
         let f = frame(vec![box_with("", [10.0, 20.0], 0.9)]);
         let y = YStats::default();
-        let out = ocr_frames_adjust_box(&[f], &y, &BoxAdjustedArgs::default());
+        let out = ocr_frames_adjust_box(
+            &[f],
+            &y,
+            &XStats {
+                avg: 5.0,
+                mode: 5.0,
+                median: 5.0,
+            },
+            &BoxAdjustedArgs::default(),
+        );
         let b = &out.frames[0].boxes[0];
         assert!(!b.is_outlier);
         assert_eq!(b.adjusted_confidence, 0.9);
@@ -324,7 +387,16 @@ mod tests {
             mode_height: 20.0,
         };
         let f = frame(vec![box_with("a", [400.0, 420.0], 0.9)]);
-        let out = ocr_frames_adjust_box(&[f], &y, &BoxAdjustedArgs::default());
+        let out = ocr_frames_adjust_box(
+            &[f],
+            &y,
+            &XStats {
+                avg: 5.0,
+                mode: 5.0,
+                median: 5.0,
+            },
+            &BoxAdjustedArgs::default(),
+        );
         let b = &out.frames[0].boxes[0];
         assert!(b.is_outlier, "偏离典型位置过远的框应标记为离群");
         assert!(b.adjusted_confidence < 0.9);
@@ -348,7 +420,16 @@ mod tests {
             mode_height: 20.0,
         };
         let f = frame(vec![box_with("a", [100.0, 102.0], 0.9)]);
-        let out = ocr_frames_adjust_box(&[f], &y, &BoxAdjustedArgs::default());
+        let out = ocr_frames_adjust_box(
+            &[f],
+            &y,
+            &XStats {
+                avg: 5.0,
+                mode: 5.0,
+                median: 5.0,
+            },
+            &BoxAdjustedArgs::default(),
+        );
         let b = &out.frames[0].boxes[0];
         assert!(b.is_outlier, "高度异常小的框应因 log2 高度惩罚被标记为离群");
         assert!(b.adjusted_confidence < 0.5);
@@ -367,7 +448,16 @@ mod tests {
             mode_height: 20.0,
         };
         let f = frame(vec![box_with("a", [100.0, 120.0], 0.9)]);
-        let out = ocr_frames_adjust_box(&[f], &y, &BoxAdjustedArgs::default());
+        let out = ocr_frames_adjust_box(
+            &[f],
+            &y,
+            &XStats {
+                avg: 5.0,
+                mode: 5.0,
+                median: 5.0,
+            },
+            &BoxAdjustedArgs::default(),
+        );
         let b = &out.frames[0].boxes[0];
         assert!(!b.is_outlier, "高度正常且位置贴合的框不应被标记为离群");
         // band_drift=0、height_ratio=1 → 惩罚为 0，置信度不变。
@@ -387,11 +477,37 @@ mod tests {
             median_height: 43.0,
             mode_height: 43.0,
         };
-        // top = 100 - 0.279×43 ≈ 88, bottom = 143 - 0.256×43 ≈ 132。
-        let f = frame(vec![box_with_conf("色", [88.0, 132.0], 0.564, 0.634)]);
-        let out = ocr_frames_adjust_box(&[f], &y, &BoxAdjustedArgs::default());
+        // 复现实际遇到的「色」框：中心相对典型中心偏移约 0.35 行高、text_confidence 低
+        // （0.564）。惩罚改用中心偏移口径（y_center_offset_ratio）后，这类框仍应被判离群。
+        // center = (82+131)/2 = 106.5，mode 中心 = (100+143)/2 = 121.5 →
+        // 偏移 = (106.5-121.5)/43 ≈ -0.349 行高。
+        let f = frame(vec![box_with_conf("色", [82.0, 131.0], 0.564, 0.634)]);
+        let out = ocr_frames_adjust_box(
+            &[f],
+            &y,
+            &XStats {
+                avg: 5.0,
+                mode: 5.0,
+                median: 5.0,
+            },
+            &BoxAdjustedArgs::default(),
+        );
         let b = &out.frames[0].boxes[0];
         assert!(b.is_outlier, "中等偏移 + 低 text_confidence 的框应被判离群");
         assert!(b.adjusted_confidence < 0.5);
+        // 新语义：偏移以中心偏移表达（非上下边界取 max）。
+        assert!((b.y_center_offset_ratio + 0.349).abs() < 1e-3);
+        // 惩罚分解（饱和放缩 raw/(raw+C)，C=1）：
+        //   x 未偏（测试 XStats.mode=5 与框 center.x=5 一致）→ x_penalty≈0；
+        //   y_raw=(0.349-0.05)*0.8=0.239 → y_penalty=0.239/1.239≈0.193；
+        //   height_ratio≈1.14 → h_raw=|log2(1.14)|*0.3≈0.057 → h_penalty≈0.054；
+        //   total_raw=0.239+0+0.057=0.296 → total=0.296/1.296≈0.228。
+        assert!(b.x_penalty.abs() < 1e-4, "x 未偏移，x_penalty 应为 0");
+        assert!((b.y_penalty - 0.193).abs() < 1e-2, "y_penalty 应≈0.193");
+        assert!((b.height_penalty - 0.054).abs() < 1e-2, "height_penalty 应≈0.054");
+        assert!((b.total_penalty - 0.228).abs() < 1e-2, "total_penalty 应≈0.228");
+        // 饱和放缩保证每项与 total 都严格 < 1。
+        assert!(b.y_penalty < 1.0 && b.x_penalty < 1.0 && b.height_penalty < 1.0);
+        assert!(b.total_penalty < 1.0);
     }
 }

@@ -115,6 +115,130 @@ fn median_of(arr: &[f32]) -> f32 {
     }
 }
 
+/// 字幕框横向（x）统计：由多帧识别结果估算字幕框中心的水平分布。
+///
+/// 与 [`YStats`] 不同，x 方向没有「带」的概念（字幕左右起止不固定），仅统计
+/// 框中心 x 的分布（均值 / 众数 / 中位数），用于衡量单个框相对主流字幕水平区段的偏离。
+/// 设计为独立类型而非扩展 [`YStats`]，以保持 `compute_box_y_stats` 的 LocalDub 对齐约定不变。
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize)]
+pub struct XStats {
+    /// x 中心均值（所有框 `center[0]` 的均值）。
+    pub avg: f32,
+    /// x 中心众数（出现最频繁的 `center[0]`，量化到整数像素计数）。
+    pub mode: f32,
+    /// x 中心中位数（所有 `center[0]` 排序取中位）。
+    pub median: f32,
+}
+
+/// 对一组帧统计字幕框的横向（x 中心）分布。
+///
+/// 仅统计有文本（`text` 非空白）的框；无此类框时返回全零 [`XStats`]。
+/// x 归一化基准（`x_center_offset_ratio = (center[0] - x_mode) / median_height`）所需的
+/// `median_height` 来自 [`YStats`]，本函数不重复计算。
+pub fn compute_box_x_stats(frames: &[FrameResult]) -> XStats {
+    let centers: Vec<f32> = frames
+        .iter()
+        .flat_map(|f| f.boxes.iter())
+        .filter(|l| !l.text.trim().is_empty())
+        .map(|l| l.center[0])
+        .collect();
+    if centers.is_empty() {
+        return XStats::default();
+    }
+
+    let n = centers.len() as f32;
+    let avg = centers.iter().sum::<f32>() / n;
+
+    let mut sorted = centers.clone();
+    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let median = median_of(&sorted);
+
+    // 众数：出现最频繁的 center[0]（量化到整数像素再计数）。
+    let mut counts: std::collections::HashMap<i32, u32> = std::collections::HashMap::new();
+    let mut max_count = 0u32;
+    let mut mode = sorted[0];
+    for &c in &centers {
+        let key = c.round() as i32;
+        let cnt = counts.entry(key).or_insert(0);
+        *cnt += 1;
+        if *cnt > max_count {
+            max_count = *cnt;
+            mode = c;
+        }
+    }
+
+    XStats { avg, mode, median }
+}
+
+#[cfg(test)]
+mod x_tests {
+    use super::*;
+    use crate::OcrBoxResult;
+
+    /// 构造一个框：text + x 中心（其余字段占位，y 不影响 x 统计）。
+    fn box_with_x(text: &str, x_center: f32) -> OcrBoxResult {
+        OcrBoxResult {
+            text: text.into(),
+            text_confidence: 0.9,
+            box_confidence: 0.9,
+            bbox: [
+                [x_center - 5.0, 0.0],
+                [x_center + 5.0, 0.0],
+                [x_center + 5.0, 10.0],
+                [x_center - 5.0, 10.0],
+            ],
+            x_range: [x_center - 5.0, x_center + 5.0],
+            y_range: [0.0, 10.0],
+            center: [x_center, 5.0],
+        }
+    }
+
+    fn frame(boxes: Vec<OcrBoxResult>) -> FrameResult {
+        crate::FrameResult {
+            text: String::new(),
+            text_confidence: 0.0,
+            boxes,
+            x_range: [0.0, 0.0],
+            y_range: [0.0, 0.0],
+            timestamp: 0,
+        }
+    }
+
+    #[test]
+    fn empty_frames_returns_zero() {
+        let r = compute_box_x_stats(&[]);
+        assert_eq!(r.avg, 0.0);
+        assert_eq!(r.mode, 0.0);
+        assert_eq!(r.median, 0.0);
+    }
+
+    #[test]
+    fn skips_empty_text_boxes() {
+        let f = frame(vec![
+            box_with_x("", 100.0), // 空文本，应被跳过
+            box_with_x("a", 200.0),
+        ]);
+        let r = compute_box_x_stats(&[f]);
+        assert_eq!(r.avg, 200.0);
+        assert_eq!(r.median, 200.0);
+        assert_eq!(r.mode, 200.0);
+    }
+
+    #[test]
+    fn median_and_mode() {
+        // 三个框 x 中心：100/200/100 → 众数 100，中位数 100。
+        let f = frame(vec![
+            box_with_x("a", 100.0),
+            box_with_x("b", 200.0),
+            box_with_x("c", 100.0),
+        ]);
+        let r = compute_box_x_stats(&[f]);
+        assert_eq!(r.mode, 100.0);
+        assert_eq!(r.median, 100.0);
+        assert!((r.avg - 133.333).abs() < 1e-2);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

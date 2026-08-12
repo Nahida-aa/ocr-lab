@@ -89,10 +89,14 @@ mod tests {
     ) -> OcrBoxResultWithAdjust {
         OcrBoxResultWithAdjust {
             base: box_with(text, y_range, conf),
-            top_offset_ratio: 0.0,
-            bot_offset_ratio: 0.0,
+            y_center_offset_ratio: 0.0,
+            x_center_offset_ratio: 0.0,
             height: y_range[1] - y_range[0],
             height_ratio: 1.0,
+            y_penalty: 0.0,
+            x_penalty: 0.0,
+            height_penalty: 0.0,
+            total_penalty: 0.0,
             is_outlier,
             adjusted_confidence: conf,
         }
