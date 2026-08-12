@@ -109,3 +109,33 @@ TF 顶部 26-44 差异 → `get_lines_info` 幽灵带（compare2 cmb=0）→ 段
 
 **已排除**：`get_lines_info`/`compare2`/`intersect_y_images`/`second_filtration` 其余逻辑
 与 C++ 逐行一致；`analyse_image` 改 Center 无影响；decoder 色彩非最终根因。
+
+## 七、已解决：39466 误段（Center 右半屏清理遗漏）
+
+**症状**：大/11 多出一个 `39466,39733` 段（OCR 验证为 AD/BB 背景噪声，tc 0.54/0.91），
+C++ 没有此段。Rust 段数 24 vs C++ 23。
+
+**定位方法（关键）**：对 `analize_for_sub_presence`/`AnalizeImageForSubPresence` 逐层做
+原始数组对比，确认**输入完全一致**、差异纯粹在 `second_filtration` 内部：
+- `im_int_sp`/`ImIntSP` **逐字节一致**（1158 白点，CPP_IMINTSP + raw dump）
+- step1 `im_sf`（`isa ∩ ila ∩ dilate(NE)`）**逐字节一致**（421 白点）
+- C++ `second_filtration` 返回 0（sf 清 0），Rust 返回 1（保留 158 白点）
+
+**根因**：`second_filtration` 漏了 C++ `SecondFiltration` 的一个 **Center 右半屏清理分支**
+（IPAlgorithms.cpp:2472-2484）：当 `g_text_alignment==Center` 且 `lb[0] >= real_im_x_center`
+（段首 x 在水平中心线右侧）时**整带清除**。Rust 在 mpned 循环后直接进 `ln==ln_orig` 判定，
+漏了这一步 → 右半屏孤立噪声带被保留 → `second_filtration` 返回 1 → 39466 段被误保存。
+C++ 把 rows 294/297 的右半屏噪声带整带清除 → 返回 0（跳过）。
+
+**修复**：`filter.rs::second_filtration` 在 mpned 循环后、`ln==ln_orig` 判定前补 Center
+右半屏检查（`if seg_lb[0] >= real_im_x_center { 整带清除; ln=0; break; }`）。提交 `e0472d7`。
+
+**验证**：大/11 段数 24→23（对齐 C++），39466 消失；大/13 段数 33（对齐 C++），
+"走吧"与末尾段均正常。
+
+> 与第六节的幽灵带同属 `second_filtration` Center 路径的**分支遗漏**（一个漏 btd 合并的
+> l/l+1 判定，一个漏右半屏整带清除）。排查这类问题优先对比完整 Center 路径的每个分支。
+
+**相关提交**：
+- `e0472d7` — 补 second_filtration 的 Center 右半屏清理，修复 39466 误段
+- `5c2de80` — second_filtration 注释补充右半屏清理到 Center 路径清单
