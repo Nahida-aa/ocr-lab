@@ -676,7 +676,7 @@ pub fn get_transformed_image(
 
 /// BGR → YUV（对齐 OpenCV `COLOR_BGR2YUV` 全量程公式）。
 /// C++ 用 `cv::cvtColor(COLOR_BGR2YUV)`，其 Y 全量程 0-255（非 BT.601 的 16-235）。
-fn bgr_to_yuv(bgr: &[u8], y: &mut [u8], u: &mut [u8], v: &mut [u8], w: usize, h: usize) {
+pub fn bgr_to_yuv(bgr: &[u8], y: &mut [u8], u: &mut [u8], v: &mut [u8], w: usize, h: usize) {
     // 用 OpenCV `cvtColor(COLOR_BGR2YUV)`，保证与 C++ GetTransformedImage 完全一致。
     // 之前用浮点公式（Y=0.299R+0.587G+0.114B 等），V 通道在个别像素与 OpenCV 的
     // 整数定点实现差 ±1 → FF 阈值边缘像素判定不同 → 幽灵带 → 字幕段丢失。
@@ -709,7 +709,7 @@ fn bgr_to_yuv(bgr: &[u8], y: &mut [u8], u: &mut [u8], v: &mut [u8], w: usize, h:
 
 /// `GetImFF`：Sobel M-edge + 局部/组合阈值，输出前景文字二值图 + 对齐带边界。
 #[allow(clippy::too_many_arguments)]
-fn get_im_ff(
+pub fn get_im_ff(
     y_full: &[u8],
     u_full: &[u8],
     v_full: &[u8],
@@ -800,7 +800,7 @@ fn get_im_ff(
 }
 
 /// `GetImNE`：垂直边缘（N-edge）组合阈值二值化。
-fn get_im_ne(y: &[u8], u: &[u8], v: &[u8], w: usize, h: usize, p: &Params) -> Vec<u8> {
+pub fn get_im_ne(y: &[u8], u: &[u8], v: &[u8], w: usize, h: usize, p: &Params) -> Vec<u8> {
     let mut im_ne = vec![0u8; w * h];
     easy_border_clear(&mut im_ne, w, h);
 
@@ -838,7 +838,7 @@ fn get_im_ne(y: &[u8], u: &[u8], v: &[u8], w: usize, h: usize, p: &Params) -> Ve
 }
 
 /// `GetImHE`：水平边缘（H-edge）组合阈值二值化。
-fn get_im_he(y: &[u8], u: &[u8], v: &[u8], w: usize, h: usize, p: &Params) -> Vec<u8> {
+pub fn get_im_he(y: &[u8], u: &[u8], v: &[u8], w: usize, h: usize, p: &Params) -> Vec<u8> {
     let mut im_he = vec![0u8; w * h];
     easy_border_clear(&mut im_he, w, h);
 

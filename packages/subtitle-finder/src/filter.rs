@@ -517,6 +517,9 @@ pub(crate) fn second_filtration(
                             }
                         }
                     }
+                    if (ia / w as i32) < 50 {
+                        tracing::trace!(row = ia / w as i32, ln, s, n_ne, "second_filtration: 顶部行 nNE");
+                    }
                     if n_ne < mpn {
                         trace!(
                             ia = ia / w as i32, ln, n_ne, mpn, s, mpned = mpned * s as f32,
@@ -618,24 +621,36 @@ pub fn filter_transformed_image(
     if res == 1 {
         // ImTF = ImSF。
         im_tf.copy_from_slice(im_sf);
+        let tf26_a = im_tf[26 * w..45 * w].iter().filter(|&&v| v == 255).count();
+        tracing::trace!(tf26_a, "filter: step3 im_tf=im_sf 26-44");
 
         // 恢复仍存在的行（用过滤前快照 ImRES1）。
         restore_still_exist_lines(im_tf, &im_res1, w, h, p);
+        let tf26_b = im_tf[26 * w..45 * w].iter().filter(|&&v| v == 255).count();
+        tracing::trace!(tf26_b, "filter: step4 restore 26-44");
 
         // 只保留与 ImSF（过滤后）相交的连通域。
         let sf_snapshot = im_sf.to_vec();
         filter_by_not_intersected_figures(im_tf, &sf_snapshot, w, h);
+        let tf26_c = im_tf[26 * w..45 * w].iter().filter(|&&v| v == 255).count();
+        tracing::trace!(tf26_c, "filter: step5 filter_by_not_intersected 26-44");
 
         let im_res2 = im_tf.to_vec();
 
         // 清除过小符号。
         res = clear_image_from_small_symbols(im_tf, w, h, p);
+        let tf26_d = im_tf[26 * w..45 * w].iter().filter(|&&v| v == 255).count();
+        tracing::trace!(tf26_d, res, "filter: step6 clear_small 26-44");
 
         if res == 1 {
             // 再次恢复。
             restore_still_exist_lines(im_tf, &im_res2, w, h, p);
+            let tf26_e = im_tf[26 * w..45 * w].iter().filter(|&&v| v == 255).count();
+            tracing::trace!(tf26_e, "filter: step7 restore2 26-44");
             // 用过滤前快照 ImRES1 扩展文字行。
             extend_imf_with_data_from_imnf(im_tf, &im_res1, w, h);
+            let tf26_f = im_tf[26 * w..45 * w].iter().filter(|&&v| v == 255).count();
+            tracing::trace!(tf26_f, "filter: step8 extend 26-44");
         }
     }
 
