@@ -98,8 +98,7 @@ pub struct OcrBoxResult {
     /// 框置信度（det 后处理里框内平均概率），反映「框定位得准不准」。
     pub box_confidence: f32,
     /// 四个顶点（顺时针：左上、右上、右下、左下），原图像素坐标。
-    #[serde(rename = "box")]
-    pub box_: [[f32; 2]; 4],
+    pub bbox: [[f32; 2]; 4],
     /// 横向值域 `[min_x, max_x]`（像素坐标），便于按列/区域过滤。
     pub x_range: [f32; 2],
     /// 纵向值域 `[min_y, max_y]`（像素坐标），便于按行/区域过滤。
@@ -218,7 +217,7 @@ impl OcrEngine {
                 // 框置信度（框内平均概率，来自 det 后处理）。
                 box_confidence: b.score,
                 // 四个顶点转 [[x,y];4]。
-                box_: b.polygon.map(|p| [p.x, p.y]),
+                bbox: b.polygon.map(|p| [p.x, p.y]),
                 // 几何中心（四点平均），便于点击回灌。
                 center,
                 // 横/纵值域，便于按区域过滤。
