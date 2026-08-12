@@ -510,4 +510,58 @@ mod tests {
         assert!(b.y_penalty < 1.0 && b.x_penalty < 1.0 && b.height_penalty < 1.0);
         assert!(b.total_penalty < 1.0);
     }
+
+    #[test]
+    fn real_frame_lu_ding_perfect_not_outlier() {
+        // 真实数据回归点：取自 tmp/大/20/sf_ocr_fix 的一帧字幕框
+        // "时间到第一名陆鼎成绩完美"（bbox [416,606]-[865,640]，center [640.5,623]）。
+        // 该框 y 比主流字幕带（mode [625,672]、行高 46）略高一点，但仍是合法字幕，
+        // 不应被判离群。固化其真实惩罚分解，防止 box 调整算法回归把它误伤。
+        let y = YStats {
+            avg: [625.0, 672.0],
+            mode: [625.0, 672.0],
+            median: [625.0, 672.0],
+            avg_height: 46.0,
+            median_height: 46.0,
+            mode_height: 46.0,
+        };
+        let x = XStats {
+            avg: 639.5,
+            mode: 639.5,
+            median: 639.5,
+        };
+        let box_r = crate::OcrBoxResult {
+            text: "时间到第一名陆鼎成绩完美".into(),
+            text_confidence: 0.99626046,
+            box_confidence: 0.87568265,
+            bbox: [
+                [416.0, 606.0],
+                [865.0, 606.0],
+                [865.0, 640.0],
+                [416.0, 640.0],
+            ],
+            x_range: [416.0, 865.0],
+            y_range: [606.0, 640.0],
+            center: [640.5, 623.0],
+        };
+        let f = FrameResult {
+            text: String::new(),
+            text_confidence: 0.0,
+            boxes: vec![box_r],
+            x_range: [0.0, 0.0],
+            y_range: [0.0, 0.0],
+            timestamp: 0,
+        };
+        let out = ocr_frames_adjust_box(&[f], &y, &x, &BoxAdjustedArgs::default());
+        let b = &out.frames[0].boxes[0];
+        assert!(!b.is_outlier, "真实字幕框「时间到第一名陆鼎成绩完美」不应被判离群");
+        // 与 tmp/大/20 的真实 adjust 产物逐项对齐（容差 1e-3）。
+        assert!((b.y_center_offset_ratio + 0.5543478).abs() < 1e-3);
+        assert!((b.x_center_offset_ratio - 0.02173913).abs() < 1e-3);
+        assert!((b.height_ratio - 0.73913044).abs() < 1e-3);
+        assert!((b.y_penalty - 0.2874845).abs() < 1e-3);
+        assert!((b.height_penalty - 0.115693584).abs() < 1e-3);
+        assert!((b.total_penalty - 0.34824038).abs() < 1e-3);
+        assert!((b.adjusted_confidence - 0.59431094).abs() < 1e-3);
+    }
 }
