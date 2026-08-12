@@ -702,7 +702,30 @@ fn run_state_machine(
                                 &cache, fn_ as usize, &im_int_s, &im_y_s, &im_ne_s, &prev_im_ne,
                             ) {
                                 Some(o) => o,
-                                None => break 'outer,
+                                None => {
+                                    // 接近 EOF 时找不到前向帧（`compare_by_offset` 帧越界返回
+                                    // None）→ 无法确定新句 offset。但**当前段仍应保存**（C++
+                                    // 前向缓冲在 EOF 保留末帧，不会 break，会正常保存段）。
+                                    // 之前 `break 'outer` 直接退出 → 当前段丢失（末尾段丢失）。
+                                    // 用最后一帧作为段尾保存。
+                                    trace!(fn_, bf, "内容变化: offset 搜索 EOF，保存当前段");
+                                    let last = cache.len().saturating_sub(1) as i32;
+                                    if let Some(f) = try_frame(&cache, last) {
+                                        pet = f.pos;
+                                    } else {
+                                        pet = cur_pos;
+                                    }
+                                    pef = last;
+                                    let mut im_int = im_int_s.clone();
+                                    let mut im_y = im_y_s.clone();
+                                    if pef - bf + 1 >= p.dl as i32
+                                        && filter::analize_for_sub_presence(&im_ne_s, &mut im_int, &mut im_y, w, h, p) == 1
+                                    {
+                                        save_keyframe(&im_fs, &im_int, bt, pet);
+                                    }
+                                    bf = -2;
+                                    break 'outer;
+                                }
                             };
                             pef = fn_ + offset as i32 - 1;
                             // 段尾 pet：用旧句最后可见帧 frame(fn_+offset-1) 的真实 PTS。
