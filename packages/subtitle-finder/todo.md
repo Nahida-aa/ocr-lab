@@ -102,6 +102,10 @@
         56600 不切分。
       - **✅ A/B 验证框架**（ab_dump.rs/ab_dump.cpp/ab_compare.py）：喂同一帧 BGR 逐
         阶段对比，二分定位。见 docs/cpp-alignment-notes.md「六」。
+      - **⚠️ merge 修复引入 39400 误段（大/11）**：修复后大/11 多 `39400,39733` 段
+        （OCR="AD"/"BB" 背景噪声，C++ 无）。get_transformed_image 在帧 1182 与 C++
+        完全一致 → 差异在**检测循环**（状态机判新段，C++ 不判），非 get_transformed_image。
+        待查检测循环为何对 39400 噪声判新段。
 
 ## 已修复（全部对齐 C++）
 
