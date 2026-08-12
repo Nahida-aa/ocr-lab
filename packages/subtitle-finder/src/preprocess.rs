@@ -125,8 +125,9 @@ pub fn analyse_image(frame: &Array2<u8>, params: &Params) -> bool {
     let mut len: usize = segs.iter().map(|&(lb, le)| le - lb + 1).sum();
     let mut l = segs.len() - 1;
 
-    // 对齐裁剪（默认 Any 跳过；这里实现 Center/Left/Right 以对齐原算法）。
-    let align = TextAlignment::Any;
+    // 对齐裁剪（C++ `g_text_alignment` 默认 **Center**，非 Any！）。
+    // ⚠️ 之前硬编码 Any 跳过 Center 的段裁剪 → 保留偏离中心噪声段 → has_text 误判。
+    let align = TextAlignment::Center;
     if align != TextAlignment::Any {
         while l > 0 {
             if len < mtl {
