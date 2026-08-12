@@ -886,7 +886,12 @@ fn run_state_machine(
                     }
 
                     if finded_prev == 1 && bf != pbf {
-                        if filter::analize_for_sub_presence(&im_ne_sp, &mut im_int_sp, &im_y_sp, w, h, p) == 1 {
+                        let sp_isa_wc = im_int_sp.iter().filter(|&&v| v == 255).count();
+                        let sp_ne_wc = im_ne_sp.iter().filter(|&&v| v == 255).count();
+                        let sp_y_wc = im_y_sp.iter().filter(|&&v| v != 0).count();
+                        let r = filter::analize_for_sub_presence(&im_ne_sp, &mut im_int_sp, &im_y_sp, w, h, p);
+                        trace!(fn_, bf, pbf, bt, pet, sp_isa_wc, sp_ne_wc, sp_y_wc, r, "段尾 SP 保存: analize_for_sub_presence");
+                        if r == 1 {
                             save_keyframe(&im_fsp, &im_int_sp, pbt, pet);
                         }
                     }

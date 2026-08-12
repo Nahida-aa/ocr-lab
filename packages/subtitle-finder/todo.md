@@ -102,6 +102,18 @@
         56600 不切分。
       - **✅ A/B 验证框架**（ab_dump.rs/ab_dump.cpp/ab_compare.py）：喂同一帧 BGR 逐
         阶段对比，二分定位。见 docs/cpp-alignment-notes.md「六」。
+      - **✅ 39466 误段已修复**：根因是 `second_filtration` 漏了 C++ `SecondFiltration` 的
+        **Center 右半屏清理**（IPAlgorithms.cpp:2472-2484）：`g_text_alignment==Center` 且
+        `lb[0] >= real_im_x_center`（段首 x 在水平中心线右侧）→ 整带清除。Rust 在 mpned
+        循环后直接进 `ln==ln_orig` 判定，漏了这一步 → 右半屏孤立噪声带被保留 →
+        `second_filtration` 返回 1 → 39466 段被保存。C++ 清理后返回 0（跳过）。
+        - 验证路径：C++ ImIntSP 与 Rust im_int_sp **逐字节一致**（CPP_IMINTSP + raw dump），
+          step1 `im_sf`（isa∩ila∩dilate(NE)）也逐字节一致（421 白点）→ 差异**纯粹在
+          second_filtration 内部**。C++ 在 rows 294/297 处 nNE=64/55 ≥ mpn 但仍被 Center
+          右半屏检查整带清除（res=0），Rust 保留（res=1）。
+        - 修复：filter.rs `second_filtration` mpned 循环后、`ln==ln_orig` 前补 Center 检查。
+        - 实测：大/11 段数 24→23（对齐 C++），39466 消失；大/13 段数 33（对齐 C++），
+          "走吧"与末尾段均正常。
       - **⚠️ 39466 误段（大/11）深挖结论**：C++ `AnalyseImage` 与 Rust `analyse_image`
         对 39466 区域的 4 帧交集（总白=2914）**都判 has_text=true**（detect_dump 验证
         两边一致）→ 差异**不在 analyse_image**。差异在**检测循环状态机**：C++ 检测到

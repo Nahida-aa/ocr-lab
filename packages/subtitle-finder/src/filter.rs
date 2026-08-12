@@ -566,6 +566,19 @@ pub(crate) fn second_filtration(
                     break;
                 }
 
+                // C++ `if (g_text_alignment == Center) && (lb[0] >= real_im_x_center)`：
+                // 段首 x 在水平中心线右侧 → 整带移除（右半屏孤立噪声）。
+                // 复刻 IPAlgorithms.cpp:2472-2484（在 mpned 循环后、ln==ln_orig 判定前）。
+                if seg_lb[0] >= real_im_x_center {
+                    for y in 0..segh {
+                        let start = (ia as usize) + y * w + seg_lb[0] as usize;
+                        let cnt = (seg_le[(ln - 1) as usize] - seg_lb[0] + 1) as usize;
+                        im[start..start + cnt].iter_mut().for_each(|v| *v = 0);
+                    }
+                    ln = 0;
+                    break;
+                }
+
                 if ln == ln_orig {
                     if ln > 0 {
                         res = 1;
