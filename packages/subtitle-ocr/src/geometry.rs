@@ -26,7 +26,7 @@ pub fn nms(boxes: Vec<OcrBoxResult>) -> Vec<OcrBoxResult> {
                 f32::NEG_INFINITY,
                 f32::NEG_INFINITY,
             );
-            for p in &l.box_ {
+            for p in &l.bbox {
                 x0 = x0.min(p[0]);
                 x1 = x1.max(p[0]);
                 y0 = y0.min(p[1]);
@@ -96,7 +96,7 @@ mod tests {
         let big = OcrBoxResult {
             text: "A".into(),
             text_confidence: 0.9,
-            box_: [[0.0, 0.0], [100.0, 0.0], [100.0, 100.0], [0.0, 100.0]],
+            bbox: [[0.0, 0.0], [100.0, 0.0], [100.0, 100.0], [0.0, 100.0]],
             box_confidence: 0.9,
             x_range: [0.0, 100.0],
             y_range: [0.0, 100.0],
@@ -105,7 +105,7 @@ mod tests {
         let small = OcrBoxResult {
             text: "B".into(),
             text_confidence: 0.8,
-            box_: [[10.0, 10.0], [20.0, 10.0], [20.0, 20.0], [10.0, 20.0]],
+            bbox: [[10.0, 10.0], [20.0, 10.0], [20.0, 20.0], [10.0, 20.0]],
             box_confidence: 0.8,
             x_range: [10.0, 20.0],
             y_range: [10.0, 20.0],
@@ -121,7 +121,7 @@ mod tests {
         let a = OcrBoxResult {
             text: "A".into(),
             text_confidence: 0.9,
-            box_: [[0.0, 0.0], [10.0, 0.0], [10.0, 10.0], [0.0, 10.0]],
+            bbox: [[0.0, 0.0], [10.0, 0.0], [10.0, 10.0], [0.0, 10.0]],
             box_confidence: 0.9,
             x_range: [0.0, 10.0],
             y_range: [0.0, 10.0],
@@ -130,7 +130,7 @@ mod tests {
         let b = OcrBoxResult {
             text: "B".into(),
             text_confidence: 0.9,
-            box_: [
+            bbox: [
                 [100.0, 100.0],
                 [110.0, 100.0],
                 [110.0, 110.0],

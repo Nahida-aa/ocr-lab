@@ -33,9 +33,9 @@ struct InputBox {
     text_confidence: f32,
     #[serde(default)]
     box_confidence: f32,
-    /// 四个顶点（顺时针：左上、右上、右下、左下）；字段名为 `box`。
-    #[serde(default, rename = "box")]
-    box_: [[f32; 2]; 4],
+    /// 四个顶点（顺时针：左上、右上、右下、左下）；字段名为 `bbox`。
+    #[serde(default, rename = "bbox")]
+    bbox: [[f32; 2]; 4],
     #[serde(default)]
     x_range: [f32; 2],
     #[serde(default)]
@@ -50,7 +50,7 @@ impl InputBox {
             text: self.text,
             text_confidence: self.text_confidence,
             box_confidence: self.box_confidence,
-            box_: self.box_,
+            bbox: self.bbox,
             x_range: self.x_range,
             y_range: self.y_range,
             center: self.center,

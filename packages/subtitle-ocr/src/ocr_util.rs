@@ -40,7 +40,7 @@ pub fn aggregate_boxes(boxes: &[OcrBoxResult]) -> FrameResult {
         rapidocr_ort::points_range(
             boxes
                 .iter()
-                .flat_map(|i| i.box_.iter().copied())
+                .flat_map(|i| i.bbox.iter().copied())
                 .map(glam::Vec2::from_array),
         )
     };
@@ -65,7 +65,7 @@ mod tests {
             text: text.into(),
             text_confidence: 0.9,
             box_confidence: 0.9,
-            box_: [
+            bbox: [
                 [0.0, y_range[0]],
                 [10.0, y_range[0]],
                 [10.0, y_range[1]],

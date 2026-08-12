@@ -94,7 +94,7 @@ impl Default for OcrOptions {
 /// 单个文字识别区域（`rapidocr_ort::OcrBoxResult` 的 re-export）。
 ///
 /// 原先是自定义 `FrameLine` 结构体，字段几乎与 rapidocr-ort 的 `OcrResult`
-/// 相同（text/text_confidence/box_），仅多了 `y_center`（= `center[1]`）。后改为
+/// 相同（text/text_confidence/bbox），仅多了 `y_center`（= `center[1]`）。后改为
 /// 类型别名，并统一命名为 `OcrBoxResult`（表示"一个识别区域/文本框"）。
 /// ⚠️ 坐标语义：`ocr_image` 返回前会把 box/center/y_range 的 y 加回 `y_offset`，
 /// 还原成原图坐标（y_range 漏还原会导致下游坐标不一致——见 `ocr_image` 注释）。
@@ -147,7 +147,7 @@ pub struct SubtitleOcr {
 /// ⚠️ 三者必须一起还原——漏掉 `y_range` 会让它停留在 ROI 坐标、与 corners 不一致，
 /// 下游所有基于 `y_range` 的统计 / 几何惩罚 / 段调整都会用错坐标（曾致 Y 惩罚全为 1）。
 fn offset_box_y(b: &mut OcrBoxResult, dy: f32) {
-    for p in &mut b.box_ {
+    for p in &mut b.bbox {
         p[1] += dy;
     }
     b.center[1] += dy;
@@ -223,8 +223,8 @@ impl SubtitleOcr {
             if (ya - yb).abs() > 20.0 {
                 ya.partial_cmp(&yb).unwrap_or(std::cmp::Ordering::Equal)
             } else {
-                let xa = a.box_[0][0];
-                let xb = b.box_[0][0];
+                let xa = a.bbox[0][0];
+                let xb = b.bbox[0][0];
                 xa.partial_cmp(&xb).unwrap_or(std::cmp::Ordering::Equal)
             }
         });
@@ -326,7 +326,7 @@ mod tests {
             text_confidence: 0.9,
             box_confidence: 0.9,
             // 左上、右上、右下、左下（y 用给定值）。
-            box_: [
+            bbox: [
                 [0.0, corners_y[0]],
                 [10.0, corners_y[1]],
                 [10.0, corners_y[2]],
@@ -344,12 +344,12 @@ mod tests {
         let mut b = box_with_ys([209.0, 209.0, 248.0, 248.0]);
         offset_box_y(&mut b, 432.0);
         // 三个坐标维度都要还原，且互相一致（回归：曾漏还原 y_range）。
-        assert_eq!(b.box_[0][1], 641.0);
-        assert_eq!(b.box_[2][1], 680.0);
+        assert_eq!(b.bbox[0][1], 641.0);
+        assert_eq!(b.bbox[2][1], 680.0);
         assert_eq!(b.y_range, [641.0, 680.0]);
         assert_eq!(b.center[1], (641.0 + 680.0) / 2.0);
         // 与 corners 一致（修复前 y_range 仍为 ROI 坐标 209-248，不一致）。
-        let cy: Vec<f32> = b.box_.iter().map(|p| p[1]).collect();
+        let cy: Vec<f32> = b.bbox.iter().map(|p| p[1]).collect();
         let (min_y, max_y) = (
             cy.iter().cloned().fold(f32::INFINITY, f32::min),
             cy.iter().cloned().fold(f32::NEG_INFINITY, f32::max),
@@ -362,7 +362,7 @@ mod tests {
         let mut b = box_with_ys([100.0, 100.0, 130.0, 130.0]);
         let before = b.clone();
         offset_box_y(&mut b, 0.0);
-        assert_eq!(b.box_, before.box_);
+        assert_eq!(b.bbox, before.bbox);
         assert_eq!(b.y_range, before.y_range);
         assert_eq!(b.center, before.center);
     }

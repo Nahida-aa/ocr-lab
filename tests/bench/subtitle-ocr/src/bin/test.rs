@@ -197,9 +197,9 @@ fn check_rust_output(stdout: &str, expect_len: usize) {
                 .expect("box.text_confidence 应为数字");
             assert!((0.0..=1.0).contains(&bc), "box confidence 越界: {bc}");
             let pts = b
-                .get("box")
+                .get("bbox")
                 .and_then(|x| x.as_array())
-                .expect("box.box 应为数组");
+                .expect("box.bbox 应为数组");
             assert_eq!(pts.len(), 4, "box 应为 4 点");
         }
     }

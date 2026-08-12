@@ -68,7 +68,7 @@ mod tests {
             text: text.into(),
             text_confidence: conf,
             box_confidence: conf,
-            box_: [
+            bbox: [
                 [0.0, y_range[0]],
                 [10.0, y_range[0]],
                 [10.0, y_range[1]],
