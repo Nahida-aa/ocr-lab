@@ -606,11 +606,14 @@ pub fn filter_transformed_image(
     imgops::intersect_two_images_inplace(&mut im_res1, &ne_dil, 0u8);
     im_sf.copy_from_slice(&im_res1);
     let step1_wc = im_sf.iter().filter(|&&v| v == 255).count();
+    let step1_26 = im_sf[26 * w..45 * w].iter().filter(|&&v| v == 255).count();
+    tracing::trace!(step1_26, "filter_transformed_image: step1 26-44");
 
     // 2) 二次过滤（连通域边缘密度），就地改 ImSF。
     let mut res = second_filtration(im_sf, im_ne, lb, le, n, w, h, p);
     let step2_wc = im_sf.iter().filter(|&&v| v == 255).count();
-    tracing::trace!(step1_wc, step2_wc, res, "filter_transformed_image: second_filtration");
+    let step2_26 = im_sf[26 * w..45 * w].iter().filter(|&&v| v == 255).count();
+    tracing::trace!(step1_wc, step2_wc, step1_26, step2_26, res, "filter_transformed_image: second_filtration");
 
     if res == 1 {
         // ImTF = ImSF。

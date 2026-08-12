@@ -643,6 +643,9 @@ pub fn get_transformed_image(
         he_wc = im_he.iter().filter(|&&v| v == 255).count(),
         "get_transformed_image: 边缘图白点"
     );
+    let sf_26 = im_sf[26 * w..45 * w].iter().filter(|&&v| v == 255).count();
+    let ff_26 = im_ff[26 * w..45 * w].iter().filter(|&&v| v == 255).count();
+    tracing::trace!(ff_26, sf_26, "get_transformed_image: 26-44 白点");
 
     // 4) NE + HE 并集。
     let mut im_ne = im_ne;
