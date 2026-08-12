@@ -108,6 +108,12 @@
         has_text=true 后不把 39466 短噪声成段（合并/跳过），Rust 成段。需对比 C++
         FastSearchSubtitles 检测状态机的 finded_prev/pbf/步进逻辑。OCR 验证 39466 段
         是"AD"/"BB" 背景噪声（tc 0.54/0.91）。
+      - **⚠️ 39466 更深：C++/Rust bf 都是 1184（段长 4 < DL=6）**：CPP_DETECT/CPP_TRK 验证
+        C++ 检测 fn_start=1182 判 found_sub=TRUE（和 Rust 一样），但跟踪时 bf=1184
+        （C++ trk 与 Rust trace 都显示 `fn_=1188 bf=1184`）。段 1184-1188（4 帧 < DL=6）。
+        Rust 却保存了 39466 段（timeline `39466,39733`），C++ 不保存 → 差异在 fn=1188
+        内容变化后的**段保存逻辑**（finded_prev/else-if/pbf 条件）。bf 起点两边一致（1184），
+        差异在保存分支。待对比 Rust else-if 段保存 vs C++（line 1678 `pef-pbf+1>=DL` 等）。
 
 ## 已修复（全部对齐 C++）
 
