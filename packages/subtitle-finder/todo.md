@@ -90,10 +90,16 @@
       - **✅ bgr_to_yuv 改用 OpenCV cvtColor（4443773）**：Rust 浮点 BGR2YUV 的 V 通道
         与 OpenCV 整数实现差 ±1（(331,560) V=131 vs 132）→ get_im_ff 阈值边缘像素
         FF 判定不同 → im∩ILA 重叠 4 vs 0。改用 cvtColor 后 FF 对齐、get_intersect_images
-        的 im∩ILA 331-339 重叠=0（同 C++）。**但仍未完全解决**：大/13 走吧段、
-        大/11 56600 仍异常。剩余差异：fn=351 的 im2∩ila2（当前帧）331-339 仍有
-        5 白点（ff2_noise=5），im_res 331-339 带仍在（cmb=0）。即使 YUV 完全对齐，
-        交集/ILA 交叠后仍有 ~5 像素差异。待继续追 fn=351 交集后 im∩y_int 为何 C++ 0。
+        的 im∩ILA 331-339 重叠=0（同 C++）。
+      - **✅ 解码改用 OpenCV VideoCapture（08b5307）**：之前 ffmpeg-next 输出 bt601 BGR，
+        C++/OpenCV 是 bt709（差 ±1-8）。改用 OpenCV VideoCapture（bt709，与 C++ 后端
+        一致）+ cvtColor。**消除了 331-339 幽灵带**（im∩y 重叠 4→0）。
+      - **❌ 幽灵带仍未完全解决**：顶部 26-44 幽灵带仍在（b_im1=0 b_im2=1，cmb=0）。
+        C++ 的 im∩y 26-44 重叠=243（有内容），但 C++ compare 的 ImFF1∩VE11 非空（无
+        幽灵带）；Rust 的 im_ff1∩ve1 在 26-44 为空（**边图 im_ne 在 26-44 为 0**）。
+        即剩余差异在**边缘图 im_ne**（ImproveSobelNEdge/HEdge）在顶部/中屏特定行的
+        像素级差异。即使 YUV/输入/sobel 对齐，im_ne 仍有差异。多位置孤立噪声点幽灵带，
+        逐像素对齐困难。大/13 走吧段、大/11 56600 仍异常。
 
 ## 已修复（全部对齐 C++）
 
