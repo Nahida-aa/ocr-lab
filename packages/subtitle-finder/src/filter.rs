@@ -372,8 +372,23 @@ pub(crate) fn second_filtration(
                     let mut l2 = ln - 2;
                     while (l2 >= 0) && (l2 < ln - 1) {
                         if seg_lb[(l2 + 1) as usize] - seg_le[l2 as usize] > btd_max {
-                            // 两段距离过远，移除偏离中心最远的段。
-                            let ll = farthest_from_center(&seg_lb, &seg_le, ln, real_im_x_center2, to_max2, real_im_x_center);
+                            // 两段距离过远：移除**相邻两段之一**（l2 或 l2+1），按 C++
+                            // SSAlgorithms.cpp:2037-2058 的 Center 判定。⚠️ 之前误用
+                            // farthest_from_center（返回全局首/尾 0 或 ln-1），导致移除
+                            // 错误段 → 过度清除顶部内容 → 幽灵带 → 字幕段丢失。
+                            let l = l2 as usize;
+                            let val1 = (seg_lb[l] + seg_le[l] - real_im_x_center2).abs();
+                            let val2 = (seg_lb[l + 1] + seg_le[l + 1] - real_im_x_center2).abs();
+                            let offset = (seg_le[l] + seg_lb[l] - real_im_x_center2).abs();
+                            let ll = if is_too_right(seg_lb[l + 1], seg_le[l + 1], to_max2, real_im_x_center)
+                                || (offset <= to_max2 && (seg_le[l + 1] - seg_lb[l + 1]) < (seg_le[l] - seg_lb[l]))
+                            {
+                                l + 1
+                            } else if val1 > val2 {
+                                l
+                            } else {
+                                l + 1
+                            };
                             for y in 0..segh {
                                 let start = (ia as usize) + y * w + seg_lb[ll] as usize;
                                 let cnt = (seg_le[ll] - seg_lb[ll] + 1) as usize;
@@ -516,9 +531,6 @@ pub(crate) fn second_filtration(
                                 i += 1;
                             }
                         }
-                    }
-                    if (ia / w as i32) < 50 {
-                        tracing::trace!(row = ia / w as i32, ln, s, n_ne, "second_filtration: 顶部行 nNE");
                     }
                     if n_ne < mpn {
                         trace!(
