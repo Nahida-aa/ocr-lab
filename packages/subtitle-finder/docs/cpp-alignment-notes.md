@@ -83,23 +83,25 @@
 - `1ba7a5a` — get_intersect_images 跳过空字幕帧 + EOF 保存末尾段（段边界完全对齐）
 - `af26cdd` — 调查记录（`.agents/subtitle-finder-cpp-diff.md`）
 
-## 六、未解决的已知差异（幽灵带 → 丢字幕段）⚠️
+## 六、已知差异（幽灵带 → 丢字幕段）⚠️
 
 **症状**：Rust 漏字幕段 / 过度切分，跨视频复现：
 - 大/13：第一个"走吧"（11666-12465ms）丢失（C++ 有，Rust 无）
 - 大/11：末尾段 56600-58032 被切成两段（C++ 一整段）
 
-**已确认（逐层排除）**：
-- `get_lines_info`、`compare2`、`intersect_y_images`、`second_filtration`、
-  `get_intersect_images` 交集逻辑全部与 C++ 逐行一致。
-- **decoder 色彩非根因**：bt601 vs bt709 的 331-339 内容几乎一致
-  （单帧 TF：C++ 238 / Rust bt601 235 / bt709 225；C++ ImY 非零 11512）。
-- `analyse_image` 改 Center 无影响（has_text 不变）。
+**根因链（已定位到像素级）**：
+1. Rust 的 ffmpeg-next 解码器输出 **bt601** BGR，C++/OpenCV 是 **bt709**（差 ±1-8）；
+   且 Rust 的浮点 BGR2YUV 的 V 通道与 OpenCV 整数实现差 ±1 → `get_im_ff` 阈值边缘
+   像素 FF 判定不同 → `get_intersect_images` 的 `im∩ILA` 在 331-339 重叠 4 vs 0。
+2. **修复**：解码改用 OpenCV VideoCapture（bt709）+ `bgr_to_yuv` 用 `cvtColor`。
+   消除了 331-339 幽灵带（im∩y 重叠 → 0）。提交 `08b5307`/`4443773`。
+3. **剩余**：顶部 26-44 幽灵带仍在。`im_ff1`(段内容∩段ILA) 26-44 为空（`im_y_s`
+   段 ILA 顶部为 0），但 `im_res`(∪当前帧 `im2∩ila2`) 有 1 孤立白点 → 带存在 →
+   `compare2` cmb=0 → val3=false → 段不稳定。即使 YUV/输入/sobel 对齐，段 ILA
+   `im_y_s` 或边图在顶部仍有像素级差异。多位置孤立噪声点幽灵带。
 
-**矛盾点（尚未锁定）**：
-- C++ 在 331-339 也有内容（TF 238 / ILA 11512），但仍能成段；
-  Rust 同区内容导致 compare 幽灵带（`cmb=0` → val3=false → 段不稳定）。
-- 幽灵带（`lb=331 le=339` 空带）的具体 compare 调用/阶段未隔离。
+**已排除**：`get_lines_info`/`compare2`/`intersect_y_images`/`second_filtration`/
+`get_intersect_images` 交集逻辑与 C++ 逐行一致；`analyse_image` 改 Center 无影响。
 
-**下一步方向**：隔离状态机各阶段 compare 调用（fast / Difficult / offset 搜索），
-逐段 dump im_res/带列表，与 C++ 状态机的 ImIntS 段内容构造逐点对比。
+**剩余方向**：段 ILA `im_y_s`（intersect_y_images_range）在顶部的像素级差异 vs C++。
+多位置孤立噪声点，逐像素对齐成本极高；或考虑 compare2 对极小空带健壮性处理。
