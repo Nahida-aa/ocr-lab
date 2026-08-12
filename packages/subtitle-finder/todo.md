@@ -102,10 +102,12 @@
         56600 不切分。
       - **✅ A/B 验证框架**（ab_dump.rs/ab_dump.cpp/ab_compare.py）：喂同一帧 BGR 逐
         阶段对比，二分定位。见 docs/cpp-alignment-notes.md「六」。
-      - **⚠️ merge 修复引入 39400 误段（大/11）**：修复后大/11 多 `39400,39733` 段
-        （OCR="AD"/"BB" 背景噪声，C++ 无）。get_transformed_image 在帧 1182 与 C++
-        完全一致 → 差异在**检测循环**（状态机判新段，C++ 不判），非 get_transformed_image。
-        待查检测循环为何对 39400 噪声判新段。
+      - **⚠️ 39466 误段（大/11）深挖结论**：C++ `AnalyseImage` 与 Rust `analyse_image`
+        对 39466 区域的 4 帧交集（总白=2914）**都判 has_text=true**（detect_dump 验证
+        两边一致）→ 差异**不在 analyse_image**。差异在**检测循环状态机**：C++ 检测到
+        has_text=true 后不把 39466 短噪声成段（合并/跳过），Rust 成段。需对比 C++
+        FastSearchSubtitles 检测状态机的 finded_prev/pbf/步进逻辑。OCR 验证 39466 段
+        是"AD"/"BB" 背景噪声（tc 0.54/0.91）。
 
 ## 已修复（全部对齐 C++）
 
