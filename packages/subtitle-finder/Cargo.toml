@@ -27,8 +27,8 @@ anyhow.workspace = true
 clap.workspace = true
 # 连通域（文字块检测），替代手写 CMyClosedFigure。
 opencv = { workspace = true }
-# 视频逐帧解码（30fps）。
-ffmpeg-next = { workspace = true }
+# 视频逐帧解码（30fps）。用 opencv::videoio::VideoCapture（与 C++/OpenCV 后端一致，
+# 输出 bt709 BGR）；此前 ffmpeg-next 输出 bt601 BGR → 幽灵带 → 字幕段丢失。
 # 结构化调试日志（对齐项目约定：调试日志用 tracing）。
 tracing = { workspace = true }
 tracing-subscriber.workspace = true
