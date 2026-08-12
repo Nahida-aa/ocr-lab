@@ -83,25 +83,29 @@
 - `1ba7a5a` — get_intersect_images 跳过空字幕帧 + EOF 保存末尾段（段边界完全对齐）
 - `af26cdd` — 调查记录（`.agents/subtitle-finder-cpp-diff.md`）
 
-## 六、已知差异（幽灵带 → 丢字幕段）⚠️
+## 六、已解决：幽灵带 → 丢字幕段（A/B 框架二分定位）
 
 **症状**：Rust 漏字幕段 / 过度切分，跨视频复现：
 - 大/13：第一个"走吧"（11666-12465ms）丢失（C++ 有，Rust 无）
 - 大/11：末尾段 56600-58032 被切成两段（C++ 一整段）
 
-**根因链（已定位到像素级）**：
-1. Rust 的 ffmpeg-next 解码器输出 **bt601** BGR，C++/OpenCV 是 **bt709**（差 ±1-8）；
-   且 Rust 的浮点 BGR2YUV 的 V 通道与 OpenCV 整数实现差 ±1 → `get_im_ff` 阈值边缘
-   像素 FF 判定不同 → `get_intersect_images` 的 `im∩ILA` 在 331-339 重叠 4 vs 0。
-2. **修复**：解码改用 OpenCV VideoCapture（bt709）+ `bgr_to_yuv` 用 `cvtColor`。
-   消除了 331-339 幽灵带（im∩y 重叠 → 0）。提交 `08b5307`/`4443773`。
-3. **剩余**：顶部 26-44 幽灵带仍在。`im_ff1`(段内容∩段ILA) 26-44 为空（`im_y_s`
-   段 ILA 顶部为 0），但 `im_res`(∪当前帧 `im2∩ila2`) 有 1 孤立白点 → 带存在 →
-   `compare2` cmb=0 → val3=false → 段不稳定。即使 YUV/输入/sobel 对齐，段 ILA
-   `im_y_s` 或边图在顶部仍有像素级差异。多位置孤立噪声点幽灵带。
+**根因（最终定位）**：`second_filtration` 的 btd 段合并分支（两段距离 > btd_max 时
+移除偏离中心段）**误用 `farthest_from_center`**（返回**全局**首/尾段 0 或 ln-1），
+而 C++ 移除**相邻两段之一**（l 或 l+1，SSAlgorithms.cpp:2037-2058 的 Center 判定）。
+导致 Rust 移除错误段 → 顶部内容过度清除（row 24 段数 18→2 vs C++ 18→9）→
+TF 顶部 26-44 差异 → `get_lines_info` 幽灵带（compare2 cmb=0）→ 段不稳定。
 
-**已排除**：`get_lines_info`/`compare2`/`intersect_y_images`/`second_filtration`/
-`get_intersect_images` 交集逻辑与 C++ 逐行一致；`analyse_image` 改 Center 无影响。
+**修复**：merge 分支改用 C++ 的 l/l+1 Center 判定（`is_too_right` + val1/val2/offset）。
+提交 `8de7302`。
 
-**剩余方向**：段 ILA `im_y_s`（intersect_y_images_range）在顶部的像素级差异 vs C++。
-多位置孤立噪声点，逐像素对齐成本极高；或考虑 compare2 对极小空带健壮性处理。
+**A/B 验证框架**（定位工具）：
+- Rust `src/bin/ab_dump.rs` + C++ `cli/ab_dump.cpp`：跑 `get_transformed_image` 各阶段，
+  dump 指纹（区域白点 + 校验和）+ raw 数组，喂同一帧 BGR。
+- `scripts/ab_compare.py`：逐阶段对比，报首个差异阶段 + 像素坐标。
+- 二分：y/u/v/ff/sf/ne0/he/ne/sf_step1 全一致 → 首个差异在 `filter_transformed_image` →
+  逐步 top26 → `second_filtration` 段合并分支。修复后所有阶段指纹与 C++ 完全一致。
+
+**前置修复**：解码 OpenCV VideoCapture（bt709）+ `bgr_to_yuv` 用 `cvtColor`（`08b5307`/`4443773`）。
+
+**已排除**：`get_lines_info`/`compare2`/`intersect_y_images`/`second_filtration` 其余逻辑
+与 C++ 逐行一致；`analyse_image` 改 Center 无影响；decoder 色彩非最终根因。

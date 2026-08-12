@@ -94,12 +94,14 @@
       - **✅ 解码改用 OpenCV VideoCapture（08b5307）**：之前 ffmpeg-next 输出 bt601 BGR，
         C++/OpenCV 是 bt709（差 ±1-8）。改用 OpenCV VideoCapture（bt709，与 C++ 后端
         一致）+ cvtColor。**消除了 331-339 幽灵带**（im∩y 重叠 4→0）。
-      - **❌ 幽灵带仍未完全解决**：顶部 26-44 幽灵带仍在（b_im1=0 b_im2=1，cmb=0）。
-        C++ 的 im∩y 26-44 重叠=243（有内容），但 C++ compare 的 ImFF1∩VE11 非空（无
-        幽灵带）；Rust 的 im_ff1∩ve1 在 26-44 为空（**边图 im_ne 在 26-44 为 0**）。
-        即剩余差异在**边缘图 im_ne**（ImproveSobelNEdge/HEdge）在顶部/中屏特定行的
-        像素级差异。即使 YUV/输入/sobel 对齐，im_ne 仍有差异。多位置孤立噪声点幽灵带，
-        逐像素对齐困难。大/13 走吧段、大/11 56600 仍异常。
+      - **✅ 幽灵带根因已定位并修复（8de7302）**：second_filtration 的 btd 段合并分支
+        误用 farthest_from_center（返回全局首/尾段 0 或 ln-1），而 C++ 移除相邻两段
+        之一（l 或 l+1，SSAlgorithms.cpp:2037-2058 Center 判定）。Rust 移除错误段 →
+        顶部 26-44 过度清除（row 24 段数 18→2 vs C++ 18→9）→ TF 差异 → 幽灵带。
+        修复后 A/B 框架验证所有阶段指纹与 C++ 完全一致。大/13 走吧段恢复、大/11
+        56600 不切分。
+      - **✅ A/B 验证框架**（ab_dump.rs/ab_dump.cpp/ab_compare.py）：喂同一帧 BGR 逐
+        阶段对比，二分定位。见 docs/cpp-alignment-notes.md「六」。
 
 ## 已修复（全部对齐 C++）
 
