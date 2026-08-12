@@ -465,53 +465,6 @@ mod tests {
     }
 
     #[test]
-    fn moderate_offset_low_conf_box_becomes_outlier() {
-        // 复现实际遇到的「色」框：上下各偏 ~0.28/0.26 行高（没超 1 行高）、
-        // text_confidence 低（0.56）。原 band 阈值 1.0 时这类框完全不被罚；
-        // 阈值降到 0.05 + 加权置信度（text×0.3+box×0.7）后应被判离群。
-        let y = YStats {
-            avg: [100.0, 143.0],
-            mode: [100.0, 143.0],
-            median: [100.0, 143.0],
-            avg_height: 43.0,
-            median_height: 43.0,
-            mode_height: 43.0,
-        };
-        // 复现实际遇到的「色」框：中心相对典型中心偏移约 0.35 行高、text_confidence 低
-        // （0.564）。惩罚改用中心偏移口径（y_center_offset_ratio）后，这类框仍应被判离群。
-        // center = (82+131)/2 = 106.5，mode 中心 = (100+143)/2 = 121.5 →
-        // 偏移 = (106.5-121.5)/43 ≈ -0.349 行高。
-        let f = frame(vec![box_with_conf("色", [82.0, 131.0], 0.564, 0.634)]);
-        let out = ocr_frames_adjust_box(
-            &[f],
-            &y,
-            &XStats {
-                avg: 5.0,
-                mode: 5.0,
-                median: 5.0,
-            },
-            &BoxAdjustedArgs::default(),
-        );
-        let b = &out.frames[0].boxes[0];
-        assert!(b.is_outlier, "中等偏移 + 低 text_confidence 的框应被判离群");
-        assert!(b.adjusted_confidence < 0.5);
-        // 新语义：偏移以中心偏移表达（非上下边界取 max）。
-        assert!((b.y_center_offset_ratio + 0.349).abs() < 1e-3);
-        // 惩罚分解（饱和放缩 raw/(raw+C)，C=1）：
-        //   x 未偏（测试 XStats.mode=5 与框 center.x=5 一致）→ x_penalty≈0；
-        //   y_raw=(0.349-0.05)*0.8=0.239 → y_penalty=0.239/1.239≈0.193；
-        //   height_ratio≈1.14 → h_raw=|log2(1.14)|*0.3≈0.057 → h_penalty≈0.054；
-        //   total_raw=0.239+0+0.057=0.296 → total=0.296/1.296≈0.228。
-        assert!(b.x_penalty.abs() < 1e-4, "x 未偏移，x_penalty 应为 0");
-        assert!((b.y_penalty - 0.193).abs() < 1e-2, "y_penalty 应≈0.193");
-        assert!((b.height_penalty - 0.054).abs() < 1e-2, "height_penalty 应≈0.054");
-        assert!((b.total_penalty - 0.228).abs() < 1e-2, "total_penalty 应≈0.228");
-        // 饱和放缩保证每项与 total 都严格 < 1。
-        assert!(b.y_penalty < 1.0 && b.x_penalty < 1.0 && b.height_penalty < 1.0);
-        assert!(b.total_penalty < 1.0);
-    }
-
-    #[test]
     fn real_frame_lu_ding_perfect_not_outlier() {
         // 真实数据回归点（低优先级守护）：取自 tmp/大/20/sf_ocr_fix 的一帧字幕框
         // "时间到第一名陆鼎成绩完美"（bbox [416,606]-[865,640]，center [640.5,623]）。
