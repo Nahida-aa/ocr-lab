@@ -293,7 +293,8 @@ fn farthest_from_center(seg_lb: &[i32], seg_le: &[i32], ln: i32, real_im_x_cente
 
 /// `SecondFiltration`：按 `segh` 条带做边缘密度清理。
 /// C++ `g_text_alignment` 默认 **Center**（非 Any），故实现完整的 Center 路径：
-/// 段合并（btd）、中心偏移移除、`mpd` 最小点密度、`mpned` 最小边缘密度检查。
+/// 段合并（btd）、中心偏移移除、`mpd` 最小点密度、`mpned` 最小边缘密度检查、
+/// **右半屏清理**（`lb[0] >= real_im_x_center` → 整带清除，IPAlgorithms.cpp:2472）。
 /// 之前只实现了 Any 路径，导致噪声清理不足（ISA 过密 → 过度切分）。
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn second_filtration(
