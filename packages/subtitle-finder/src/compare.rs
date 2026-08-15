@@ -193,8 +193,10 @@ fn compare_ila(
         let dif = if dif2 > dif1 { dif2 } else { dif1 };
         if cmb == 0 {
             // 该带 Im1/Im2 无公共白点。诊断：带内 Im1/Im2 各自白点数。
-            let b_im1 = im1[ib..ie].iter().filter(|&&v| v == 255).count();
-            let b_im2 = im2[ib..ie].iter().filter(|&&v| v == 255).count();
+            // 注意 ib..ie 在窄带（le[k]-lb[k] <= 2）时可能 ib > ie（空带，C++ 的
+            // `for(i=ib;i<ie;i++)` 对空带安全，此处用 .get() 同样安全，不 panic）。
+            let b_im1 = im1.get(ib..ie).map_or(0, |s| s.iter().filter(|&&v| v == 255).count());
+            let b_im2 = im2.get(ib..ie).map_or(0, |s| s.iter().filter(|&&v| v == 255).count());
             max_dif = 10.0;
             debug!(k, lb=lb[k], le=le[k], dif1, dif2, cmb, b_im1, b_im2, "compare2: 带 cmb=0 返回 false");
             return (false, max_dif);
