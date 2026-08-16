@@ -89,19 +89,7 @@ pub fn db_postprocess(
 
     let mut out: Vec<DetBox> = Vec::new();
     let n_contours = contours.len();
-    #[cfg(debug_assertions)]
-    if std::env::var("DB_DUMP").is_ok() {
-        eprintln!("[db] contours={} bitmap_px>0.3={}", n_contours, bitmap_data.iter().filter(|&&v| v != 0).count());
-        if std::env::var("DB_SAVE").is_ok() {
-            // 存二值化 bitmap 为 PGM，便于对比连通域。
-            use std::io::Write;
-            let mut f = std::fs::File::create("/tmp/det_bitmap.pgm").expect("pgm");
-            let _ = write!(f, "P5\n{} {}\n255\n", hm_w, hm_h);
-            let _ = f.write_all(&bitmap_data);
-            let _ = f.flush();
-            eprintln!("[db] bitmap saved /tmp/det_bitmap.pgm ({}x{})", hm_w, hm_h);
-        }
-    }
+    tracing::trace!("[db] contours={} bitmap_px>0.3={}", n_contours, bitmap_data.iter().filter(|&&v| v != 0).count());
     for ci in 0..n_contours {
         let pts_vec = contours.get(ci).expect("contour");
         if pts_vec.len() < 3 {
@@ -116,21 +104,14 @@ pub fn db_postprocess(
         let ordered = box_points(&rect);
         let side_a = ordered[0].distance(ordered[1]);
         let side_b = ordered[1].distance(ordered[2]);
-        #[cfg(debug_assertions)]
-        if std::env::var("DB_DUMP").is_ok() {
-            let cx = contour.iter().map(|p| p.x).sum::<f32>() / contour.len() as f32;
-            let cy = contour.iter().map(|p| p.y).sum::<f32>() / contour.len() as f32;
-            let pts: Vec<String> = contour.iter().map(|p| format!("({:.0},{:.0})", p.x, p.y)).collect();
-            eprintln!(
-                "[db] contour#{} npts={} minSide={:.1} center=({:.0},{:.0}) pts={}",
-                ci,
-                pts_vec.len(),
-                side_a.min(side_b),
-                cx,
-                cy,
-                pts.join(" ")
-            );
-        }
+        tracing::trace!(
+            "[db] contour#{} npts={} minSide={:.1} center=({:.0},{:.0})",
+            ci,
+            pts_vec.len(),
+            side_a.min(side_b),
+            contour.iter().map(|p| p.x).sum::<f32>() / contour.len() as f32,
+            contour.iter().map(|p| p.y).sum::<f32>() / contour.len() as f32,
+        );
         if side_a.min(side_b) < 3.0 {
             continue;
         }
@@ -138,10 +119,7 @@ pub fn db_postprocess(
         // ---- box_score_fast(prob, ordered) ----
         // 用 minAreaRect 的 4 点框（非原始轮廓）在掩码内对 prob 取均值，对齐 cpp。
         let score = box_score_fast(&prob, hm_w, hm_h, &ordered);
-        #[cfg(debug_assertions)]
-        if std::env::var("DB_DUMP").is_ok() {
-            eprintln!("[db]   contour#{} score={:.4} boxThresh={}", ci, score, box_thresh);
-        }
+        tracing::trace!("[db]   contour#{} score={:.4} boxThresh={}", ci, score, box_thresh);
         if score < box_thresh {
             continue;
         }

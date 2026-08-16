@@ -100,23 +100,6 @@ pub fn preprocess_rec(img: &Array3<u8>) -> (Array4<f32>, usize) {
     };
     let resized_w = resized_w.max(1);
     let resized = resize_bilinear(img, REC_H, resized_w);
-    if std::env::var("REC_DUMP").is_ok() {
-        // 存 resize 后 48×w 的灰度 PGM，便于对比 Python rec 输入。
-        let (rh, rw, _) = resized.dim();
-        use std::io::Write;
-        let mut f = std::fs::File::create("/tmp/rec_resized.pgm").expect("pgm");
-        let _ = write!(f, "P5\n{} {}\n255\n", rw, rh);
-        // 取 R 通道（BGR 的第 2 个？这里存灰度近似）
-        let mut gray = Vec::with_capacity(rh * rw);
-        for y in 0..rh {
-            for x in 0..rw {
-                gray.push(resized[[y, x, 0]]);
-            }
-        }
-        let _ = f.write_all(&gray);
-        let _ = f.flush();
-        eprintln!("[preprocess_rec] resized {}x{} saved /tmp/rec_resized.pgm", rw, rh);
-    }
     let (mean, std) = REC_NORM;
     let chw = normalize_chw(&resized, &mean, &std);
     // 对齐 cpp：tensor 宽 = imgW（可能 > resized_w，右侧补零）。

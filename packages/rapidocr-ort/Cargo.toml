@@ -36,6 +36,9 @@ glam = { workspace = true }
 # 纯 Rust 线性代数（透视变换 getPerspectiveTransform），替代 opencv 的矩阵求解。
 faer = { workspace = true }
 
+# 调试日志（对齐 AGENTS.md：用 tracing，调试后可不清除，RUST_LOG 控制级别）。
+tracing.workspace = true
+
 # 二进制侧依赖
 clap.workspace = true
 serde.workspace = true

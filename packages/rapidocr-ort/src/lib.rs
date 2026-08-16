@@ -36,6 +36,7 @@ use ndarray::Array3;
 use ort::session::Session;
 use serde::Serialize;
 use std::path::Path;
+use tracing::debug;
 
 /// 检测框过滤阈值：DB 后处理里框内平均概率低于它的框直接丢弃（PP-OCR 默认 0.6）。
 const BOX_THRESH: f32 = 0.6;
@@ -168,7 +169,7 @@ impl OcrEngine {
     /// 临时诊断：dump det heatmap（sigmoid 后）的 prob 直方图，排查检测漏检。
     pub fn dump_det_heatmap(&mut self, img: &Array3<u8>) {
         let (h, w, _) = img.dim();
-        let (det_input, nh, nw) = preprocess::preprocess_det(img);
+        let (det_input, _nh, _nw) = preprocess::preprocess_det(img);
         let det_tensor = ort::value::Tensor::from_array(det_input).expect("tensor");
         let det_out = self
             .det
@@ -179,7 +180,7 @@ impl OcrEngine {
             .unwrap()
             .to_owned();
         let hm_shape = det_map.shape();
-        eprintln!("[det_dump] full det output shape: {:?}", hm_shape);
+        debug!("[det_dump] full det output shape: {:?}", hm_shape);
         let (hm_h, hm_w) = (hm_shape[2], hm_shape[3]);
         let heatmap: Vec<f32> = det_map.into_raw_vec_and_offset().0;
         let sigmoid = heatmap.iter().any(|&v| v > 1.0);
@@ -256,7 +257,7 @@ impl OcrEngine {
 
         // ---- 1. 检测：原图缩放到输入尺寸，归一化后跑 det ----
         let (det_input, det_nh, det_nw) = preprocess::preprocess_det(img);
-        eprintln!("[det] input {}x{} (img {}x{})", det_nh, det_nw, h, w);
+        debug!("[det] input {}x{} (img {}x{})", det_nh, det_nw, h, w);
         let det_tensor =
             ort::value::Tensor::from_array(det_input).context("构造 det 输入张量失败")?;
         let det_out = self
@@ -270,7 +271,7 @@ impl OcrEngine {
         // 返回原图坐标系下的四点框（[Vec2;4]）。
         let hm_shape = det_map.shape();
         let (hm_h, hm_w) = (hm_shape[2], hm_shape[3]);
-        eprintln!(
+        debug!(
             "[det] det_out_shape={:?} hm={}x{} 但 det_input宽={} 原图/ROI={}x{}",
             hm_shape, hm_w, hm_h, det_nw, w, h
         );
