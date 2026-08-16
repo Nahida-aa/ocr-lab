@@ -165,12 +165,98 @@ impl OcrEngine {
         self.profile
     }
 
+    /// 临时诊断：dump det heatmap（sigmoid 后）的 prob 直方图，排查检测漏检。
+    pub fn dump_det_heatmap(&mut self, img: &Array3<u8>) {
+        let (h, w, _) = img.dim();
+        let (det_input, nh, nw) = preprocess::preprocess_det(img);
+        let det_tensor = ort::value::Tensor::from_array(det_input).expect("tensor");
+        let det_out = self
+            .det
+            .run(ort::inputs!["x" => det_tensor])
+            .expect("det 推理失败");
+        let det_map = det_out[self.det_out_name.as_str()]
+            .try_extract_array::<f32>()
+            .unwrap()
+            .to_owned();
+        let hm_shape = det_map.shape();
+        eprintln!("[det_dump] full det output shape: {:?}", hm_shape);
+        let (hm_h, hm_w) = (hm_shape[2], hm_shape[3]);
+        let heatmap: Vec<f32> = det_map.into_raw_vec_and_offset().0;
+        let sigmoid = heatmap.iter().any(|&v| v > 1.0);
+        let prob: Vec<f32> = if sigmoid {
+            heatmap.iter().map(|&v| 1.0 / (1.0 + (-v).exp())).collect()
+        } else {
+            heatmap.to_vec()
+        };
+        // 统计 prob 分布
+        let mut bins = [0usize; 11];
+        for &p in &prob {
+            let b = ((p * 10.0).floor() as usize).min(10);
+            bins[b] += 1;
+        }
+        println!(
+            "det heatmap {}x{} sigmoid={} input_norm=0.5/0.5",
+            hm_w, hm_h, sigmoid
+        );
+        for (i, c) in bins.iter().enumerate() {
+            let lo = i as f32 / 10.0;
+            let hi = (i + 1) as f32 / 10.0;
+            println!("  prob[{:.1},{:.1}) : {} px", lo, hi, c);
+        }
+        // 找 y 在底部 40% 区域(原图 y>=0.6h)的最大 prob 位置
+        // 热力图 y 缩放：scale_h = h / hm_h
+        let scale_h = h as f32 / hm_h as f32;
+        let scale_w = w as f32 / hm_w as f32;
+        let y0 = (0.6 * h as f32 / scale_h) as usize;
+        let x0 = 0;
+        let x1 = hm_w;
+        let mut maxp = 0.0f32;
+        let mut maxxy = (0usize, 0usize);
+        for yy in y0..hm_h {
+            for xx in x0..x1 {
+                let p = prob[yy * hm_w + xx];
+                if p > maxp {
+                    maxp = p;
+                    maxxy = (xx, yy);
+                }
+            }
+        }
+        println!(
+            "bottom40% max prob={:.4} at heatmap({},{}) -> 原图({:.0},{:.0})",
+            maxp,
+            maxxy.0,
+            maxxy.1,
+            maxxy.0 as f32 * scale_w,
+            maxxy.1 as f32 * scale_h
+        );
+    }
+
+    /// 临时诊断：仅跑 det 返回原始检测框（不 rec），用于排查检测/识别差异。
+    pub fn detect_raw_boxes(&mut self, img: &Array3<u8>) -> Vec<det::DetBox> {
+        let (h, w, _) = img.dim();
+        let (det_input, _, _) = preprocess::preprocess_det(img);
+        let det_tensor = ort::value::Tensor::from_array(det_input).expect("tensor");
+        let det_out = self
+            .det
+            .run(ort::inputs!["x" => det_tensor])
+            .expect("det 推理失败");
+        let det_map = det_out[self.det_out_name.as_str()]
+            .try_extract_array::<f32>()
+            .unwrap()
+            .to_owned();
+        let hm_shape = det_map.shape();
+        let (hm_h, hm_w) = (hm_shape[2], hm_shape[3]);
+        let heatmap: Vec<f32> = det_map.into_raw_vec_and_offset().0;
+        det::db_postprocess(&heatmap, hm_w, hm_h, w, h, BOX_THRESH)
+    }
+
     /// 对一张 BGR 图像（height×width×3，0-255 u8，见 [`load_image`]）做检测 + 识别。
     pub fn detect(&mut self, img: &Array3<u8>) -> Result<Vec<OcrBoxResult>> {
         let (h, w, _) = img.dim();
 
         // ---- 1. 检测：原图缩放到输入尺寸，归一化后跑 det ----
-        let (det_input, _, _) = preprocess::preprocess_det(img);
+        let (det_input, det_nh, det_nw) = preprocess::preprocess_det(img);
+        eprintln!("[det] input {}x{} (img {}x{})", det_nh, det_nw, h, w);
         let det_tensor =
             ort::value::Tensor::from_array(det_input).context("构造 det 输入张量失败")?;
         let det_out = self
@@ -184,6 +270,10 @@ impl OcrEngine {
         // 返回原图坐标系下的四点框（[Vec2;4]）。
         let hm_shape = det_map.shape();
         let (hm_h, hm_w) = (hm_shape[2], hm_shape[3]);
+        eprintln!(
+            "[det] det_out_shape={:?} hm={}x{} 但 det_input宽={} 原图/ROI={}x{}",
+            hm_shape, hm_w, hm_h, det_nw, w, h
+        );
         let heatmap: Vec<f32> = det_map.into_raw_vec_and_offset().0;
         let boxes = det::db_postprocess(&heatmap, hm_w, hm_h, w, h, BOX_THRESH);
 

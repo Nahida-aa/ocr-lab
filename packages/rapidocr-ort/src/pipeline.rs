@@ -249,7 +249,11 @@ pub fn recognize(
         img.clone()
     };
 
-    let (rec_in, _rec_w) = preprocess_rec(&rec_crop);
+    let (rec_in, rec_w) = preprocess_rec(&rec_crop);
+    if std::env::var("REC_DUMP").is_ok() {
+        let flat: Vec<f32> = rec_in.as_slice().unwrap().iter().take(24).copied().collect();
+        eprintln!("[rec_in] first24={:?} shape={:?}", flat, rec_in.shape());
+    }
     let rec_tensor = ort::value::Tensor::from_array(rec_in).expect("构造 rec 输入张量失败");
     let rec_out = rec
         .run(ort::inputs!["x" => rec_tensor])
@@ -261,7 +265,33 @@ pub fn recognize(
     // rec 输出形状 [1, T, C]（C=字符类数，T=时间步），直接取最后两维。
     let shape = logits.shape().to_vec();
     let flat = logits.as_slice().unwrap().to_vec();
-    ctc_greedy_decode(&flat, &shape, vocab)
+    let (text, conf) = ctc_greedy_decode(&flat, &shape, vocab);
+    if std::env::var("REC_DUMP").is_ok() {
+        let (ih, iw, _ic) = img.dim();
+        let (rh, rw, _rc) = rec_crop.dim();
+        let num_classes = shape.last().copied().unwrap_or(0);
+        let timesteps = shape.get(shape.len().wrapping_sub(2)).copied().unwrap_or(0);
+        let mut argmax_idx: Vec<usize> = Vec::new();
+        if timesteps > 0 && num_classes > 0 && timesteps * num_classes <= flat.len() {
+            for t in 0..timesteps {
+                let row = &flat[t * num_classes..(t + 1) * num_classes];
+                let mut mi = 0usize;
+                let mut mv = row[0];
+                for (i, &v) in row.iter().enumerate() {
+                    if v > mv {
+                        mv = v;
+                        mi = i;
+                    }
+                }
+                argmax_idx.push(mi);
+            }
+        }
+        eprintln!(
+            "[rec] crop_in={}x{} rec_crop={}x{} rec_input_w={} -> text={:?} conf={:.4} logits_shape={:?} argmax={:?}",
+            ih, iw, rh, rw, rec_w, text, conf, shape, argmax_idx
+        );
+    }
+    (text, conf)
 }
 
 #[cfg(test)]

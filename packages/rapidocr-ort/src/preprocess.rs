@@ -36,8 +36,11 @@ pub fn preprocess_det(img: &Array3<u8>) -> (Array4<f32>, usize, usize) {
     // cpp，需重测基准（见 bench README）。
     let flat: &[u8] = img.as_slice().unwrap();
     let resized = geometry::imgproc::resize_bilinear_hwc(flat, w, h, c, nw, nh);
-    let mean = [0.485_f32, 0.456, 0.406];
-    let std = [0.229_f32, 0.224, 0.225];
+    // det 归一化必须与 PP-OCR / rapidocr_onnxruntime 一致：mean/std = 0.5/0.5
+    // （`(x/255 - 0.5)/0.5`），而非 ImageNet 的 0.485/0.229。曾误用 ImageNet 参数，
+    // 导致 det 输入偏置/方差错乱、检测框漏检（如「嗯」字单字漏检）。rec/cls 已用 0.5/0.5。
+    let mean = [0.5_f32, 0.5, 0.5];
+    let std = [0.5_f32, 0.5, 0.5];
     let chw_flat = geometry::imgproc::normalize_chw(&resized, nh, nw, c, &mean, &std);
     let chw = Array4::from_shape_vec((1, c, nh, nw), chw_flat).expect("CHW 张量形状");
     (chw, nh, nw)
@@ -86,6 +89,23 @@ pub fn preprocess_rec(img: &Array3<u8>) -> (Array4<f32>, usize) {
     };
     let resized_w = resized_w.max(1);
     let resized = resize_bilinear(img, REC_H, resized_w);
+    if std::env::var("REC_DUMP").is_ok() {
+        // 存 resize 后 48×w 的灰度 PGM，便于对比 Python rec 输入。
+        let (rh, rw, _) = resized.dim();
+        use std::io::Write;
+        let mut f = std::fs::File::create("/tmp/rec_resized.pgm").expect("pgm");
+        let _ = write!(f, "P5\n{} {}\n255\n", rw, rh);
+        // 取 R 通道（BGR 的第 2 个？这里存灰度近似）
+        let mut gray = Vec::with_capacity(rh * rw);
+        for y in 0..rh {
+            for x in 0..rw {
+                gray.push(resized[[y, x, 0]]);
+            }
+        }
+        let _ = f.write_all(&gray);
+        let _ = f.flush();
+        eprintln!("[preprocess_rec] resized {}x{} saved /tmp/rec_resized.pgm", rw, rh);
+    }
     let (mean, std) = REC_NORM;
     let chw = normalize_chw(&resized, &mean, &std);
     // 对齐 cpp：tensor 宽 = imgW（可能 > resized_w，右侧补零）。
