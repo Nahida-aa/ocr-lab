@@ -151,14 +151,13 @@ pub fn crop_for_rec(img: &Array3<u8>, polygon: &[Vec2; 4]) -> Array3<u8> {
         .iter()
         .map(|p| p.y)
         .fold(f32::NEG_INFINITY, f32::max);
-    let bw = (maxx_f - minx_f).abs();
-    let bh = (maxy_f - miny_f).abs();
-    let pad_x = (bw * 0.05).max(1.0);
-    let pad_y = (bh * 0.05).max(1.0);
-    let minx = (minx_f - pad_x).max(0.0).floor() as usize;
-    let miny = (miny_f - pad_y).max(0.0).floor() as usize;
-    let maxx = (maxx_f + pad_x + 1.0).min(w as f32).floor() as usize;
-    let maxy = (maxy_f + pad_y + 1.0).min(h as f32).floor() as usize;
+    // 对齐 Python RapidOCR 行为：不加 pad，直接按 polygon 的轴对齐外接矩形裁剪。
+    // 旧 5% pad 会让 unclip 后的框四周多出背景，rec 对"字未填满"输入识别失败
+    // （如 51×54 含两字的 crop 被判为全 blank）。Python det 框本就紧密外接，无需额外 pad。
+    let minx = minx_f.max(0.0).floor() as usize;
+    let miny = miny_f.max(0.0).floor() as usize;
+    let maxx = (maxx_f + 1.0).min(w as f32).ceil() as usize;
+    let maxy = (maxy_f + 1.0).min(h as f32).ceil() as usize;
     if maxx <= minx || maxy <= miny {
         return Array3::<u8>::zeros((1, 1, c));
     }

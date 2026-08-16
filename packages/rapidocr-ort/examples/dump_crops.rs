@@ -40,6 +40,14 @@ fn main() {
         }
         let im = image::RgbaImage::from_raw(cw as u32, ch as u32, buf).unwrap();
         im.save(&p).unwrap();
-        eprintln!("[crop] #{} score={:.4} crop={}x{} saved={}", i, b.score, cw, ch, p.display());
+        eprintln!(
+            "[crop] #{} score={:.4} crop={}x{} poly={:?} saved={}",
+            i,
+            b.score,
+            cw,
+            ch,
+            poly.map(|v| [v.x, v.y]),
+            p.display()
+        );
     }
 }

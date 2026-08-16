@@ -19,6 +19,9 @@ pub const CLS_W: usize = 192;
 pub const CLS_H: usize = 48;
 /// Rec 输入高度（PP-OCR v3 / v6 的 rec 均吃 48，v3 之前误用 32 是掉字根因）。
 pub const REC_H: usize = 48;
+/// Rec 最大宽高比（对齐 rapidocr config rec_img_shape `[3,48,320]` → 320/48）。
+/// rec 输入宽 = int(48 × max(该值, 实际宽高比))，对单框恒取 320，右侧补零。
+pub const REC_MAX_WH_RATIO: f32 = 320.0 / 48.0;
 
 /// 识别分支归一化参数 `(mean, std)`。
 /// PP-OCR 训练时用的就是 `(x/255 - 0.5)/0.5`，与 ImageNet 统计不同；v3 之前
@@ -71,17 +74,25 @@ pub fn det_target_size(h: usize, w: usize) -> (usize, usize) {
     (nh.max(32), nw.max(32))
 }
 
-/// 识别预处理：crop 已经裁出文字块，这里把它 resize 到 `[REC_H, img_w]`，
-/// `img_w = int(REC_H * (w/h))` 且**不做任何封顶**——这正是 subtitle-rust 与
-/// 我之前代码（clamp 到 320）的关键差异：封顶会把宽行压扁、挤掉中段字符。
+/// 识别预处理：对齐 Python rapidocr_onnxruntime 的 `resize_norm_img`。
 ///
-/// 返回 `(chw_tensor, rec_w)`。tensor 形状 `[1,3,REC_H,rec_w]`。
+/// 用 `max_wh_ratio = max(REC_MAX_WH_RATIO, 当前框 wh_ratio)` 决定输入宽
+/// `img_w = int(48 * max_wh_ratio)`（对单框，REC_MAX_WH_RATIO 即默认 320/48=6.667
+/// 恒为最大，故 img_w 恒 = 320），crop 缩放到 `REC_H × resized_w`（resized_w 按实际
+/// 宽高比 ceil），右侧 pad 补零到 img_w。
+///
+/// ⚠️ 关键：rec 模型对**近方形单字**（如「嗯」，wh_ratio≈1）在窄输入（如 48×45）下
+/// 输出全 blank，pad 到 320 宽后能正确识别（实测 argmax 命中「嗯」）。旧实现
+/// img_w=int(48*ratio) 不封顶，导致近方形框输入过窄而漏识。
+///
+/// 返回 `(chw_tensor, rec_w)`。tensor 形状 `[1,3,REC_H,img_w]`。
 pub fn preprocess_rec(img: &Array3<u8>) -> (Array4<f32>, usize) {
     let (h, w, _) = img.dim();
     let ratio = w as f32 / h as f32;
-    // 对齐 cpp preprocessRec：imgW = int(48*ratio)（floor），resizedW = imgW（非整数时）。
-    // 旧实现用 round()，与 cpp 的 floor 在 48*ratio 非整数时差 1px，足以翻转形近字（白/百）。
-    let img_w = ((REC_H as f32 * ratio) as usize).max(1);
+    // 默认最大宽高比（对齐 rapidocr config rec_img_shape 320/48），单框时恒最大。
+    let max_wh_ratio = (REC_MAX_WH_RATIO).max(ratio);
+    let img_w = (REC_H as f32 * max_wh_ratio).round() as usize;
+    // resized_w = ceil(48*ratio)，但不超过 img_w（对齐 Python resize_norm_img）。
     let resized_w = if (REC_H as f32 * ratio).ceil() > img_w as f32 {
         img_w
     } else {
