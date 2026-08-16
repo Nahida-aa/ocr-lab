@@ -37,7 +37,7 @@ run image="tmp/both_fullscreen_frame1.png":
 
 # ---- 批量识别（--dir，文件名须为 ms / ms_ms 时间格式） ----
 # 用法：just run-dir <dir>
-run-dir dir="tmp/大/09/sf_ocr_pre/frames" out="tmp/大/09/sf_ocr/frames.json":
+run-dir dir="tmp/大/20/sf_ocr_pre/frames" out="tmp/大/20/sf_ocr/frames.json":
     cargo run -p subtitle-ocr --release -- --dir {{dir}} --out {{out}} --subtitle-only
 
 # ---- 单图识别并写出 OcrFramesResult 到调用方指定文件 ----
@@ -92,5 +92,5 @@ filter-segment in="tmp/3/sf_ocr_fix/segment_adjust.json" out="tmp/3/sf_ocr_fix/s
 # 输入 frames（逐帧 OCR JSON，subtitle-ocr --out 产出）与 video（视频路径，读高度）；
 # 各中间产物（frames_box_adjust.json / frames_box_filter.json / frames_merged.json /
 # segment_adjust.json / segment_filter.json）都写到 out 目录。--stop-at 可只跑到某一步。
-ocr-post frames="tmp/大/10/sf_ocr/frames.json" video="tmp/大/10/video_source.mp4" out="tmp/大/10/sf_ocr_fix" threshold="0.45" stop_at="filter-segment":
+ocr-post frames="tmp/大/48/sf_ocr/frames.json" video="tmp/大/48/video_source.mp4" out="tmp/大/48/sf_ocr_fix" threshold="0.45" stop_at="filter-segment":
     cargo run -p subtitle-ocr --bin ocr-post --release -- --frames {{frames}} --video {{video}} --out {{out}} --threshold {{threshold}} --stop-at {{stop_at}}

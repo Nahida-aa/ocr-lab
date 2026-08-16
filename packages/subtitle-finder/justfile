@@ -29,7 +29,7 @@ build:
 # 用法：just run                    # 默认视频 + 默认 out/
 #       just run <video>            # 指定视频
 #       just run <video> <out_dir>  # 指定视频 + 输出目录（位置参数）
-run video="tmp/大/09/video_source.mp4" out="tmp/大/09/sf_ocr_pre":
+run video="tmp/大/13/video_source.mp4" out="tmp/大/13/sf_ocr_pre":
     cargo run -p subtitle-finder --release -- {{video}} {{ if out != "" { "--out " + out } else { "" } }}
 
 # ---- 只跑算法、只写 timeline.txt（--output timeline，纯计时用） ----
@@ -37,7 +37,7 @@ run-nosave video="/tmp/clip5s.mp4" out="":
     cargo run -p subtitle-finder --release -- --output timeline {{video}} {{ if out != "" { "--out " + out } else { "" } }}
 
 # ---- 仅原始关键帧 PNG（--output frames，不写掩码/json/timeline） ----
-run-frames video="tmp/大/09/video_source.mp4" out="tmp/大/09/sf_ocr_pre":
+run-frames video="tmp/大/42/video_source.mp4" out="tmp/大/42/sf_ocr_pre":
     cargo run -p subtitle-finder --release -- --output frames {{video}} {{ if out != "" { "--out " + out } else { "" } }}
 
 # ---- 带分阶段耗时剖析跑 ----
