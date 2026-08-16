@@ -37,7 +37,7 @@ run-nosave video="/tmp/clip5s.mp4" out="":
     cargo run -p subtitle-finder --release -- --output timeline {{video}} {{ if out != "" { "--out " + out } else { "" } }}
 
 # ---- 仅原始关键帧 PNG（--output frames，不写掩码/json/timeline） ----
-run-frames video="tmp/大/42/video_source.mp4" out="tmp/大/42/sf_ocr_pre":
+run-frames video="tmp/大/44/video_source.mp4" out="tmp/大/44/sf_ocr_pre":
     cargo run -p subtitle-finder --release -- --output frames {{video}} {{ if out != "" { "--out " + out } else { "" } }}
 
 # ---- 带分阶段耗时剖析跑 ----
