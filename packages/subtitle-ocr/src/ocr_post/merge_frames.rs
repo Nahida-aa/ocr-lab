@@ -402,10 +402,23 @@ pub fn remove_triplet_noise(segments: &[OcrSegment]) -> Vec<OcrSegment> {
         let b = out[i + 1].clone();
         let c = out[i + 2].clone();
 
-        let triplet_match = edit_distance(&a.base.text, &c.base.text) <= 2
+        let a_conf = a.text_confidence.clamp(0.0, 1.0);
+        let b_conf = b.text_confidence.clamp(0.0, 1.0);
+        // 两端 a/c 视为「同句重影」的编辑距离阈值，由 a 的置信度调节（0~2）：
+        // 低置信 a 放宽到 2、高置信 a 收紧到 0（须完全相同）。避免无关短句（如
+        // 「啊」↔「我靠」距离 2）因固定阈值 ≤2 而被误组成「噪声三元组」。
+        let max_triplet_edit = (1.0 - a_conf) * 2.0;
+        let triplet_match = edit_distance(&a.base.text, &c.base.text) as f32 <= max_triplet_edit
             && overlap(a.y_range, b.y_range)
             && overlap(b.y_range, c.y_range);
         if !triplet_match {
+            i += 1;
+            continue;
+        }
+        // 高置信中间段（如真实短句「哈」conf 0.9998）绝不当噪声——即使时间短，
+        // 也只可能是真实字幕，不是噪声闪烁。低置信段（< HIGH_CONF）才进一步判定。
+        const HIGH_CONF: f32 = 0.8;
+        if b_conf >= HIGH_CONF {
             i += 1;
             continue;
         }
@@ -414,7 +427,6 @@ pub fn remove_triplet_noise(segments: &[OcrSegment]) -> Vec<OcrSegment> {
         // 需更极端（更短 / 编辑距离更近）才判噪声，避免误伤真实字幕。
         //   - 时间：短段上限 500ms（高置信）~ 1500ms（低置信）
         //   - 编辑距离：同字幕阈值 0（高置信，须完全相同）~ 3（低置信）
-        let b_conf = b.text_confidence.clamp(0.0, 1.0);
         let max_short_ms = 500.0 + (1.0 - b_conf) * 1000.0;
         let is_short = dur_b as f32 <= max_short_ms;
         let max_edit = (1.0 - b_conf) * 3.0;
@@ -479,8 +491,17 @@ pub fn dedup_overlap(segments: &[OcrSegment], dedup_edit_distance: u32) -> Vec<O
             let overlaps =
                 prev.base.start_ms < cur.base.end_ms && cur.base.start_ms < prev.base.end_ms;
             let touching = gap <= TOUCH_GAP_MS;
+            // 短词保护：两个都 ≤2 字、且互不相同（非子串）的相邻段不合并。
+            // 短词（如单字「啊」↔「哈」）编辑距离天然为 1，极易误触发合并，但它们
+            // 多为独立语气词/叹词，不同即不同的话。较长文本（如「abcdef」↔「abXYef」）
+            // 的部分差异是同一字幕 OCR 微变，仍按编辑距离合并。
+            let both_short = prev.base.text.chars().count() <= 2
+                && cur.base.text.chars().count() <= 2;
+            let not_same_word = prev.base.text != cur.base.text
+                && !is_substring_of(&prev.base.text, &cur.base.text);
             if (overlaps || touching)
                 && edit_distance(&prev.base.text, &cur.base.text) <= dedup_edit_distance
+                && !(both_short && not_same_word)
             {
                 // 合并进 prev：取较长文本（按字符数，对齐 TS length），保留 prev 的 y 值域。
                 let text = if prev.base.text.chars().count() >= cur.base.text.chars().count() {
@@ -910,6 +931,26 @@ mod tests {
     }
 
     #[test]
+    fn remove_triplet_noise_keeps_consecutive_high_conf_short_lines() {
+        // 真实回归：大/48 里「啊/哈/我靠」三句连续高置信短句。原逻辑把「哈」
+        // （conf 0.9998，433ms）因 is_short 判为噪声，且 edit_distance(啊,我靠)=2 触发
+        // triplet_match，把三句折叠成一段「啊」。修复后：
+        //   - triplet_match 的编辑距离阈值由 a 置信度调节（0.998→≈0），啊↔我靠 距离 2 > 0 → 不组三元组；
+        //   - 即便组成，b_conf=0.9998 ≥ 0.8 高置信 → 保留。
+        // 故三段应各自保留。
+        let segs = vec![
+            segment("啊", 34933, 35400, [604.0, 644.0], 0.9402886),
+            segment("哈", 35433, 35866, [603.0, 644.0], 0.9998287),
+            segment("我靠", 35900, 36666, [603.0, 644.0], 0.9996991),
+        ];
+        let out = remove_triplet_noise(&segs);
+        assert_eq!(out.len(), 3, "啊/哈/我靠 三句高置信连续短句应保留为三段");
+        assert_eq!(out[0].base.text, "啊");
+        assert_eq!(out[1].base.text, "哈");
+        assert_eq!(out[2].base.text, "我靠");
+    }
+
+    #[test]
     fn dedup_overlap_merges_overlapping_similar_text() {
         // a/b 时间相接（gap 100ms ≤ 500）且文本编辑距离 ≤ 1 → 合并。
         let segs = vec![
@@ -944,6 +985,21 @@ mod tests {
         ];
         assert_eq!(dedup_overlap(&segs, 1).len(), 2, "阈值 1 不合并");
         assert_eq!(dedup_overlap(&segs, 2).len(), 1, "阈值 2 合并");
+    }
+
+    #[test]
+    fn dedup_overlap_keeps_short_dissimilar_high_conf() {
+        // 真实回归：大/48 里「啊」↔「哈」两个单字高置信短句，时间相接（gap 33ms ≤ 500）、
+        // 编辑距离 1（单字替换）≤ 默认阈值 1——若按原逻辑会合并为一段「啊」。
+        // 但二者是不同语气词（非子串、均 ≤2 字），应保留为两段，不被误吞。
+        let segs = vec![
+            segment("啊", 34933, 35400, [604.0, 644.0], 0.9402886),
+            segment("哈", 35433, 35866, [603.0, 644.0], 0.9998287),
+        ];
+        let out = dedup_overlap(&segs, 1);
+        assert_eq!(out.len(), 2, "啊/哈 两个不同单字高置信短句不应合并");
+        assert_eq!(out[0].base.text, "啊");
+        assert_eq!(out[1].base.text, "哈");
     }
 
     #[test]
