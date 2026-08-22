@@ -1,8 +1,9 @@
 //! 单图字幕 OCR 调试工具（保留）：用 `SubtitleOcr`（对齐 cpp 的 bottom_only /
 //! subtitle_only / NMS 流程）对单张图跑字幕 OCR，打印每个识别框的全部字段。
 //!
-//! 用法：`cargo run -p subtitle-ocr --example ocr_image -- <image.png> [--subtitle-only] [--no-bottom-only] [--warp]`
-//!   - 默认 `bottom_only=true`（只裁底部 40% 送 OCR，对齐 cpp）。
+//! 用法：`cargo run -p subtitle-ocr --example ocr_image -- <image.png> [--model <v4|v6-tiny|v6-medium|v3>] [--subtitle-only] [--no-bottom-only] [--warp]`
+//!   - 默认 `bottom_only=true`（只裁底部 40% 送 OCR，对齐 cpp）；默认模型 v4。
+//!   - `--model <v4|v6-tiny|v6-medium|v3>`：切换模型套件。
 //!   - `--subtitle-only`：再按 y 中心落在底部比例区间过滤。
 //!   - `--no-bottom-only`：关闭 bottom_only（全图 OCR）。
 //!   - `--warp`：用透视矫正裁剪（warpPerspective）替代轴对齐包围盒。
@@ -34,6 +35,15 @@ fn main() -> anyhow::Result<()> {
     let subtitle_only = args.iter().any(|a| a == "--subtitle-only");
     let bottom_only = !args.iter().any(|a| a == "--no-bottom-only");
     let warp = args.iter().any(|a| a == "--warp");
+    let profile = match args.iter().position(|a| a == "--model") {
+        Some(i) if i + 1 < args.len() => match args[i + 1].as_str() {
+            "v3" => ModelProfile::V3,
+            "v6-tiny" => ModelProfile::V6Tiny,
+            "v6-medium" => ModelProfile::V6Medium,
+            _ => ModelProfile::V4,
+        },
+        _ => ModelProfile::V4,
+    };
 
     let opts = OcrOptions {
         bottom_only,
@@ -44,14 +54,22 @@ fn main() -> anyhow::Result<()> {
 
     let root = repo_root();
     let model_dir = root.join("models/rapidocr");
+
+    // 计时：模型加载（读权重 + 建 session）与纯推理分开统计。
+    let t_load0 = std::time::Instant::now();
+    let mut ocr = SubtitleOcr::from_profile(profile, &model_dir, opts)?;
+    let load_ms = t_load0.elapsed().as_secs_f64() * 1000.0;
+
     let img = rapidocr_ort::load_image(Path::new(img_path))?;
-    let mut ocr = SubtitleOcr::from_profile(ModelProfile::V4, &model_dir, opts)?;
+    let t_inf0 = std::time::Instant::now();
     let results = ocr.ocr_image(&img)?;
+    let infer_ms = t_inf0.elapsed().as_secs_f64() * 1000.0;
 
     println!(
-        "图像: {}  (bottom_only={}, subtitle_only={}, warp={})",
-        img_path, bottom_only, subtitle_only, warp
+        "图像: {}  (model={:?}, bottom_only={}, subtitle_only={}, warp={})",
+        img_path, profile, bottom_only, subtitle_only, warp
     );
+    println!("耗时: 加载 {:.1}ms, 推理 {:.1}ms", load_ms, infer_ms);
     if results.is_empty() {
         println!("(无文字)");
     } else {
