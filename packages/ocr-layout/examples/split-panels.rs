@@ -94,7 +94,8 @@ fn main() -> anyhow::Result<()> {
     std::fs::create_dir_all(&out_dir)
         .with_context(|| format!("创建输出目录失败: {}", out_dir.display()))?;
 
-    let mut total = 0usize;
+    // 先对每张图跑切分，收集 (源名, 源宽, 源高, rects)。
+    let mut results: Vec<(String, u32, u32, Vec<(u32, u32, u32, u32)>)> = Vec::new();
     for src in &inputs {
         let name = src
             .file_stem()
@@ -112,8 +113,25 @@ fn main() -> anyhow::Result<()> {
             img.height(),
             rects.len()
         );
+        results.push((name, img.width(), img.height(), rects));
+    }
 
-        // 预览总是产出：带彩框原图，随时可人工核对切分框。
+    // 组内一致性：同一部漫画的卡片理论上等大；梯度紧致在渐变白边上的跳变
+    // 位置有 ±几 px 噪声，导致同源格子尺寸漂移（实测 872/868/865 渐小）。
+    unify_sizes(&mut results);
+
+    // 输出：预览总是产出 + 紧致裁剪。
+    let mut total = 0usize;
+    for (name, w, h, rects) in &results {
+        let img = image::open(
+            inputs
+                .iter()
+                .find(|s| s.file_stem().map(|s| s.to_string_lossy().into_owned()).as_deref() == Some(name.as_str()))
+                .context("源图丢失")?,
+        )
+        .with_context(|| format!("读取图片失败: {name}"))?
+        .to_rgb8();
+
         let widgets: Vec<Widget> = rects
             .iter()
             .enumerate()
@@ -122,7 +140,7 @@ fn main() -> anyhow::Result<()> {
                 label: String::new(),
                 rect: *r,
                 color: [255, 0, 0],
-                area_ratio: (r.2 * r.3) as f32 / (img.width() * img.height()) as f32,
+                area_ratio: (r.2 * r.3) as f32 / (*w * *h) as f32,
                 source: WidgetSource::Color,
             })
             .collect();
@@ -132,17 +150,90 @@ fn main() -> anyhow::Result<()> {
             .with_context(|| format!("保存失败: {}", preview.display()))?;
         eprintln!("        预览 → {}", preview.display());
 
-        for (idx, (x, y, w, h)) in rects.iter().enumerate() {
+        for (idx, (x, y, cw, ch)) in rects.iter().enumerate() {
             let out = out_dir.join(format!("{name}-{}.png", idx + 1));
-            crop_rgb(&img, *x, *y, *w, *h)
+            crop_rgb(&img, *x, *y, *cw, *ch)
                 .save(&out)
                 .with_context(|| format!("保存失败: {}", out.display()))?;
-            eprintln!("        {}-{}  rect=({x},{y},{w},{h})", name, idx + 1);
+            eprintln!("        {}-{}  rect=({x},{y},{cw},{ch})", name, idx + 1);
             total += 1;
         }
     }
     eprintln!("[done] 共 {total} 块 → {}", out_dir.display());
     Ok(())
+}
+
+/// 组内尺寸一致性：按源图宽度分组（同宽视为同部漫画、等大卡片）。
+///
+/// 梯度紧致在渐变白边上的跳变位置有 ±几 px 噪声，同源格子会漂移出
+/// 872/868/865 这种渐小尺寸。这里取组内**参与格**的中位数统一：
+/// 中位数最小化总偏差，且不会把任何一格裁进内容（偏差 ≤ 3px，都在
+/// 边缘渐变带内）。
+///
+/// 参与格 = 边界可信的格子：`x0 > 0` 且 `x1 < w` 且 `y1 < h`。
+/// 贴源图边的格子（如 4.jpg 底格卡片超出源图、全宽到底）边界不可信，
+/// 不参与统计也保持原样——统一它们会裁掉真实内容。
+fn unify_sizes(results: &mut [(String, u32, u32, Vec<(u32, u32, u32, u32)>)]) {
+    use std::collections::HashMap;
+
+    let mut groups: HashMap<u32, Vec<usize>> = HashMap::new();
+    for (i, (_, w, _, _)) in results.iter().enumerate() {
+        groups.entry(*w).or_default().push(i);
+    }
+
+    for (_, idxs) in groups {
+        // 组内参与格不足 2 个则无需统一（单格没有「一致性」可言）。
+        let participating: Vec<usize> = idxs
+            .iter()
+            .copied()
+            .flat_map(|i| {
+                let (_, w, h, rects) = &results[i];
+                rects
+                    .iter()
+                    .filter(|r| !(r.0 == 0 || r.0 + r.2 == *w || r.1 + r.3 == *h))
+                    .map(|_| i)
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        if participating.len() < 2 {
+            continue;
+        }
+        let mut lefts: Vec<u32> = Vec::new();
+        let mut x1s: Vec<u32> = Vec::new();
+        let mut heights: Vec<u32> = Vec::new();
+        for &i in &participating {
+            let (_, w, h, rects) = &results[i];
+            for r in rects {
+                let (x0, y0, rw, rh) = *r;
+                if x0 == 0 || x0 + rw == *w || y0 + rh == *h {
+                    continue; // 贴边格：卡片被源图裁断，边界不可信
+                }
+                lefts.push(x0);
+                x1s.push(x0 + rw);
+                heights.push(rh);
+            }
+        }
+        let (Some(ul), Some(ux1), Some(uh)) = (median_u32(lefts), median_u32(x1s), median_u32(heights)) else {
+            continue;
+        };
+        for &i in &idxs {
+            let (_, w, h, rects) = &mut results[i];
+            for r in rects.iter_mut() {
+                if r.0 == 0 || r.0 + r.2 == *w || r.1 + r.3 == *h {
+                    continue; // 特殊格（贴源图边）保持原样
+                }
+                *r = (ul, r.1, ux1 - ul, uh);
+            }
+        }
+    }
+}
+
+fn median_u32(mut v: Vec<u32>) -> Option<u32> {
+    if v.is_empty() {
+        return None;
+    }
+    v.sort_unstable();
+    Some(v[v.len() / 2])
 }
 
 fn bail_usage() -> anyhow::Result<()> {
