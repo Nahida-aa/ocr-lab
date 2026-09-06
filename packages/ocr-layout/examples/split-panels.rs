@@ -1,6 +1,6 @@
 //! 命令行：把多格漫画长图切成紧致的独立子图。
 //!
-//!   cargo run -p ocr-layout --example split-panels -- <图片或目录> [--out <dir>] [--threshold N] [--gradient-threshold N] [--max-trim N] [--min-gap N]
+//!   cargo run -p ocr-layout --example split-panels -- <图片或目录> [--out <dir>] [--threshold N] [--gradient-threshold N] [--max-trim N] [--min-gap N] [--mode sprite|free|auto]
 //!
 //! 把「纯图片构成的 UI」交给布局层：每一格就是一条**无文字信号的 Widget**
 //! （source=Color）。算法分两层：
@@ -41,6 +41,10 @@ fn main() -> anyhow::Result<()> {
     let mut gradient_threshold: i32 = 40;
     let mut max_trim: usize = 60;
     let mut min_gap: u32 = 6;
+    // sprite: 组内统一到最紧共同边界 (卡片等大, 零白边);
+    // free: 逐格独立紧致 (布局各异的自由拼图, 不等大);
+    // auto: 按组内边界极差自动判定 (极差 <= 12px 视为等大卡片)。
+    let mut mode = String::from("auto");
     let mut i = 1;
     while i < args.len() {
         match args[i].as_str() {
@@ -67,6 +71,10 @@ fn main() -> anyhow::Result<()> {
                 min_gap = args.get(i + 1).context("--min-gap 缺少参数")?.parse()?;
                 i += 2;
             }
+            "--mode" => {
+                mode = args.get(i + 1).context("--mode 缺少参数")?.to_string();
+                i += 2;
+            }
             other if other.starts_with('-') => {
                 anyhow::bail!("未知参数: {other}");
             }
@@ -75,6 +83,9 @@ fn main() -> anyhow::Result<()> {
                 i += 1;
             }
         }
+    }
+    if !matches!(mode.as_str(), "sprite" | "free" | "auto") {
+        anyhow::bail!("--mode 仅支持 sprite | free | auto");
     }
     let input = input.context("缺少输入（图片文件或目录）")?;
 
@@ -118,7 +129,12 @@ fn main() -> anyhow::Result<()> {
 
     // 组内一致性：同一部漫画的卡片理论上等大；梯度紧致在渐变白边上的跳变
     // 位置有 ±几 px 噪声，导致同源格子尺寸漂移（实测 872/868/865 渐小）。
-    unify_sizes(&mut results);
+    let mode = match mode.as_str() {
+        "sprite" => Mode::Sprite,
+        "free" => Mode::Free,
+        _ => Mode::Auto,
+    };
+    unify_sizes(&mut results, mode);
 
     // 输出：预览总是产出 + 紧致裁剪。
     let mut total = 0usize;
@@ -163,17 +179,38 @@ fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// 组内尺寸一致性：按源图宽度分组（同宽视为同部漫画、等大卡片）。
+/// 拼接布局模式。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Mode {
+    /// 精灵图：卡片等大，组内统一到最紧共同边界（零白边）。
+    Sprite,
+    /// 自由拼图：逐格独立紧致，不等大。
+    Free,
+    /// 自动：按组内边界极差判定（≤ 12px 视为等大卡片）。
+    Auto,
+}
+
+/// 自动判定的边界极差上限（px）：组内参与格的 left / x1 / 高度极差都不超过
+/// 此值时视为「等大卡片」（精灵图），否则视为自由布局。
+const SPRITE_SPREAD_MAX: u32 = 12;
+
+/// 组内尺寸一致性（精灵图模式）。
 ///
 /// 梯度紧致在渐变白边上的跳变位置有 ±几 px 噪声，同源格子会漂移出
-/// 872/868/865 这种渐小尺寸。这里取组内**参与格**的中位数统一：
-/// 中位数最小化总偏差，且不会把任何一格裁进内容（偏差 ≤ 3px，都在
-/// 边缘渐变带内）。
+/// 872/868/865 这种渐小尺寸。统一到组内**最紧共同边界**：
+/// `left = min`、`x1 = max`、`height = max`——每格都裁到组内最紧，
+/// 零白边保证；多裁的部分是边缘渐变带（1-4px，无视觉内容）。
 ///
 /// 参与格 = 边界可信的格子：`x0 > 0` 且 `x1 < w` 且 `y1 < h`。
 /// 贴源图边的格子（如 4.jpg 底格卡片超出源图、全宽到底）边界不可信，
 /// 不参与统计也保持原样——统一它们会裁掉真实内容。
-fn unify_sizes(results: &mut [(String, u32, u32, Vec<(u32, u32, u32, u32)>)]) {
+///
+/// 自由模式（Free）跳过统一：布局各异的拼图逐格最优、不等大。
+/// 自动模式（Auto）先算组内极差再决定。
+fn unify_sizes(
+    results: &mut [(String, u32, u32, Vec<(u32, u32, u32, u32)>)],
+    mode: Mode,
+) {
     use std::collections::HashMap;
 
     let mut groups: HashMap<u32, Vec<usize>> = HashMap::new();
@@ -182,26 +219,11 @@ fn unify_sizes(results: &mut [(String, u32, u32, Vec<(u32, u32, u32, u32)>)]) {
     }
 
     for (_, idxs) in groups {
-        // 组内参与格不足 2 个则无需统一（单格没有「一致性」可言）。
-        let participating: Vec<usize> = idxs
-            .iter()
-            .copied()
-            .flat_map(|i| {
-                let (_, w, h, rects) = &results[i];
-                rects
-                    .iter()
-                    .filter(|r| !(r.0 == 0 || r.0 + r.2 == *w || r.1 + r.3 == *h))
-                    .map(|_| i)
-                    .collect::<Vec<_>>()
-            })
-            .collect();
-        if participating.len() < 2 {
-            continue;
-        }
+        // 组内参与格（边界可信）与它们的原始边界。
         let mut lefts: Vec<u32> = Vec::new();
         let mut x1s: Vec<u32> = Vec::new();
         let mut heights: Vec<u32> = Vec::new();
-        for &i in &participating {
+        for &i in &idxs {
             let (_, w, h, rects) = &results[i];
             for r in rects {
                 let (x0, y0, rw, rh) = *r;
@@ -213,9 +235,29 @@ fn unify_sizes(results: &mut [(String, u32, u32, Vec<(u32, u32, u32, u32)>)]) {
                 heights.push(rh);
             }
         }
-        let (Some(ul), Some(ux1), Some(uh)) = (median_u32(lefts), median_u32(x1s), median_u32(heights)) else {
+        if lefts.len() < 2 {
+            continue; // 可信格不足 2 个，无一致性可言
+        }
+
+        // Auto 判据：三个维度的极差都在限内 → 等大卡片（精灵图）。
+        if mode == Mode::Auto {
+            let spread = |v: &[u32]| v.iter().max().unwrap() - v.iter().min().unwrap();
+            let is_sprite = spread(&lefts) <= SPRITE_SPREAD_MAX
+                && spread(&x1s) <= SPRITE_SPREAD_MAX
+                && spread(&heights) <= SPRITE_SPREAD_MAX;
+            if !is_sprite {
+                eprintln!("[mode] auto → free (边界极差超 {}px)", SPRITE_SPREAD_MAX);
+                continue;
+            }
+        }
+        if mode == Mode::Free {
             continue;
-        };
+        }
+
+        // Sprite：统一到最紧共同边界（min/max）——零白边保证。
+        let ul = *lefts.iter().min().unwrap();
+        let ux1 = *x1s.iter().max().unwrap();
+        let uh = *heights.iter().max().unwrap();
         for &i in &idxs {
             let (_, w, h, rects) = &mut results[i];
             for r in rects.iter_mut() {
@@ -228,17 +270,10 @@ fn unify_sizes(results: &mut [(String, u32, u32, Vec<(u32, u32, u32, u32)>)]) {
     }
 }
 
-fn median_u32(mut v: Vec<u32>) -> Option<u32> {
-    if v.is_empty() {
-        return None;
-    }
-    v.sort_unstable();
-    Some(v[v.len() / 2])
-}
 
 fn bail_usage() -> anyhow::Result<()> {
     anyhow::bail!(
-        "用法: split-panels <图片或目录> [--out <dir>] [--threshold N] [--gradient-threshold N] [--max-trim N] [--min-gap N]"
+        "用法: split-panels <图片或目录> [--out <dir>] [--threshold N] [--gradient-threshold N] [--max-trim N] [--min-gap N] [--mode sprite|free|auto]"
     )
 }
 
