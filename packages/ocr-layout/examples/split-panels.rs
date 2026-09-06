@@ -34,6 +34,7 @@ fn main() -> anyhow::Result<()> {
     let mut input: Option<PathBuf> = None;
     let mut out_dir: Option<PathBuf> = None;
     let mut threshold: u8 = 220;
+    let mut tight_threshold: u8 = 210;
     let mut min_gap: u32 = 6;
     let mut preview = false;
     let mut i = 1;
@@ -45,6 +46,10 @@ fn main() -> anyhow::Result<()> {
             }
             "--threshold" => {
                 threshold = args.get(i + 1).context("--threshold 缺少参数")?.parse()?;
+                i += 2;
+            }
+            "--tight-threshold" => {
+                tight_threshold = args.get(i + 1).context("--tight-threshold 缺少参数")?.parse()?;
                 i += 2;
             }
             "--min-gap" => {
@@ -92,7 +97,7 @@ fn main() -> anyhow::Result<()> {
             .with_context(|| format!("读取图片失败: {}", src.display()))?
             .to_rgb8();
 
-        let rects = split_panels(&img, threshold, min_gap);
+        let rects = split_panels(&img, threshold, tight_threshold, min_gap);
         eprintln!(
             "[split] {} {}x{} → {} 块",
             src.display(),
@@ -166,7 +171,12 @@ fn collect_images(input: &Path) -> anyhow::Result<Vec<PathBuf>> {
 }
 
 /// 核心：行投影切行 + 行块内列边缘 trim（见模块文档）。
-fn split_panels(img: &RgbImage, threshold: u8, min_gap: u32) -> Vec<(u32, u32, u32, u32)> {
+fn split_panels(
+    img: &RgbImage,
+    threshold: u8,
+    tight: u8,
+    min_gap: u32,
+) -> Vec<(u32, u32, u32, u32)> {
     let (w, h) = (img.width() as usize, img.height() as usize);
     // 每像素最暗通道值：与纯白的距离决定「算不算内容」。
     let darkness: Vec<u8> = img
@@ -181,24 +191,43 @@ fn split_panels(img: &RgbImage, threshold: u8, min_gap: u32) -> Vec<(u32, u32, u
 
     let mut rects = Vec::new();
     for (y0, y1) in bright_blocks(&row_dark, threshold, min_gap) {
-        // 列边缘 trim：只从两端向内收缩，中间不切。
-        let x0 = (0..w).find(|&x| col_dark(&darkness, w, x, y0, y1) < threshold).unwrap_or(0);
-        let x1 = (0..w)
+        // 行方向紧致：顶/底边缘的连续近白行不算内容。tight 高于分隔带阈值——
+        // 卡片外的振铃/浅灰渐变（min 198-253 不等）在人眼语义里也是白边。
+        let y0t = (y0..y1).find(|&y| row_dark[y] < tight).unwrap_or(y1);
+        let y1t = (y0..y1)
             .rev()
-            .find(|&x| col_dark(&darkness, w, x, y0, y1) < threshold)
-            .map(|x| x + 1)
-            .unwrap_or(x0);
-        if x1 > x0 {
-            rects.push((x0 as u32, y0 as u32, (x1 - x0) as u32, (y1 - y0) as u32));
+            .find(|&y| row_dark[y] < tight)
+            .map(|y| y + 1)
+            .unwrap_or(y0t);
+        if y1t <= y0t {
+            continue;
         }
+
+        // 列方向紧致：列 min（在紧致后的行范围内）从两端向内收缩连续近白列。
+        // 只修边、不切中间——内容稀疏的格子不会被拦腰截断。
+        let col_dark: Vec<u8> = (0..w)
+            .map(|x| (y0t..y1t).map(|y| darkness[y * w + x]).min().unwrap())
+            .collect();
+        let x0t = (0..w).find(|&x| col_dark[x] < tight).unwrap_or(w);
+        let x1t = (0..w)
+            .rev()
+            .find(|&x| col_dark[x] < tight)
+            .map(|x| x + 1)
+            .unwrap_or(x0t);
+        if x1t <= x0t {
+            continue;
+        }
+
+        let (bw, bh) = (x1t - x0t, y1t - y0t);
+        // 面积下限：滤噪点（相对全图 0.5%）。
+        if bw * bh < (0.005f64 * (w * h) as f64).max(1.0) as usize {
+            continue;
+        }
+        rects.push((x0t as u32, y0t as u32, bw as u32, bh as u32));
     }
     rects
 }
 
-/// 某列在 `[y0, y1)` 内的最暗像素亮度。
-fn col_dark(darkness: &[u8], w: usize, x: usize, y0: usize, y1: usize) -> u8 {
-    (y0..y1).map(|y| darkness[y * w + x]).min().unwrap()
-}
 
 /// 从最暗值序列找内容区间：连续亮（>= 阈值）且长度 >= `min_gap` 的段为分隔，
 /// 分隔之间的部分即内容块。
