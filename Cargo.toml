@@ -3,6 +3,8 @@ resolver = "3"
 members = [
     "packages/rapidocr-ort", "tools/gen_ui_img", "tools/accel-set", "packages/subtitle-ocr",
     "packages/geometry", "packages/subtitle-finder",
+    # 颜色连通域原语 + 布局层（examples/split-panels 演示纯图片 UI 的切分）。
+    "packages/color-analysis", "packages/ocr-layout",
     # 基准测试驱动（独立 cargo 包，见 tests/bench/subtitle-ocr）。
     # 不属于常规构建目标，故不放进 default-members。
     "tests/bench/subtitle-ocr",
