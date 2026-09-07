@@ -7,7 +7,6 @@
 //! 索引 `i = y*w + x`；3 通道像素在 `[i*3, i*3+3)`。
 
 use super::params::Params;
-use opencv::prelude::*;
 
 // geometry 的 SIMD 图像算子（Sobel 边缘，AVX2 快路径 + 标量回退）。
 use geometry::imgproc as gimg;
@@ -681,30 +680,34 @@ pub fn bgr_to_yuv(bgr: &[u8], y: &mut [u8], u: &mut [u8], v: &mut [u8], w: usize
     // 之前用浮点公式（Y=0.299R+0.587G+0.114B 等），V 通道在个别像素与 OpenCV 的
     // 整数定点实现差 ±1 → FF 阈值边缘像素判定不同 → 幽灵带 → 字幕段丢失。
     // 见 docs/cpp-alignment-notes.md「六、未解决的已知差异（幽灵带）」。
-    let mut src = opencv::core::Mat::new_rows_cols_with_default(
-        h as i32,
-        w as i32,
-        opencv::core::CV_8UC3,
-        opencv::core::Scalar::all(0.0),
-    )
-    .expect("Mat 创建失败");
-    src.data_bytes_mut()
-        .expect("取 Mat 数据失败")
-        .copy_from_slice(bgr);
-    let mut dst = opencv::core::Mat::default();
-    opencv::imgproc::cvt_color_def(
-        &src,
-        &mut dst,
-        opencv::imgproc::COLOR_BGR2YUV,
-    )
-    .expect("cvtColor 失败");
-    let data = dst.data_bytes().expect("取 YUV 数据失败");
-    let size = w * h;
-    for i in 0..size {
-        y[i] = data[i * 3];
-        u[i] = data[i * 3 + 1];
-        v[i] = data[i * 3 + 2];
+    //
+    // 性能：旧实现每帧把 bgr 拷进 Mat、再手动逐像素解交错 YUV，开销比 OpenCV
+    // 单算子多 ~3×（0.66ms vs 0.2ms）。这里改用零拷贝 wrap 输入 + `cv::split`
+    // 一次写满 y/u/v 三通道（split 用 OpenCV 内部 SIMD 解交错），避免逐像素循环。
+    fn wrap_mat(rows: i32, cols: i32, typ: i32, data: *mut u8) -> opencv::core::Mat {
+        // SAFETY: 调用方保证 data 指向 rows*cols* 字节的有效可写内存，且 Mat 生命周期
+        // 不出本函数体；Mat 零拷贝 wrap 不拥有数据，drop 仅释放 header。
+        unsafe {
+            opencv::core::Mat::new_rows_cols_with_data_unsafe_def(
+                rows,
+                cols,
+                typ,
+                data as *mut std::ffi::c_void,
+            )
+            .expect("Mat wrap 失败")
+        }
     }
+    // 零拷贝 wrap 输入 bgr（不开 copy，Mat drop 不释放外部数据）。
+    let src = wrap_mat(h as i32, w as i32, opencv::core::CV_8UC3, bgr.as_ptr() as *mut u8);
+    let mut dst = opencv::core::Mat::default();
+    opencv::imgproc::cvt_color_def(&src, &mut dst, opencv::imgproc::COLOR_BGR2YUV)
+        .expect("cvtColor 失败");
+    let mut mv_vec = opencv::core::Vector::<opencv::core::Mat>::from_iter([
+        wrap_mat(h as i32, w as i32, opencv::core::CV_8UC1, y.as_mut_ptr()),
+        wrap_mat(h as i32, w as i32, opencv::core::CV_8UC1, u.as_mut_ptr()),
+        wrap_mat(h as i32, w as i32, opencv::core::CV_8UC1, v.as_mut_ptr()),
+    ]);
+    opencv::core::split(&dst, &mut mv_vec).expect("core::split 失败");
 }
 
 /// `GetImFF`：Sobel M-edge + 局部/组合阈值，输出前景文字二值图 + 对齐带边界。
