@@ -751,14 +751,36 @@ pub fn get_im_ff(
         im_v[offsets[k]..offsets[k] + cnts[k]].copy_from_slice(&v_full[src_off..src_off + cnts[k]]);
     }
 
-    // 每通道 M-edge。
-    let y_moe = gimg::sobel_m_edge(&im_y, ww, hh);
-    let u_moe = gimg::sobel_m_edge(&im_u, ww, hh);
-    let v_moe = gimg::sobel_m_edge(&im_v, ww, hh);
+    // 每通道 M-edge（并行使 y/u/v 三个独立 Sobel，对齐 C++ GetImFF 内层并行）。
+    let (y_moe, u_moe, v_moe) = std::thread::scope(|s| {
+        let l1 = s.spawn(|| gimg::sobel_m_edge(&im_y, ww, hh));
+        let l2 = s.spawn(|| gimg::sobel_m_edge(&im_u, ww, hh));
+        let l3 = s.spawn(|| gimg::sobel_m_edge(&im_v, ww, hh));
+        (
+            l1.join().expect("sobel_m_edge(Y) 线程失败"),
+            l2.join().expect("sobel_m_edge(U) 线程失败"),
+            l3.join().expect("sobel_m_edge(V) 线程失败"),
+        )
+    });
 
-    // 组合阈值（Thr1 / Thr2）。
-    let res1 = get_im_cmoe_with_thr1(&y_moe, &u_moe, &v_moe, ww, hh, &offsets, &dhs, p.mthr, prof.as_deref_mut());
-    let res4 = get_im_cmoe_with_thr2(&y_moe, &u_moe, &v_moe, ww, hh, &offsets, &dhs, p.mthr, prof.as_deref_mut());
+    // 组合阈值（Thr1 / Thr2）——两个独立路径，并行计算（对齐 C++ 内层 run_in_parallel）。
+    // 线程内传 None 避免 prof（&mut）跨线程借用；此处按并行区墙时累计 thr_ms（近似）。
+    let t_thr = std::time::Instant::now();
+    let (res1, res4) = std::thread::scope(|s| {
+        let t1 = s.spawn(|| {
+            get_im_cmoe_with_thr1(&y_moe, &u_moe, &v_moe, ww, hh, &offsets, &dhs, p.mthr, None)
+        });
+        let t2 = s.spawn(|| {
+            get_im_cmoe_with_thr2(&y_moe, &u_moe, &v_moe, ww, hh, &offsets, &dhs, p.mthr, None)
+        });
+        (
+            t1.join().expect("get_im_cmoe_with_thr1 线程失败"),
+            t2.join().expect("get_im_cmoe_with_thr2 线程失败"),
+        )
+    });
+    if let Some(pf) = prof.as_deref_mut() {
+        pf.thr_ms += t_thr.elapsed().as_secs_f64() * 1000.0;
+    }
 
     // 写回全图 ImFF。
     let mut im_ff = vec![0u8; w * h];
@@ -807,9 +829,16 @@ pub fn get_im_ne(y: &[u8], u: &[u8], v: &[u8], w: usize, h: usize, p: &Params) -
     let mut im_ne = vec![0u8; w * h];
     easy_border_clear(&mut im_ne, w, h);
 
-    let y_noe = gimg::sobel_n_edge(y, w, h);
-    let u_noe = gimg::sobel_n_edge(u, w, h);
-    let v_noe = gimg::sobel_n_edge(v, w, h);
+    let (y_noe, u_noe, v_noe) = std::thread::scope(|s| {
+        let l1 = s.spawn(|| gimg::sobel_n_edge(y, w, h));
+        let l2 = s.spawn(|| gimg::sobel_n_edge(u, w, h));
+        let l3 = s.spawn(|| gimg::sobel_n_edge(v, w, h));
+        (
+            l1.join().expect("sobel_n_edge(Y) 线程失败"),
+            l2.join().expect("sobel_n_edge(U) 线程失败"),
+            l3.join().expect("sobel_n_edge(V) 线程失败"),
+        )
+    });
 
     let mx = w - 1;
     let my = h - 1;
@@ -845,9 +874,16 @@ pub fn get_im_he(y: &[u8], u: &[u8], v: &[u8], w: usize, h: usize, p: &Params) -
     let mut im_he = vec![0u8; w * h];
     easy_border_clear(&mut im_he, w, h);
 
-    let y_hoe = gimg::sobel_h_edge(y, w, h);
-    let u_hoe = gimg::sobel_h_edge(u, w, h);
-    let v_hoe = gimg::sobel_h_edge(v, w, h);
+    let (y_hoe, u_hoe, v_hoe) = std::thread::scope(|s| {
+        let l1 = s.spawn(|| gimg::sobel_h_edge(y, w, h));
+        let l2 = s.spawn(|| gimg::sobel_h_edge(u, w, h));
+        let l3 = s.spawn(|| gimg::sobel_h_edge(v, w, h));
+        (
+            l1.join().expect("sobel_h_edge(Y) 线程失败"),
+            l2.join().expect("sobel_h_edge(U) 线程失败"),
+            l3.join().expect("sobel_h_edge(V) 线程失败"),
+        )
+    });
 
     let mx = w - 1;
     let my = h - 1;
