@@ -16,6 +16,10 @@ use crate::imgops;
 use crate::params::Params;
 use crate::Keyframe;
 
+use std::collections::HashMap;
+use std::sync::mpsc::{sync_channel, Receiver, SyncSender};
+use std::sync::{Arc, Mutex};
+
 /// 一帧的解码 + 变换产物。
 #[derive(Clone)]
 pub(crate) struct FrameData {
@@ -43,15 +47,15 @@ pub struct FrameCache<'a> {
     w: usize,
     h: usize,
     prof: Option<imgops::Profiler>,
-    stepper: Option<frame::FramePipeline>,
+    stream: Option<TransformStream<'a>>,
     /// 滑动窗口内容；索引 = fn - window_start。
     window: std::collections::VecDeque<FrameData>,
     window_start: i32,
     /// 累计解码帧数（EOF 后固定 = 视频总帧数）。
     decoded_total: i32,
-    /// 视频总时长（毫秒），stepper 打开时填入；0 表示未知。
+    /// 视频总时长（毫秒），stream 打开时填入；0 表示未知。
     total_duration_ms: i64,
-    /// 视频总帧数，stepper 打开时填入；0 表示未知（进度条据此退化）。
+    /// 视频总帧数，stream 打开时填入；0 表示未知（进度条据此退化）。
     total_frames: i64,
 }
 
@@ -69,7 +73,7 @@ impl<'a> FrameCache<'a> {
             w: 0,
             h: 0,
             prof: None,
-            stepper: None,
+            stream: None,
             window: std::collections::VecDeque::new(),
             window_start: 0,
             decoded_total: 0,
@@ -86,18 +90,30 @@ impl<'a> FrameCache<'a> {
         self
     }
 
-    /// 取剖析计时器。
-    pub fn profiler(&self) -> Option<&imgops::Profiler> {
+    /// 取剖析计时器（先汇总后台 transform worker 的耗时进 `self.prof`）。
+    pub fn profiler(&mut self) -> Option<&imgops::Profiler> {
+        if let Some(pf) = self.prof.as_mut() {
+            if let Some(s) = self.stream.as_ref().and_then(|s| s.take_profiler_sum()) {
+                pf.color_filtration_ms += s.color_filtration_ms;
+                pf.bgr_to_yuv_ms += s.bgr_to_yuv_ms;
+                pf.im_ff_ms += s.im_ff_ms;
+                pf.im_ne_he_ms += s.im_ne_he_ms;
+                pf.filter_ms += s.filter_ms;
+                pf.analyse_ms += s.analyse_ms;
+                pf.thr_ms += s.thr_ms;
+            }
+        }
         self.prof.as_ref()
     }
 
-    /// 惰性打开流水线解码器（后台线程持续解码，与 transform 重叠）。
+    /// 惰性打开变换流水线：后台解码线程 + N 个 transform worker 前瞻计算，
+    /// 状态机消费已算好的 `FrameData`（对齐 C++ AddConvertImageTask 前瞻）。
     fn open_stepper(&mut self) -> Result<()> {
-        if self.stepper.is_none() {
-            let stepper = frame::FramePipeline::open(self.path)?;
-            self.total_duration_ms = stepper.total_duration_ms();
-            self.total_frames = stepper.total_frames();
-            self.stepper = Some(stepper);
+        if self.stream.is_none() {
+            let stream = TransformStream::open(self.path, self.p, self.prof.as_mut().as_deref())?;
+            self.total_duration_ms = stream.total_duration_ms();
+            self.total_frames = stream.total_frames();
+            self.stream = Some(stream);
         }
         Ok(())
     }
@@ -116,40 +132,29 @@ impl<'a> FrameCache<'a> {
     /// EOF 后 `decoded_total` 固定为视频总帧数。
     pub fn advance_to(&mut self, target: i32) -> Result<()> {
         self.open_stepper()?;
-        let stepper = self.stepper.as_mut().expect("stepper 已打开");
-        // 逐步解码到 target（或 EOF）。
+        let stream = self.stream.as_mut().expect("stream 已打开");
+        if self.w == 0 {
+            let (w, h) = stream.dim();
+            self.w = w;
+            self.h = h;
+        }
+        // 从变换流水线按顺序消费 FrameData，直到覆盖 target（或 EOF）。
         while self.decoded_total <= target {
-            match stepper.recv()? {
-                Some((flat, pts_ms)) => {
-                    let (w, h) = stepper.dim();
-                    if self.w == 0 {
-                        self.w = w;
-                        self.h = h;
+            match stream.recv_frame()? {
+                Some((n, fd)) => {
+                    let n = n as i32;
+                    // 跳过已消费的帧（多 worker 无序产出，由 stream 保证顺序；此处防御）。
+                    if n < self.decoded_total {
+                        continue;
                     }
-                    let (w, h) = (self.w, self.h);
-                    let n = self.decoded_total as usize;
-                    let (_ff, _sf, im_tf, im_ne, im_y, _lb, _le, _n, has_text) =
-                        imgops::get_transformed_image(&flat, w, h, self.p, self.prof.as_mut());
-                    let y: Vec<u16> = if has_text == 1 {
-                        im_y.iter().map(|&v| v as u16 + 255).collect()
-                    } else {
-                        vec![0; w * h]
-                    };
                     trace!(
                         frame = n,
-                        pos = pts_ms,
-                        has_text,
-                        isa_wc = im_tf.iter().filter(|&&v| v == 255).count(),
-                        "decode frame"
+                        pos = fd.pos,
+                        has_text = fd.has_text,
+                        isa_wc = fd.im.iter().filter(|&&v| v == 255).count(),
+                        "transform frame"
                     );
-                    self.window.push_back(FrameData {
-                        bgr: flat,
-                        im: im_tf,
-                        ne: im_ne,
-                        y,
-                        pos: pts_ms, // 真实 PTS（毫秒），由 FrameStepper 换算。
-                        has_text: has_text == 1,
-                    });
+                    self.window.push_back(fd);
                     self.decoded_total += 1;
                 }
                 None => {
@@ -182,6 +187,237 @@ impl<'a> FrameCache<'a> {
     }
     pub fn is_empty(&self) -> bool {
         self.decoded_total == 0
+    }
+}
+
+/// transform 流水线：单解码线程 + N 个 transform worker。
+///
+/// 对齐 C++ `AddConvertImageTask` 的前瞻 transform：解码线程把 flat BGR 帧按帧号
+/// 均匀分发（idx % n_workers）给各个 worker，worker 对分到的帧调用
+/// `get_transformed_image` 产出 `FrameData`，送入共享输出；消费方用 reorder 缓冲
+/// 严格按帧号升序取用，从而让状态机直接消费已算好的结果而不阻塞在 transform 上。
+struct TransformStream<'a> {
+    rx_out: Option<Receiver<Result<Option<(usize, FrameData)>>>>,
+    /// 各 worker 私有的 Profiler，结束时收集（供 cache 合并）。
+    profs: Arc<Mutex<Vec<imgops::Profiler>>>,
+    /// 各 worker 的输入 channel（Drop 时发哨兵以唤醒线程）。
+    in_txs: Vec<SyncSender<InMsg>>,
+    /// 已打开的解码 pipeline 的句柄（drop 时回收线程），仅用于保序/维度的元数据。
+    w: usize,
+    h: usize,
+    total_duration_ms: i64,
+    total_frames: i64,
+    /// reorder 缓冲：下一帧应取的帧号。
+    next_in: usize,
+    pending: HashMap<usize, FrameData>,
+    handles: Vec<std::thread::JoinHandle<()>>,
+    p: std::marker::PhantomData<&'a Params>,
+}
+
+/// 输入 channel 一条消息：`Ok(Some((帧号, flat BGR, pts)))` 或 `Ok(None)`（EOF）。
+type InMsg = Result<Option<(usize, Vec<u8>, i64)>>;
+
+impl<'a> TransformStream<'a> {
+    /// 打开视频并启动解码线程 + N 个 transform worker。`prof` 作为开启剖析的指示
+    /// （每个 worker 各自计时，finally 由 [`Self::take_profiler_sum`] 合并）。
+    fn open(path: &Path, p: &'a Params, prof: Option<&imgops::Profiler>) -> Result<Self> {
+        use frame::FramePipeline;
+        let mut dec = FramePipeline::open(path)?;
+        let total_frames = dec.total_frames();
+        let total_duration_ms = dec.total_duration_ms();
+        let (w, h) = dec.dim();
+
+        // worker 数量：transform 内层已用 scoped 线程，这里开几个并行的 transform，
+        // 让跨帧也有并行度。取逻辑核数的合理份数，上限 4。
+        let n_cpu = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4);
+        let n_workers = (n_cpu / 3).clamp(1, 4);
+
+        // 每个 worker 一条输入 channel（idx % n_workers 路由）。
+        let mut in_txs: Vec<SyncSender<InMsg>> = Vec::with_capacity(n_workers);
+        let mut in_rxs: Vec<Receiver<InMsg>> = Vec::with_capacity(n_workers);
+        for _ in 0..n_workers {
+            let (tx, rx) = sync_channel(4);
+            in_txs.push(tx);
+            in_rxs.push(rx);
+        }
+
+        // 共享输出（多 worker send → 消费者 reorder）。
+        let (tx_out, rx_out): (SyncSender<Result<Option<(usize, FrameData)>>>, _) =
+            sync_channel(16);
+
+        let p_copy: Params = *p;
+        let profs: Arc<Mutex<Vec<imgops::Profiler>>> = Arc::new(Mutex::new(Vec::new()));
+        let mut handles = Vec::with_capacity(n_workers + 1);
+
+        // 解码线程：连续解码并路由给各 worker；EOF 给所有 worker 发哨兵。
+        // 用 clone 让 decode 线程独享输入通道（struct 保留一份供 Drop 唤醒用）。
+        let dec_in_txs: Vec<SyncSender<InMsg>> = in_txs.iter().cloned().collect();
+        let th = std::thread::spawn(move || {
+            let mut idx = 0usize;
+            loop {
+                let item = match dec.recv() {
+                    Ok(Some(f)) => Some(f),
+                    _ => None,
+                };
+                match item {
+                    Some((flat, pts)) => {
+                        let msg: InMsg = Ok(Some((idx, flat, pts)));
+                        let wk = idx % dec_in_txs.len();
+                        if dec_in_txs[wk].send(msg).is_err() {
+                            break; // worker 已 drop
+                        }
+                        idx += 1;
+                    }
+                    None => {
+                        for tx in &dec_in_txs {
+                            let _ = tx.send(Ok(None));
+                        }
+                        break;
+                    }
+                }
+            }
+        });
+        handles.push(th);
+
+        // N 个 transform worker。
+        let enable_prof = prof.is_some();
+        for (_k, rx_in) in in_rxs.into_iter().enumerate() {
+            let tx_out = tx_out.clone();
+            let profs = Arc::clone(&profs);
+            let h = std::thread::spawn(move || {
+                let mut wp = imgops::Profiler::new();
+                if enable_prof {
+                    wp.enable();
+                }
+                // 处理本 worker 分到的帧（idx % n == k）。
+                loop {
+                    match rx_in.recv() {
+                        Ok(Ok(Some((idx, flat, pts)))) => {
+                            let (_ff, _sf, im_tf, im_ne, im_y, _lb, _le, _n, has_text) =
+                                imgops::get_transformed_image(&flat, w, h, &p_copy, Some(&mut wp));
+                            let y: Vec<u16> = if has_text == 1 {
+                                im_y.iter().map(|&v| v as u16 + 255).collect()
+                            } else {
+                                vec![0; w * h]
+                            };
+                            let fd = FrameData {
+                                bgr: flat,
+                                im: im_tf,
+                                ne: im_ne,
+                                y,
+                                pos: pts,
+                                has_text: has_text == 1,
+                            };
+                            if tx_out.send(Ok(Some((idx, fd)))).is_err() {
+                                break;
+                            }
+                        }
+                        Ok(Ok(None)) => break,
+                        Ok(Err(e)) => {
+                            let _ = tx_out.send(Err(e));
+                            break;
+                        }
+                        Err(_) => break,
+                    }
+                }
+                profs.lock().unwrap().push(wp);
+            });
+            handles.push(h);
+        }
+
+        Ok(Self {
+            rx_out: Some(rx_out),
+            profs,
+            in_txs,
+            w,
+            h,
+            total_duration_ms,
+            total_frames,
+            next_in: 0,
+            pending: HashMap::new(),
+            handles,
+            p: std::marker::PhantomData,
+        })
+    }
+
+    fn dim(&self) -> (usize, usize) {
+        (self.w, self.h)
+    }
+    fn total_duration_ms(&self) -> i64 {
+        self.total_duration_ms
+    }
+    fn total_frames(&self) -> i64 {
+        self.total_frames
+    }
+
+    /// 取下一帧（按帧号严格升序）。`Ok(None)` EOF。
+    fn recv_frame(&mut self) -> Result<Option<(usize, FrameData)>> {
+        // 从 reorder 缓冲优先取 next_in。
+        loop {
+            if let Some(fd) = self.pending.remove(&self.next_in) {
+                let idx = self.next_in;
+                self.next_in += 1;
+                return Ok(Some((idx, fd)));
+            }
+            let rx = match self.rx_out.as_ref() {
+                Some(rx) => rx,
+                None => return Ok(None),
+            };
+            // 收一个新完成的帧。
+            match rx.recv() {
+                Ok(Ok(Some((idx, fd)))) => {
+                    if idx == self.next_in {
+                        self.next_in += 1;
+                        return Ok(Some((idx, fd)));
+                    }
+                    // 乱序：先存缓冲，继续等 next_in。
+                    self.pending.insert(idx, fd);
+                }
+                Ok(Ok(None)) => return Ok(None),
+                Ok(Err(e)) => return Err(e),
+                Err(_) => {
+                    // channel 断开：清空缓冲后 EOF。
+                    self.pending.clear();
+                    return Ok(None);
+                }
+            }
+        }
+    }
+
+    /// 合并所有 worker 的 Profiler（仅剖析开启时有意义）。
+    fn take_profiler_sum(&self) -> Option<imgops::Profiler> {
+        let g = self.profs.lock().unwrap();
+        let mut sum = imgops::Profiler::new();
+        for p in g.iter() {
+            sum.color_filtration_ms += p.color_filtration_ms;
+            sum.bgr_to_yuv_ms += p.bgr_to_yuv_ms;
+            sum.im_ff_ms += p.im_ff_ms;
+            sum.im_ne_he_ms += p.im_ne_he_ms;
+            sum.filter_ms += p.filter_ms;
+            sum.analyse_ms += p.analyse_ms;
+            sum.thr_ms += p.thr_ms;
+            sum.enabled |= p.enabled;
+        }
+        if sum.enabled {
+            Some(sum)
+        } else {
+            None
+        }
+    }
+}
+
+impl Drop for TransformStream<'_> {
+    fn drop(&mut self) {
+        // 1) 发哨兵唤醒所有 worker（即使空闲在 recv()）。
+        for tx in &self.in_txs {
+            let _ = tx.send(Ok(None));
+        }
+        // 2) 断开输出，解除 worker 在 tx_out.send() 上的阻塞。
+        self.rx_out.take();
+        // 3) 回收所有线程。
+        for h in self.handles.drain(..) {
+            let _ = h.join();
+        }
     }
 }
 

@@ -125,8 +125,8 @@ fn main() -> anyhow::Result<()> {
     eprintln!("解码完成 {} 帧，耗时 {:.1}s", cache.len(), decode_elapsed.as_secs_f64());
 
     if profile {
+        let n = cache.len();
         if let Some(pf) = cache.profiler() {
-            let n = cache.len();
             pf.dump(n);
         }
     }
