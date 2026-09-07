@@ -6,10 +6,38 @@
 //!
 //! 索引 `i = y*w + x`；3 通道像素在 `[i*3, i*3+3)`。
 
+use opencv::prelude::*;
+
 use super::params::Params;
 
 // geometry 的 SIMD 图像算子（Sobel 边缘，AVX2 快路径 + 标量回退）。
 use geometry::imgproc as gimg;
+
+/// 控制帧内并行度（std::thread::scope）：默认关闭——每个 worker 已经用多线程做
+/// 帧间并行，帧内再切 3-5 线程只有 ~0.2ms 的 Sobel 活，spawn/同步/L2 抖动反而
+/// 拖慢（实测整视频 8.2s→7.0s）。SF_PARALLEL=1 可强制开启（对照用）。
+pub fn intra_frame_parallel() -> bool {
+    use std::sync::Once;
+    static VAL: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    static INIT: Once = Once::new();
+    INIT.call_once(|| {
+        let _ = VAL.set(std::env::var("SF_PARALLEL").map_or(false, |v| v == "1"));
+    });
+    *VAL.get().unwrap_or(&false)
+}
+
+/// 仅并行 im_ff 的 Thr1/Thr2 两条独立 cmoe 路径。两条路径互不依赖，但实测即使
+/// pipe-only 也仅 4.79s→4.69s（~2%）：thr 是内存带宽绑定而非 CPU 绑定，多线程
+/// 抢带宽几乎无收益，整视频跑反而因与主线程争带宽变慢。默认关，SF_THR=1 开。
+pub fn parallel_thr() -> bool {
+    use std::sync::Once;
+    static VAL: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    static INIT: Once = Once::new();
+    INIT.call_once(|| {
+        let _ = VAL.set(std::env::var("SF_THR").map_or(false, |v| v == "1"));
+    });
+    *VAL.get().unwrap_or(&false)
+}
 
 /// 轻量分阶段计时器（供性能剖析）。默认不开启（开销为 0）。
 #[derive(Default, Clone)]
@@ -23,6 +51,82 @@ pub struct Profiler {
     pub analyse_ms: f64,
     /// find_and_apply_local_thresholding（直方图阈值化）的累计耗时（im_ff 内）。
     pub thr_ms: f64,
+    /// 主线程状态机串行路径拆分（合计已并入 analyse_ms）。
+    pub sm_intersect_ms: f64,
+    pub sm_compare_ms: f64,
+    pub sm_analize_ms: f64,
+    pub sm_other_ms: f64,
+}
+
+/// 状态机串行路径（主线程）耗时累加器，按类别分列。
+/// 主线程同一时刻只会落一个类别，用 thread_local Cell 极轻量累计。
+#[derive(Default, Clone, Copy)]
+pub struct StateTimers {
+    pub intersect_ms: f64,
+    pub compare_ms: f64,
+    pub analize_ms: f64,
+    pub advance_ms: f64,
+    pub other_ms: f64,
+}
+
+thread_local! {
+    static SM_TIMERS: std::cell::Cell<StateTimers> = std::cell::Cell::new(StateTimers::default());
+}
+
+/// 进入某类别计时，返回 Guard：drop/结束计时累计回该类别。
+pub struct SmScope {
+    cat: u8,
+    t0: std::time::Instant,
+}
+
+const SM_INT: u8 = 1;
+const SM_CMP: u8 = 2;
+const SM_ANA: u8 = 3;
+const SM_ADV: u8 = 4;
+
+/// 开始一段时长测量；`None` 表示不采集（阈值为 0 时的开销路径）。
+pub fn sm_begin(cat: SmCat) -> SmScope {
+    let _ = std::hint::black_box(());
+    SmScope { cat: cat as u8, t0: std::time::Instant::now() }
+}
+
+pub enum SmCat {
+    Intersect,
+    Compare,
+    Analize,
+    Advance,
+}
+
+impl Drop for SmScope {
+    fn drop(&mut self) {
+        let d = self.t0.elapsed().as_secs_f64() * 1000.0;
+        SM_TIMERS.with(|c| {
+            let mut t = c.get();
+            match self.cat {
+                SM_INT => t.intersect_ms += d,
+                SM_CMP => t.compare_ms += d,
+                SM_ANA => t.analize_ms += d,
+                SM_ADV => t.advance_ms += d,
+                _ => t.other_ms += d,
+            }
+            c.set(t);
+        });
+    }
+}
+
+/// 读取并清零主线程状态机计时。
+pub fn sm_take() -> StateTimers {
+    SM_TIMERS.with(|c| c.replace(StateTimers::default()))
+}
+
+/// 把主线程状态机计时并入当前 Profiler 字段（供 FrameCache::profiler 汇总）。
+pub fn sm_merge_into(pf: &mut Profiler) {
+    let t = sm_take();
+    pf.analyse_ms += t.intersect_ms + t.compare_ms + t.analize_ms + t.advance_ms + t.other_ms;
+    pf.sm_intersect_ms += t.intersect_ms;
+    pf.sm_compare_ms += t.compare_ms;
+    pf.sm_analize_ms += t.analize_ms;
+    pf.sm_other_ms += t.advance_ms + t.other_ms;
 }
 
 impl Profiler {
@@ -52,6 +156,13 @@ impl Profiler {
         println!("    └ 直方图阈值化 : {:8.1} ms", self.thr_ms);
         println!("  im_ne+im_he      : {:8.1} ms", self.im_ne_he_ms);
         println!("  filter(连通域)   : {:8.1} ms", self.filter_ms);
+        if self.sm_intersect_ms > 0.0 || self.sm_compare_ms > 0.0 || self.sm_analize_ms > 0.0 {
+            println!("  状态机(主线程)  :");
+            println!("    └ get_intersect: {:8.1} ms", self.sm_intersect_ms);
+            println!("    └ compare      : {:8.1} ms", self.sm_compare_ms);
+            println!("    └ analize      : {:8.1} ms", self.sm_analize_ms);
+            println!("    └ other        : {:8.1} ms", self.sm_other_ms);
+        }
         println!("  总计             : {:8.1} ms", self.total_ms());
         println!(
             "  平均/帧          : {:8.3} ms",
@@ -99,34 +210,33 @@ pub fn intersect_two_images_inplace<T: Copy, T2: Copy + Default + PartialEq>(
 /// 3×3 矩形形态学膨胀，迭代 `iters` 次（对齐 OpenCV `dilate` 默认 3×3 矩形核）。
 /// 返回新图。
 pub fn dilate(im: &[u8], w: usize, h: usize, iters: i32) -> Vec<u8> {
-    // 迭代 3×3 方形膨胀（对应 OpenCV cv::dilate(_,_,Mat(),Point(-1,-1),iters)）。
-    // 用 **scatter**：只对白像素写 3×3 邻域。边缘图（NE）是稀疏的，scatter 只在
-    // 白点处工作，比"每输出像素 gather 9 邻域"快得多（实测 gather iters=6 慢 3×）。
-    // 尝试过的替代方案：可分离两趟（缓存不友好）、gather 逐像素（不利用稀疏）、
-    // 双缓冲交替（省 clone 但被 scatter 计算主导）都不比本实现快。本实现是多年 C++
-    // 移植的对齐版本，输出必须逐像素一致。
-    let mut cur = im.to_vec();
-    for _ in 0..iters.max(0) {
-        let mut next = cur.clone();
-        for y in 0..h {
-            for x in 0..w {
-                if cur[y * w + x] != 0 {
-                    // 把 3×3 邻域置非 0。
-                    for dy in -1..=1i32 {
-                        for dx in -1..=1i32 {
-                            let nx = x as i32 + dx;
-                            let ny = y as i32 + dy;
-                            if nx >= 0 && ny >= 0 && nx < w as i32 && ny < h as i32 {
-                                next[ny as usize * w + nx as usize] = 255;
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        cur = next;
+    // 用 OpenCV `cv::dilate`，与 C++ 完全一致（IPAlgorithms.cpp:1754：
+    // `cv::dilate(cv_im_gr, cv_im_gr, cv::Mat(), cv::Point(-1,-1), (g_min_h*H)/2)`）。
+    // 之前手写 scatter（白像素写 3×3 邻域 × iters）在 iters=6 时高达 ~19ms/帧
+    // （1MB 图 × 6 次克隆 + 全图扫描），OpenCV 内部用分离核 + SIMD，快一个量级，
+    // 且输出（3×3 MORPH_RECT × iters 迭代）与 C++ 逐像素一致。
+    if iters <= 0 || im.len() != w * h {
+        return im.to_vec();
     }
-    cur
+    let src = wrap_mat(h as i32, w as i32, opencv::core::CV_8UC1, im.as_ptr() as *mut u8);
+    let mut dst = opencv::core::Mat::default();
+    // 空 kernel = 3×3 MORPH_RECT，anchor(-1,-1)=中心，border 用 OpenCV 默认
+    // （BORDER_CONSTANT + morphologyDefaultBorderValue），与 C++ `cv::dilate(...,cv::Mat(),Point(-1,-1),iters)` 一致。
+    let border = opencv::imgproc::morphology_default_border_value().expect("morphologyDefaultBorderValue 失败");
+    opencv::imgproc::dilate(
+        &src,
+        &mut dst,
+        &opencv::core::Mat::default(),
+        opencv::core::Point::new(-1, -1),
+        iters,
+        opencv::core::BORDER_CONSTANT,
+        border,
+    )
+    .expect("cv::dilate 失败");
+    // 把 Mat 数据拷回 Vec（dst 是 OpenCV 分配的，非零拷贝 wrap）。
+    let mut out = vec![0u8; w * h];
+    out.copy_from_slice(dst.data_bytes().expect("dilate Mat 数据"));
+    out
 }
 
 /// `IntersectYImages`（单图）：`ImRes[i]` 若与 `Im2[i]` 相差超过 `g_max_dl_down/up`
@@ -618,20 +728,27 @@ pub fn get_transformed_image(
 
     let t0 = std::time::Instant::now();
     // 3) GetImFF / GetImNE / GetImHE（C++ `run_in_parallel`；这里也用 3 线程并行）。
-    let (im_ff, im_sf, lb_a, le_a, im_ne, im_he) = std::thread::scope(|s| {
-        let y = &im_y;
-        let u = &im_u;
-        let v = &im_v;
-        let lb = &lb;
-        let le = &le;
-        let h1 = s.spawn(move || get_im_ff(y, u, v, lb, le, n, w, h, p, None));
-        let h2 = s.spawn(move || get_im_ne(y, u, v, w, h, p));
-        let h3 = s.spawn(move || get_im_he(y, u, v, w, h, p));
-        let (ff, sf, lba, lea) = h1.join().expect("get_im_ff 线程失败");
-        let ne = h2.join().expect("get_im_ne 线程失败");
-        let he = h3.join().expect("get_im_he 线程失败");
+    let (im_ff, im_sf, lb_a, le_a, im_ne, im_he) = if intra_frame_parallel() {
+        std::thread::scope(|s| {
+            let y = &im_y;
+            let u = &im_u;
+            let v = &im_v;
+            let lb = &lb;
+            let le = &le;
+            let h1 = s.spawn(move || get_im_ff(y, u, v, lb, le, n, w, h, p, None));
+            let h2 = s.spawn(move || get_im_ne(y, u, v, w, h, p));
+            let h3 = s.spawn(move || get_im_he(y, u, v, w, h, p));
+            let (ff, sf, lba, lea) = h1.join().expect("get_im_ff 线程失败");
+            let ne = h2.join().expect("get_im_ne 线程失败");
+            let he = h3.join().expect("get_im_he 线程失败");
+            (ff, sf, lba, lea, ne, he)
+        })
+    } else {
+        let (ff, sf, lba, lea) = get_im_ff(&im_y, &im_u, &im_v, &lb, &le, n, w, h, p, None);
+        let ne = get_im_ne(&im_y, &im_u, &im_v, w, h, p);
+        let he = get_im_he(&im_y, &im_u, &im_v, w, h, p);
         (ff, sf, lba, lea, ne, he)
-    });
+    };
     if let Some(pf) = prof.as_deref_mut() {
         pf.im_ff_ms += t0.elapsed().as_secs_f64() * 1000.0;
     }
@@ -674,6 +791,22 @@ pub fn get_transformed_image(
 }
 
 /// BGR → YUV（对齐 OpenCV `COLOR_BGR2YUV` 全量程公式）。
+/// 零拷贝 wrap 一段外部内存为 OpenCV Mat（不拥有数据，drop 仅释放 header）。
+/// 只读场景传入 `*const u8` 转 `*mut u8`（与 `bgr_to_yuv` 既有用法一致）。
+fn wrap_mat(rows: i32, cols: i32, typ: i32, data: *mut u8) -> opencv::core::Mat {
+    // SAFETY: 调用方保证 data 指向 rows*cols* 字节的有效可写内存，且 Mat 生命周期
+    // 不出本函数体；Mat 零拷贝 wrap 不拥有数据，drop 仅释放 header。
+    unsafe {
+        opencv::core::Mat::new_rows_cols_with_data_unsafe_def(
+            rows,
+            cols,
+            typ,
+            data as *mut std::ffi::c_void,
+        )
+        .expect("Mat wrap 失败")
+    }
+}
+
 /// C++ 用 `cv::cvtColor(COLOR_BGR2YUV)`，其 Y 全量程 0-255（非 BT.601 的 16-235）。
 pub fn bgr_to_yuv(bgr: &[u8], y: &mut [u8], u: &mut [u8], v: &mut [u8], w: usize, h: usize) {
     // 用 OpenCV `cvtColor(COLOR_BGR2YUV)`，保证与 C++ GetTransformedImage 完全一致。
@@ -684,19 +817,6 @@ pub fn bgr_to_yuv(bgr: &[u8], y: &mut [u8], u: &mut [u8], v: &mut [u8], w: usize
     // 性能：旧实现每帧把 bgr 拷进 Mat、再手动逐像素解交错 YUV，开销比 OpenCV
     // 单算子多 ~3×（0.66ms vs 0.2ms）。这里改用零拷贝 wrap 输入 + `cv::split`
     // 一次写满 y/u/v 三通道（split 用 OpenCV 内部 SIMD 解交错），避免逐像素循环。
-    fn wrap_mat(rows: i32, cols: i32, typ: i32, data: *mut u8) -> opencv::core::Mat {
-        // SAFETY: 调用方保证 data 指向 rows*cols* 字节的有效可写内存，且 Mat 生命周期
-        // 不出本函数体；Mat 零拷贝 wrap 不拥有数据，drop 仅释放 header。
-        unsafe {
-            opencv::core::Mat::new_rows_cols_with_data_unsafe_def(
-                rows,
-                cols,
-                typ,
-                data as *mut std::ffi::c_void,
-            )
-            .expect("Mat wrap 失败")
-        }
-    }
     // 零拷贝 wrap 输入 bgr（不开 copy，Mat drop 不释放外部数据）。
     let src = wrap_mat(h as i32, w as i32, opencv::core::CV_8UC3, bgr.as_ptr() as *mut u8);
     let mut dst = opencv::core::Mat::default();
@@ -751,33 +871,49 @@ pub fn get_im_ff(
         im_v[offsets[k]..offsets[k] + cnts[k]].copy_from_slice(&v_full[src_off..src_off + cnts[k]]);
     }
 
-    // 每通道 M-edge（并行使 y/u/v 三个独立 Sobel，对齐 C++ GetImFF 内层并行）。
-    let (y_moe, u_moe, v_moe) = std::thread::scope(|s| {
-        let l1 = s.spawn(|| gimg::sobel_m_edge(&im_y, ww, hh));
-        let l2 = s.spawn(|| gimg::sobel_m_edge(&im_u, ww, hh));
-        let l3 = s.spawn(|| gimg::sobel_m_edge(&im_v, ww, hh));
+    // 每通道 M-edge（Sobel）：三条独立路径但单遍仅 ~0.2ms，spawn 不划算，串行走。
+    let (y_moe, u_moe, v_moe) = if intra_frame_parallel() {
+        std::thread::scope(|s| {
+            let l1 = s.spawn(|| gimg::sobel_m_edge(&im_y, ww, hh));
+            let l2 = s.spawn(|| gimg::sobel_m_edge(&im_u, ww, hh));
+            let l3 = s.spawn(|| gimg::sobel_m_edge(&im_v, ww, hh));
+            (
+                l1.join().expect("sobel_m_edge(Y) 线程失败"),
+                l2.join().expect("sobel_m_edge(U) 线程失败"),
+                l3.join().expect("sobel_m_edge(V) 线程失败"),
+            )
+        })
+    } else {
         (
-            l1.join().expect("sobel_m_edge(Y) 线程失败"),
-            l2.join().expect("sobel_m_edge(U) 线程失败"),
-            l3.join().expect("sobel_m_edge(V) 线程失败"),
+            gimg::sobel_m_edge(&im_y, ww, hh),
+            gimg::sobel_m_edge(&im_u, ww, hh),
+            gimg::sobel_m_edge(&im_v, ww, hh),
         )
-    });
+    };
 
-    // 组合阈值（Thr1 / Thr2）——两个独立路径，并行计算（对齐 C++ 内层 run_in_parallel）。
+    // 组合阈值（Thr1 / Thr2）——两条独立路径：默认并行（2 个 scoped 线程，合计
+    // ~8ms/帧的 cmoe 全幅工作 → ~4ms），对齐 C++ 内层 run_in_parallel。SF_THR=0 串行。
     // 线程内传 None 避免 prof（&mut）跨线程借用；此处按并行区墙时累计 thr_ms（近似）。
     let t_thr = std::time::Instant::now();
-    let (res1, res4) = std::thread::scope(|s| {
-        let t1 = s.spawn(|| {
-            get_im_cmoe_with_thr1(&y_moe, &u_moe, &v_moe, ww, hh, &offsets, &dhs, p.mthr, None)
-        });
-        let t2 = s.spawn(|| {
-            get_im_cmoe_with_thr2(&y_moe, &u_moe, &v_moe, ww, hh, &offsets, &dhs, p.mthr, None)
-        });
+    let (res1, res4) = if parallel_thr() {
+        std::thread::scope(|s| {
+            let t1 = s.spawn(|| {
+                get_im_cmoe_with_thr1(&y_moe, &u_moe, &v_moe, ww, hh, &offsets, &dhs, p.mthr, None)
+            });
+            let t2 = s.spawn(|| {
+                get_im_cmoe_with_thr2(&y_moe, &u_moe, &v_moe, ww, hh, &offsets, &dhs, p.mthr, None)
+            });
+            (
+                t1.join().expect("get_im_cmoe_with_thr1 线程失败"),
+                t2.join().expect("get_im_cmoe_with_thr2 线程失败"),
+            )
+        })
+    } else {
         (
-            t1.join().expect("get_im_cmoe_with_thr1 线程失败"),
-            t2.join().expect("get_im_cmoe_with_thr2 线程失败"),
+            get_im_cmoe_with_thr1(&y_moe, &u_moe, &v_moe, ww, hh, &offsets, &dhs, p.mthr, None),
+            get_im_cmoe_with_thr2(&y_moe, &u_moe, &v_moe, ww, hh, &offsets, &dhs, p.mthr, None),
         )
-    });
+    };
     if let Some(pf) = prof.as_deref_mut() {
         pf.thr_ms += t_thr.elapsed().as_secs_f64() * 1000.0;
     }
@@ -829,16 +965,24 @@ pub fn get_im_ne(y: &[u8], u: &[u8], v: &[u8], w: usize, h: usize, p: &Params) -
     let mut im_ne = vec![0u8; w * h];
     easy_border_clear(&mut im_ne, w, h);
 
-    let (y_noe, u_noe, v_noe) = std::thread::scope(|s| {
-        let l1 = s.spawn(|| gimg::sobel_n_edge(y, w, h));
-        let l2 = s.spawn(|| gimg::sobel_n_edge(u, w, h));
-        let l3 = s.spawn(|| gimg::sobel_n_edge(v, w, h));
+    let (y_noe, u_noe, v_noe) = if intra_frame_parallel() {
+        std::thread::scope(|s| {
+            let l1 = s.spawn(|| gimg::sobel_n_edge(y, w, h));
+            let l2 = s.spawn(|| gimg::sobel_n_edge(u, w, h));
+            let l3 = s.spawn(|| gimg::sobel_n_edge(v, w, h));
+            (
+                l1.join().expect("sobel_n_edge(Y) 线程失败"),
+                l2.join().expect("sobel_n_edge(U) 线程失败"),
+                l3.join().expect("sobel_n_edge(V) 线程失败"),
+            )
+        })
+    } else {
         (
-            l1.join().expect("sobel_n_edge(Y) 线程失败"),
-            l2.join().expect("sobel_n_edge(U) 线程失败"),
-            l3.join().expect("sobel_n_edge(V) 线程失败"),
+            gimg::sobel_n_edge(y, w, h),
+            gimg::sobel_n_edge(u, w, h),
+            gimg::sobel_n_edge(v, w, h),
         )
-    });
+    };
 
     let mx = w - 1;
     let my = h - 1;
@@ -874,16 +1018,24 @@ pub fn get_im_he(y: &[u8], u: &[u8], v: &[u8], w: usize, h: usize, p: &Params) -
     let mut im_he = vec![0u8; w * h];
     easy_border_clear(&mut im_he, w, h);
 
-    let (y_hoe, u_hoe, v_hoe) = std::thread::scope(|s| {
-        let l1 = s.spawn(|| gimg::sobel_h_edge(y, w, h));
-        let l2 = s.spawn(|| gimg::sobel_h_edge(u, w, h));
-        let l3 = s.spawn(|| gimg::sobel_h_edge(v, w, h));
+    let (y_hoe, u_hoe, v_hoe) = if intra_frame_parallel() {
+        std::thread::scope(|s| {
+            let l1 = s.spawn(|| gimg::sobel_h_edge(y, w, h));
+            let l2 = s.spawn(|| gimg::sobel_h_edge(u, w, h));
+            let l3 = s.spawn(|| gimg::sobel_h_edge(v, w, h));
+            (
+                l1.join().expect("sobel_h_edge(Y) 线程失败"),
+                l2.join().expect("sobel_h_edge(U) 线程失败"),
+                l3.join().expect("sobel_h_edge(V) 线程失败"),
+            )
+        })
+    } else {
         (
-            l1.join().expect("sobel_h_edge(Y) 线程失败"),
-            l2.join().expect("sobel_h_edge(U) 线程失败"),
-            l3.join().expect("sobel_h_edge(V) 线程失败"),
+            gimg::sobel_h_edge(y, w, h),
+            gimg::sobel_h_edge(u, w, h),
+            gimg::sobel_h_edge(v, w, h),
         )
-    });
+    };
 
     let mx = w - 1;
     let my = h - 1;

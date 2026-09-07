@@ -696,6 +696,7 @@ pub(crate) fn analize_for_sub_presence(
     h: usize,
     p: &Params,
 ) -> i32 {
+    let _sm = crate::imgops::sm_begin(crate::imgops::SmCat::Analize);
     let size = w * h;
     let mut im_ff = im_isa.to_vec();
     let mut im_tf = vec![0u8; size];

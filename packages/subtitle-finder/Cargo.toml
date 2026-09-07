@@ -34,3 +34,5 @@ tracing = { workspace = true }
 tracing-subscriber.workspace = true
 # 进度条（走 stderr，与 tracing/stdout 解耦，对齐 subtitle-ocr）。
 indicatif = { workspace = true }
+# 高并发 malloc（多 worker transform 大量 1MB 级分配，system malloc 锁竞争明显）。
+mimalloc.workspace = true

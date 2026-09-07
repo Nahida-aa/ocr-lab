@@ -68,6 +68,8 @@ glam = "0.33.2"
 faer = "0.24.4"
 # 视频解码（subtitle-finder 逐帧 30fps 用）。
 ffmpeg-next = "9.0.0"
+# 高并发 malloc（subtitle-finder 多 worker transform 大量 1MB 级分配）。
+mimalloc = { version = "0.1", default-features = false }
 # PP-OCR det/rec/cls 引擎（onnxruntime 推理 + DB 后处理）。
 # 跨包共享，统一走 workspace，改 path/版本只动这一处。
 rapidocr-ort = { path = "packages/rapidocr-ort" }

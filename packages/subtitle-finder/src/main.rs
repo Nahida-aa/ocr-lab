@@ -18,6 +18,11 @@ use clap::Parser;
 use indicatif::{ProgressBar, ProgressStyle};
 use std::path::{Path, PathBuf};
 
+// 高并发 malloc：多 worker transform + 每帧 1MB 级分配，system malloc 锁竞争明显。
+// A/B 时注释掉下面两行即可回落到 glibc allocator。
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 use subtitle_finder::output::{self, OutputMode};
 
 #[derive(Parser, Debug)]
@@ -128,6 +133,7 @@ fn main() -> anyhow::Result<()> {
         let n = cache.len();
         if let Some(pf) = cache.profiler() {
             pf.dump(n);
+            eprintln!("主线程等待流水线: {:.0} ms", cache.stream_wait_ms());
         }
     }
 

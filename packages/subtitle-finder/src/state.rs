@@ -102,8 +102,15 @@ impl<'a> FrameCache<'a> {
                 pf.analyse_ms += s.analyse_ms;
                 pf.thr_ms += s.thr_ms;
             }
+            // 主线程状态机串行路径计时。
+            imgops::sm_merge_into(pf);
         }
         self.prof.as_ref()
+    }
+
+    /// 主线程在流水线上阻塞等待的累计时长（毫秒）。
+    pub fn stream_wait_ms(&self) -> f64 {
+        self.stream.as_ref().map(|s| s.wait_ms).unwrap_or(0.0)
     }
 
     /// 惰性打开变换流水线：后台解码线程 + N 个 transform worker 前瞻计算，
@@ -131,6 +138,7 @@ impl<'a> FrameCache<'a> {
     /// 推进解码窗口，确保 [window_start, target] 已解码，并丢弃窗口外的旧帧。
     /// EOF 后 `decoded_total` 固定为视频总帧数。
     pub fn advance_to(&mut self, target: i32) -> Result<()> {
+        let _sm = imgops::sm_begin(imgops::SmCat::Advance);
         self.open_stepper()?;
         let stream = self.stream.as_mut().expect("stream 已打开");
         if self.w == 0 {
@@ -210,6 +218,8 @@ struct TransformStream<'a> {
     /// reorder 缓冲：下一帧应取的帧号。
     next_in: usize,
     pending: HashMap<usize, FrameData>,
+    /// 消费端在 `rx.recv()` 上阻塞等待的总时长（毫秒；衡量流水线吞吐 vs 主线程串行）。
+    wait_ms: f64,
     handles: Vec<std::thread::JoinHandle<()>>,
     p: std::marker::PhantomData<&'a Params>,
 }
@@ -227,10 +237,15 @@ impl<'a> TransformStream<'a> {
         let total_duration_ms = dec.total_duration_ms();
         let (w, h) = dec.dim();
 
-        // worker 数量：transform 内层已用 scoped 线程，这里开几个并行的 transform，
-        // 让跨帧也有并行度。取逻辑核数的合理份数，上限 4。
+        // worker 数量：transform 默认帧内串行（见 intra_frame_parallel），用 N 个
+        // 单线程 transform worker 做帧间并行。实测 16 核下 n=3~4 最优（7.0s），
+        // 更多 worker 因内存带宽/allocator 争用不再加速。可用 SF_NWORKERS 覆盖。
         let n_cpu = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4);
-        let n_workers = (n_cpu / 3).clamp(1, 4);
+        let n_workers = std::env::var("SF_NWORKERS")
+            .ok()
+            .and_then(|v| v.parse::<usize>().ok())
+            .unwrap_or((n_cpu / 3).clamp(1, 4));
+        let n_workers = n_workers.max(1);
 
         // 每个 worker 一条输入 channel（idx % n_workers 路由）。
         let mut in_txs: Vec<SyncSender<InMsg>> = Vec::with_capacity(n_workers);
@@ -334,6 +349,7 @@ impl<'a> TransformStream<'a> {
             total_duration_ms,
             total_frames,
             next_in: 0,
+            wait_ms: 0.0,
             pending: HashMap::new(),
             handles,
             p: std::marker::PhantomData,
@@ -364,8 +380,10 @@ impl<'a> TransformStream<'a> {
                 None => return Ok(None),
             };
             // 收一个新完成的帧。
+            let t = std::time::Instant::now();
             match rx.recv() {
                 Ok(Ok(Some((idx, fd)))) => {
+                    self.wait_ms += t.elapsed().as_secs_f64() * 1000.0;
                     if idx == self.next_in {
                         self.next_in += 1;
                         return Ok(Some((idx, fd)));
@@ -373,7 +391,10 @@ impl<'a> TransformStream<'a> {
                     // 乱序：先存缓冲，继续等 next_in。
                     self.pending.insert(idx, fd);
                 }
-                Ok(Ok(None)) => return Ok(None),
+                Ok(Ok(None)) => {
+                    self.wait_ms += t.elapsed().as_secs_f64() * 1000.0;
+                    return Ok(None);
+                }
                 Ok(Err(e)) => return Err(e),
                 Err(_) => {
                     // channel 断开：清空缓冲后 EOF。
@@ -486,6 +507,7 @@ pub(crate) fn get_intersect_images(
     cache: &FrameCache,
     fn_: usize,
 ) -> Option<(Vec<u8>, Vec<u16>, bool)> {
+    let _sm = imgops::sm_begin(imgops::SmCat::Intersect);
     let p = cache.params();
     let w = cache.w();
     let h = cache.h();
@@ -551,6 +573,7 @@ pub(crate) fn compare_by_offset(
     prev_ne: &[u8],
     offset: usize,
 ) -> Option<bool> {
+    let _sm = imgops::sm_begin(imgops::SmCat::Compare);
     let p = cache.params();
     let w = cache.w();
     let h = cache.h();
@@ -1201,4 +1224,39 @@ fn flat_bgr_to_array3(bgr: &[u8], w: usize, h: usize) -> ndarray::Array3<u8> {
         }
     }
     arr
+}
+
+#[cfg(test)]
+mod probe {
+    use super::*;
+    use std::time::Instant;
+
+    /// 纯 transform 流水线吞吐（不跑状态机）：测解码+transform 的端到端能力上限。
+    /// 默认忽略，`cargo test -p subtitle-finder --release -- --ignored pipe` 手动跑。
+    #[test]
+    #[ignore]
+    fn pipe_throughput() {
+        let path = std::path::Path::new(
+            "/home/aa/repos/ai_ls/ocr-lab/tests/bench/subtitle-ocr/ref/狗/2/video_source.mp4",
+        );
+        let p = crate::params::Params::default();
+        let mut ts = TransformStream::open(path, &p, None).unwrap();
+        let t0 = Instant::now();
+        let mut n = 0usize;
+        while let Some((idx, _fd)) = ts.recv_frame().unwrap() {
+            n += 1;
+            if n % 1017 == 0 {
+                eprintln!(
+                    "pipe[{:?}]: {n} frames in {:.2}s (last idx {idx})",
+                    std::thread::current().name(),
+                    t0.elapsed().as_secs_f64()
+                );
+            }
+        }
+        eprintln!(
+            "pipe total: {n} frames in {:.2}s = {:.2}ms/frame",
+            t0.elapsed().as_secs_f64(),
+            t0.elapsed().as_secs_f64() * 1000.0 / n as f64
+        );
+    }
 }
