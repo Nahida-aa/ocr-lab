@@ -43,7 +43,7 @@ pub struct FrameCache<'a> {
     w: usize,
     h: usize,
     prof: Option<imgops::Profiler>,
-    stepper: Option<frame::FrameStepper>,
+    stepper: Option<frame::FramePipeline>,
     /// 滑动窗口内容；索引 = fn - window_start。
     window: std::collections::VecDeque<FrameData>,
     window_start: i32,
@@ -91,10 +91,10 @@ impl<'a> FrameCache<'a> {
         self.prof.as_ref()
     }
 
-    /// 惰性打开流式解码器。
+    /// 惰性打开流水线解码器（后台线程持续解码，与 transform 重叠）。
     fn open_stepper(&mut self) -> Result<()> {
         if self.stepper.is_none() {
-            let stepper = frame::FrameStepper::open(self.path)?;
+            let stepper = frame::FramePipeline::open(self.path)?;
             self.total_duration_ms = stepper.total_duration_ms();
             self.total_frames = stepper.total_frames();
             self.stepper = Some(stepper);
@@ -119,22 +119,14 @@ impl<'a> FrameCache<'a> {
         let stepper = self.stepper.as_mut().expect("stepper 已打开");
         // 逐步解码到 target（或 EOF）。
         while self.decoded_total <= target {
-            match stepper.next()? {
-                Some((bgr, pts_ms)) => {
-                    let (ch, cw) = (bgr.dim().0 as usize, bgr.dim().1 as usize);
+            match stepper.recv()? {
+                Some((flat, pts_ms)) => {
+                    let (w, h) = stepper.dim();
                     if self.w == 0 {
-                        self.w = cw;
-                        self.h = ch;
+                        self.w = w;
+                        self.h = h;
                     }
                     let (w, h) = (self.w, self.h);
-                    let mut flat = Vec::with_capacity(w * h * 3);
-                    for y in 0..h {
-                        for x in 0..w {
-                            flat.push(bgr[[y, x, 0]]);
-                            flat.push(bgr[[y, x, 1]]);
-                            flat.push(bgr[[y, x, 2]]);
-                        }
-                    }
                     let n = self.decoded_total as usize;
                     let (_ff, _sf, im_tf, im_ne, im_y, _lb, _le, _n, has_text) =
                         imgops::get_transformed_image(&flat, w, h, self.p, self.prof.as_mut());

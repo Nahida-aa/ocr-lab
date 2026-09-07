@@ -74,21 +74,30 @@ mod tests {
         assert!(video.exists(), "缺少测试视频: {}", video.display());
 
         let mut count = 0usize;
-        let mut dims = None;
-        frame::for_each_frame(&video, |arr, _pts_ms| {
+        frame::for_each_frame(&video, |_flat, _pts_ms| {
             count += 1;
-            if dims.is_none() {
-                let (h, w, _) = arr.dim();
-                dims = Some((h, w));
-            }
             // 只解前 30 帧验证管线，避免全量慢。
             Ok(count < 30)
         })
         .expect("解码失败");
 
-        assert_eq!(dims, Some((720, 1280)), "720p 分辨率");
+        // 用 stepper 单独验证分辨率（for_each_frame 回调不携带维度）。
+        let stepper = frame::FrameStepper::open(&video).expect("打开失败");
+        let mut count2 = 0usize;
+        let mut dims = None;
+        let mut st = stepper;
+        while let Some((_flat, _pts)) = st.next().expect("解码失败") {
+            count2 += 1;
+            if count2 == 1 {
+                dims = Some(st.dim());
+            }
+            if count2 >= 2 {
+                break;
+            }
+        }
+
+        assert_eq!(dims, Some((1280, 720)), "720p 分辨率 (w,h)");
         assert_eq!(count, 30);
-        eprintln!("subtitle-finder 解码前 {} 帧，{}x{}", count, dims.unwrap().0, dims.unwrap().1);
     }
 
     /// 集成测试：跑完整状态机，验证能输出关键帧（非空、时间轴有序）。
