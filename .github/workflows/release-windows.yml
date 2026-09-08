@@ -32,6 +32,9 @@ on:
 permissions:
   contents: write
 
+env:
+  GH_TOKEN: ${{ github.token }}
+
 jobs:
   build:
     runs-on: windows-latest
@@ -112,8 +115,6 @@ jobs:
           # ffmpeg-sys-next: FFMPEG_DIR 指向 vcpkg installed 根 (lib+include 布局)
           echo "FFMPEG_DIR=$installed" >> $env:GITHUB_ENV
           echo "FFMPEG_PKG_CONFIG_PATH=$installed\lib\pkgconfig" >> $env:GITHUB_ENV
-          # GITHUB_TOKEN 用于 gh release upload
-          echo "GH_TOKEN=$env:GITHUB_TOKEN" >> $env:GITHUB_ENV
 
       - name: build release bins
         shell: pwsh
