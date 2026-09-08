@@ -41,6 +41,7 @@ graph TD
 ## 当前状态
 
 ### ✅ rapidocr-ort（文字识别，可用）
+
 - `OcrEngine` 支持 v3 / v6-tiny / v6-medium，**运行时 `--model` 切换**（非条件编译）。
 - 检测：DB 概率图 + 二值化 + 连通域 + 框扩张（PP-OCR det 概率图只激活文字行
   中间带，需外扩才能包住完整字形）。
@@ -50,6 +51,7 @@ graph TD
 - `tools/gen_fixtures.py`：用 Noto Sans CJK 生成文字图片（支持中文，避免 tofu）。
 
 ### ⚠️ 已知问题 / 待修
+
 - **v3 识别仍会掉字**：长文本中间/末尾字符偶发丢失（32px 输入分辨率限制 +
   框扩张比例敏感）。需继续调参：`--model` 之外，扩张比例可经 `OCR_EXPAND`
   环境变量覆盖调试。
@@ -84,7 +86,7 @@ graph TD
 ocr-lab/
 ├── Cargo.toml              # workspace（crates/*）；[patch.crates-io] 覆盖 gpui 到 zed d88f682
 ├── ROADMAP.md              # 本文件
-├── models/rapidocr/        # 权重（gitignore，152M）
+├── data/models/rapidocr/        # 权重（gitignore，152M）
 ├── crates/
 │   ├── rapidocr-ort/       # 检测+识别 库 & 二进制（目标 2/3 共用的识别引擎）
 │   ├── capturer/           # 自研跨 compositor 抓图基础设施（Capturer trait + portal 后端）

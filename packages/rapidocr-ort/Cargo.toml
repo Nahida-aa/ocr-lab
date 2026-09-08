@@ -16,7 +16,7 @@ path = "src/main.rs"
 
 [dependencies]
 # ONNX Runtime 推理（workspace 已 pin rc.13）。开 ndarray feature 以便直接吃
-# ndarray::Array 构造输入张量。模型权重在 models/rapidocr 下，通过 --model 运行
+# ndarray::Array 构造输入张量。模型权重在 data/models/rapidocr 下，通过 --model 运行
 # 时参数选择，不条件编译。
 ort = { workspace = true, features = ["ndarray"] }
 # 图像读取 + 预处理（Resize/Normalize/CHW 排列）。

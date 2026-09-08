@@ -7,8 +7,7 @@
 
 - [x] subtitle-ocr Rust 实现：OCR 引擎 + 后处理 CLI 链
       （ocr-frames-adjust/filter-box、merge-frames、ocr-segment-adjust/filter）
-- [x] 进度条化（indicatif，独立 stderr）+ 关 ORT 噪声（ort::logging=error）
-      + `--out` 指定时不再向 stdout 重复打印整份 JSON
+- [x] 进度条化（indicatif，独立 stderr）+ 关 ORT 噪声（ort::logging=error）+ `--out` 指定时不再向 stdout 重复打印整份 JSON
 - [x] 修正 README/ROADMAP 里 subtitle-ocr「待实现」过期描述 → 已实现
 - [ ] v3 识别掉字调参（扩张比例 / rec 输入高度 / 双线性），目标不丢字
       （环境变量 `OCR_EXPAND` 可覆盖扩张比例调试）
@@ -33,5 +32,5 @@
 
 ## 跨仓维护
 
-- [ ] 确认 `models/rapidocr` 权重交付方式（当前 `.gitignore`，本地需放置；
+- [ ] 确认 `data/models/rapidocr` 权重交付方式（当前 `.gitignore`，本地需放置；
       考虑 sync 脚本 / 下载说明，避免协作者缺权重）

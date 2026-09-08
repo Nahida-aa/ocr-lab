@@ -26,7 +26,7 @@ fn cpp_bin() -> PathBuf {
 }
 
 fn models_dir() -> PathBuf {
-    repo_root().join("models").join("rapidocr")
+    repo_root().join("data/models").join("rapidocr")
 }
 
 fn video_path() -> PathBuf {

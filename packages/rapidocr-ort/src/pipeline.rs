@@ -95,7 +95,21 @@ fn warp_perspective(img: &Array3<u8>, polygon: &[Vec2; 4], dst_w: usize, dst_h: 
     let src_mat = src_1d.reshape(3, h as i32).expect("src reshape");
 
     // 显式 flags：INTER_CUBIC + BORDER_REPLICATE，borderValue 0（对齐 cpp）。
+    // AlgorithmHint 重载仅存在于新版头：Linux 系统 OpenCV 有 8 参重载；vcpkg 4.12 头仅 7 参，故按平台分流。
     let mut dst_mat = opencv::core::Mat::default();
+    #[cfg(windows)]
+    imgproc::warp_perspective(
+        &src_mat,
+        &mut dst_mat,
+        &m,
+        opencv::core::Size::new(dst_w as i32, dst_h as i32),
+        opencv::imgproc::INTER_CUBIC,
+        opencv::core::BORDER_REPLICATE,
+        opencv::core::Scalar::new(0.0, 0.0, 0.0, 0.0),
+    )
+    .expect("warpPerspective cubic");
+
+    #[cfg(not(windows))]
     imgproc::warp_perspective(
         &src_mat,
         &mut dst_mat,

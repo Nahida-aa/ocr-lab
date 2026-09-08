@@ -158,7 +158,7 @@ fn offset_box_y(b: &mut OcrBoxResult, dy: f32) {
 }
 
 impl SubtitleOcr {
-    /// 按模型套件构建（模型目录默认仓库根 `models/rapidocr`）。
+    /// 按模型套件构建（模型目录默认仓库根 `data/models/rapidocr`）。
     pub fn from_profile(
         profile: ModelProfile,
         model_dir: &std::path::Path,

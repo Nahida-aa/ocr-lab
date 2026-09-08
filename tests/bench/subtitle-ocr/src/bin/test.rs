@@ -24,7 +24,7 @@ fn frames_dir() -> PathBuf {
 }
 
 fn models_dir() -> PathBuf {
-    repo_root().join("models").join("rapidocr")
+    repo_root().join("data").join("models").join("rapidocr")
 }
 
 /// 统计帧目录下图片文件数。

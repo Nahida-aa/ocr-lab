@@ -1,4 +1,5 @@
 models/
+data/models/
 .config/
 .cache/
 
@@ -9,6 +10,7 @@ build
 .agents/*.local.md
 
 tmp
+workfolder
 tests/fixtures/.capture_token
 
 # 基准参考视频（34M）不入库；GT 标注 ref/ocr_manual.json 与抽好的
