@@ -62,7 +62,9 @@ rust-embed = { version = "8.11", features = ["include-exclude"] }
 # 通用图像转换工具（rgba→rgb 等），与业务解耦。
 image-util = { path = "packages/image_util" }
 image = "0.25"
-opencv = { version = "0.100.0", default-features = false, features = ["imgproc", "videoio"] }
+# clang-runtime: 强制绑定生成走子进程而非线程, 避免 clang-sys 因树内其它 crate
+# 开启 runtime 导致多线程 load libclang 时 panic (opencv-rust TROUBLESHOOTING #8)。
+opencv = { version = "0.100.0", default-features = false, features = ["imgproc", "videoio", "clang-runtime"] }
 ort = "2.0.0-rc.13"
 burn = "0.21.0"
 util = { path = "packages/util" }
