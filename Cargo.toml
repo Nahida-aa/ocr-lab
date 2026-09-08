@@ -5,6 +5,10 @@ members = [
     "packages/geometry", "packages/subtitle-finder",
     # 颜色连通域原语 + 布局层（examples/split-panels 演示纯图片 UI 的切分）。
     "packages/color-analysis", "packages/ocr-layout",
+    # 界面自动化代理（识别→定位→点击，依赖 ocr-layout / capturer / screen-operator）。
+    "packages/ocr-agent",
+    # 通用图像转换 / 屏幕操作层（ocr-agent 的依赖；用 workspace 继承须在 members 内）。
+    "packages/image_util", "packages/screen-operator",
     # 基准测试驱动（独立 cargo 包，见 tests/bench/subtitle-ocr）。
     # 不属于常规构建目标，故不放进 default-members。
     "tests/bench/subtitle-ocr",
@@ -56,7 +60,7 @@ indicatif = "0.17"
 ndarray = "0.17"
 rust-embed = { version = "8.11", features = ["include-exclude"] }
 # 通用图像转换工具（rgba→rgb 等），与业务解耦。
-image-util = { path = "crates/image_util" }
+image-util = { path = "packages/image_util" }
 image = "0.25"
 opencv = { version = "0.100.0", default-features = false, features = ["imgproc", "videoio"] }
 ort = "2.0.0-rc.13"
