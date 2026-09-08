@@ -3,7 +3,7 @@ name: release-windows
 # 手动触发: 构建 subtitle-finder / subtitle-ocr / ocr-post 的 Windows (x86_64-pc-windows-msvc)
 # 资产并上传到 ocr-lab 对应 GitHub Release。
 #
-# 资产形态: zip (exe + 运行时 dll)。动态链接 vcpkg opencv4[ffmpeg] 与 ffmpeg,
+# 资产形态: zip (exe + 运行时 dll)。动态链接官方 OpenCV 5.0.0 prebuilt + vcpkg ffmpeg,
 # zip 里 exe 与全部所需 dll 平铺 (Windows PE 优先同目录找 dll), 解压目录即 bin dir。
 # 命名: <bin>-x86_64-pc-windows-msvc.zip, 与 Linux 的单文件资产 `<bin>-x86_64-unknown-linux-gnu`
 # 并存于同一 tag。
@@ -12,6 +12,8 @@ name: release-windows
 #   - 全局 .cargo/config.toml 带 -C target-feature=+avx2 (x86-64 2013+ 通用), 直接适用。
 #   - onnxruntime 经 ort 的 download-binaries 拉 prebuilt, Windows x64 有预编译, 无需本机装。
 #   - opencv crate 构建需要 clang (bindgen 解析 C++ 头), 故安装 LLVM。
+#   - OpenCV 用官方 windows 预编译 5.0.0 (vcpkg 只有 opencv4, 与 Linux 系统 v5 头不一致)。
+#     prebuilt 带 OpenCVConfig.cmake, 经 OPENCV_CMAKE_ARGS=-DOpenCV_DIR=... 让 crate cmake probe 命中。
 #   - ffmpeg-next (ffmpeg-sys-next) 在 Windows 经 FFMPEG_DIR 指向 vcpkg installed 根。
 #   - 冒烟仅验证 exe 可启动 (dll 齐全), 完整 OCR 需模型, 留给真机。
 
@@ -60,16 +62,29 @@ jobs:
           echo "$($hit.Directory.FullName)" >> $env:GITHUB_PATH
           Write-Host "libclang at $($hit.FullName)"
 
+      - name: cache opencv 5 prebuilt
+        uses: actions/cache@v4
+        with:
+          path: C:/opencv5
+          key: opencv-5.0.0-prebuilt-x64-windows-v1
+
       - name: cache vcpkg packages
         uses: actions/cache@v4
         with:
           path: C:/vcpkg/installed
-          key: vcpkg-opencv4ffmpeg-x64-windows-v1
+          key: vcpkg-ffmpeg-x64-windows-v1
 
-      - name: provision vcpkg + opencv/ffmpeg
+      - name: provision opencv 5 prebuilt + vcpkg ffmpeg
         shell: pwsh
         run: |
-          # windows-latest 预装 vcpkg (VCPKG_INSTALLATION_ROOT); 缺失则 clone 到 RUNNER_TEMP
+          # OpenCV 5.0.0 官方 windows 预编译 (7z SFX): 与 Linux 系统 v5 头对齐
+          if (-not (Test-Path "C:\opencv5\opencv\build\include\opencv2\core\version.hpp")) {
+            curl.exe -sL -o "$env:RUNNER_TEMP\opencv.exe" "https://github.com/opencv/opencv/releases/download/5.0.0/opencv-5.0.0-windows.exe"
+            & "C:\Program Files\7-Zip\7z.exe" x "$env:RUNNER_TEMP\opencv.exe" "-oC:\opencv5" -y | Out-Null
+          }
+          Get-Item "C:\opencv5\opencv\build\x64\vc16\bin\opencv_world500.dll" | Select-Object Name, Length
+
+          # vcpkg ffmpeg (供 ffmpeg-sys-next 经 FFMPEG_DIR 使用); windows-latest 预装 vcpkg
           if ($env:VCPKG_INSTALLATION_ROOT -and (Test-Path "$env:VCPKG_INSTALLATION_ROOT\vcpkg.exe")) {
             $vcpkgRoot = $env:VCPKG_INSTALLATION_ROOT
           } else {
@@ -81,20 +96,15 @@ jobs:
           }
           Write-Host "VCPKG_ROOT=$vcpkgRoot"
           echo "VCPKG_ROOT=$vcpkgRoot" >> $env:GITHUB_ENV
-          & "$vcpkgRoot\vcpkg.exe" version
-
-          # opencv4[ffmpeg] videoio 依赖 vcpkg ffmpeg port, 一并显式安装 (供 ffmpeg-sys-next 使用)
-          & "$vcpkgRoot\vcpkg.exe" install "opencv4[ffmpeg]:x64-windows" "ffmpeg:x64-windows" "pkgconf:x64-windows"
-          if ($LASTEXITCODE -ne 0) { throw "vcpkg install failed" }
+          & "$vcpkgRoot\vcpkg.exe" install "ffmpeg:x64-windows" "pkgconf:x64-windows"
+          if ($LASTEXITCODE -ne 0) { throw "vcpkg ffmpeg install failed" }
 
       - name: set linkage env
         shell: pwsh
         run: |
           $installed = "$env:VCPKG_ROOT\installed\x64-windows"
-          # opencv crate: 显式给出 lib/include 与导入库名 (vcpkg 4.x 库名带 4 后缀)
-          echo "OPENCV_LIB_DIR=$installed\lib" >> $env:GITHUB_ENV
-          echo "OPENCV_INCLUDE_DIR=$installed\include" >> $env:GITHUB_ENV
-          echo "OPENCV_LIBS=opencv_core4;opencv_imgproc4;opencv_videoio4" >> $env:GITHUB_ENV
+          # opencv crate: 用官方 prebuilt 5.0.0 的 cmake config, 与 Linux 同为 v5 API
+          echo "OPENCV_CMAKE_ARGS=-DOpenCV_DIR=C:/opencv5/opencv/build" >> $env:GITHUB_ENV
           # ffmpeg-sys-next: FFMPEG_DIR 指向 vcpkg installed 根 (lib+include 布局)
           echo "FFMPEG_DIR=$installed" >> $env:GITHUB_ENV
           echo "FFMPEG_PKG_CONFIG_PATH=$installed\lib\pkgconfig" >> $env:GITHUB_ENV
@@ -112,6 +122,9 @@ jobs:
         shell: pwsh
         run: |
           # 动态 dll 缺失时 Win 加载 exe 即失败; --help 退出码 0 证明依赖齐全
+          # onnxruntime.dll 由 ort-sys 拷到 target\release (exe 同目录自动搜索);
+          # opencv/ffmpeg dll 不在 exe 同目录, 需经 PATH 提供 (与 zip 平铺布局等效)
+          $env:PATH = "C:\opencv5\opencv\build\x64\vc16\bin;$env:VCPKG_ROOT\installed\x64-windows\bin;$env:PATH"
           $exes = @("subtitle-ocr", "ocr-post", "subtitle-finder") | Where-Object {
             ($_ -eq "subtitle-finder" -and "${{ github.event.inputs.upload_finder }}" -ne "false") -or
             ($_ -in @("subtitle-ocr","ocr-post") -and "${{ github.event.inputs.upload_ocr }}" -ne "false")
@@ -125,14 +138,17 @@ jobs:
       - name: package zips + sha256
         shell: pwsh
         run: |
-          $installed = "$env:VCPKG_ROOT\installed\x64-windows"
           $outDir = "$env:RUNNER_TEMP\out"
           New-Item -ItemType Directory -Force -Path $outDir | Out-Null
           $bins = @()
           if ("${{ github.event.inputs.upload_ocr }}" -ne "false") { $bins += @("subtitle-ocr","ocr-post") }
           if ("${{ github.event.inputs.upload_finder }}" -ne "false") { $bins += "subtitle-finder" }
-          # 所有 vcpkg dll (opencv/ffmpeg/3p) 平铺进每个 zip, 与 exe 同目录
-          $dlls = Get-ChildItem "$installed\bin\*.dll"
+          # opencv prebuilt + vcpkg ffmpeg 的全部 dll 平铺进每个 zip, 与 exe 同目录
+          # (opencv_world500 + videoio ffmpeg/msmf 插件 + ffmpeg 库)
+          $opencvBin = "C:\opencv5\opencv\build\x64\vc16\bin"
+          $ffmpegBin = "$env:VCPKG_ROOT\installed\x64-windows\bin"
+          # onnxruntime.dll 由 ort-sys 拷到 target\release
+          $dlls = @(Get-ChildItem "$opencvBin\*.dll") + @(Get-ChildItem "$ffmpegBin\*.dll") + @(Get-ChildItem ".\target\release\*.dll" -ErrorAction SilentlyContinue)
 
           foreach ($b in $bins) {
             $staging = "$outDir\$b"
