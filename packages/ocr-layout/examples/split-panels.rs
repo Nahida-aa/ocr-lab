@@ -35,54 +35,54 @@
 //! 供人工核对）与裁剪的 `<name>-<序号>.png`，写入 `<输入所在目录>/out/`。
 
 use anyhow::Context;
+use clap::Parser;
 use image::RgbImage;
 use ocr_layout::{Widget, WidgetSource, annotate};
 use std::path::{Path, PathBuf};
 
-fn main() -> anyhow::Result<()> {
-    let args: Vec<String> = std::env::args().collect();
-    if args.len() < 2 {
-        bail_usage()?;
-    }
+/// 拼接布局模式。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
+enum Mode {
+    /// 精灵图：卡片等大，组内统一到最紧共同边界（零白边）。
+    Sprite,
+    /// 自由拼图：逐格独立紧致，不等大。
+    Free,
+    /// 自动：按组内边界极差判定（≤ 12px 视为等大卡片）。
+    Auto,
+}
 
-    // 手动解析（对齐 examples/layout.rs 的风格）。
-    let mut input: Option<PathBuf> = None;
-    let mut out_dir: Option<PathBuf> = None;
-    let mut threshold: u8 = 195;
-    let mut min_gap: u32 = 6;
-    let mut mode = String::from("auto");
-    let mut i = 1;
-    while i < args.len() {
-        match args[i].as_str() {
-            "--out" => {
-                out_dir = Some(PathBuf::from(args.get(i + 1).context("--out 缺少参数")?));
-                i += 2;
-            }
-            "--threshold" => {
-                threshold = args.get(i + 1).context("--threshold 缺少参数")?.parse()?;
-                i += 2;
-            }
-            "--min-gap" => {
-                min_gap = args.get(i + 1).context("--min-gap 缺少参数")?.parse()?;
-                i += 2;
-            }
-            "--mode" => {
-                mode = args.get(i + 1).context("--mode 缺少参数")?.to_string();
-                i += 2;
-            }
-            other if other.starts_with('-') => {
-                anyhow::bail!("未知参数: {other}");
-            }
-            other => {
-                input = Some(PathBuf::from(other));
-                i += 1;
-            }
-        }
-    }
-    if !matches!(mode.as_str(), "sprite" | "free" | "auto") {
-        anyhow::bail!("--mode 仅支持 sprite | free | auto");
-    }
-    let input = input.context("缺少输入（图片文件或目录）")?;
+#[derive(Parser)]
+#[command(
+    name = "split-panels",
+    about = "把多格漫画长图切成紧致的独立子图 (纯图片构成的 UI)"
+)]
+struct Args {
+    /// 图片文件，或包含图片的目录
+    input: PathBuf,
+    /// 输出目录；默认 <输入所在目录>/out/
+    #[arg(short, long)]
+    out: Option<PathBuf>,
+    /// 白底判定阈值：整行/列 min >= 此值视为分隔带/白边。
+    /// 195 恰好分离白边/画布 (>=195) 与卡片内容 (<=180)。
+    #[arg(long, default_value_t = 195)]
+    threshold: u8,
+    /// 分隔带最小厚度（行/列数）
+    #[arg(long, default_value_t = 6)]
+    min_gap: u32,
+    /// 拼接布局模式：sprite=卡片等大 / free=逐格独立 / auto=按边界极差判定
+    #[arg(long, value_enum, default_value_t = Mode::Auto)]
+    mode: Mode,
+}
+
+fn main() -> anyhow::Result<()> {
+    let args = Args::parse();
+    let Args {
+        input,
+        out: out_dir,
+        threshold,
+        min_gap,
+        mode,
+    } = args;
 
     let inputs = collect_images(&input)?;
     if inputs.is_empty() {
@@ -123,11 +123,6 @@ fn main() -> anyhow::Result<()> {
     }
 
     // 组内一致性（按模式）。
-    let mode = match mode.as_str() {
-        "sprite" => Mode::Sprite,
-        "free" => Mode::Free,
-        _ => Mode::Auto,
-    };
     unify_sizes(&mut results, mode);
 
     // 输出：预览总是产出 + 裁剪。
@@ -178,12 +173,6 @@ fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-fn bail_usage() -> anyhow::Result<()> {
-    anyhow::bail!(
-        "用法: split-panels <图片或目录> [--out <dir>] [--threshold N] [--min-gap N] [--mode sprite|free|auto]"
-    )
-}
-
 /// 收集要处理的图片（单文件或目录下的常见格式）。
 fn collect_images(input: &Path) -> anyhow::Result<Vec<PathBuf>> {
     const EXTS: [&str; 5] = ["jpg", "jpeg", "png", "webp", "bmp"];
@@ -203,17 +192,6 @@ fn collect_images(input: &Path) -> anyhow::Result<Vec<PathBuf>> {
         .collect();
     out.sort();
     Ok(out)
-}
-
-/// 拼接布局模式。
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Mode {
-    /// 精灵图：卡片等大，组内统一到最紧共同边界（零白边）。
-    Sprite,
-    /// 自由拼图：逐格独立紧致，不等大。
-    Free,
-    /// 自动：按组内边界极差判定（≤ 12px 视为等大卡片）。
-    Auto,
 }
 
 /// 自动判定的边界极差上限（px）：组内参与格的 left / x1 / 高度极差都不超过
