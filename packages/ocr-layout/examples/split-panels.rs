@@ -36,20 +36,10 @@
 
 use anyhow::Context;
 use clap::Parser;
-use image::RgbImage;
-use ocr_layout::{Widget, WidgetSource, annotate};
+use image_util::crop_rgb;
+use ocr_layout::panels::{Mode, split_panels, unify_sizes};
+use ocr_layout::annotate;
 use std::path::{Path, PathBuf};
-
-/// 拼接布局模式。
-#[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
-enum Mode {
-    /// 精灵图：卡片等大，组内统一到最紧共同边界（零白边）。
-    Sprite,
-    /// 自由拼图：逐格独立紧致，不等大。
-    Free,
-    /// 自动：按组内边界极差判定（≤ 12px 视为等大卡片）。
-    Auto,
-}
 
 #[derive(Parser)]
 #[command(
@@ -70,8 +60,26 @@ struct Args {
     #[arg(long, default_value_t = 6)]
     min_gap: u32,
     /// 拼接布局模式：sprite=卡片等大 / free=逐格独立 / auto=按边界极差判定
-    #[arg(long, value_enum, default_value_t = Mode::Auto)]
-    mode: Mode,
+    #[arg(long, value_enum, default_value_t = ArgsMode::Auto)]
+    mode: ArgsMode,
+}
+
+/// CLI 侧的 Mode 包装: derive ValueEnum (库 Mode 不依赖 clap)。
+#[derive(Clone, Copy, Debug, clap::ValueEnum)]
+enum ArgsMode {
+    Sprite,
+    Free,
+    Auto,
+}
+
+impl From<ArgsMode> for Mode {
+    fn from(m: ArgsMode) -> Self {
+        match m {
+            ArgsMode::Sprite => Mode::Sprite,
+            ArgsMode::Free => Mode::Free,
+            ArgsMode::Auto => Mode::Auto,
+        }
+    }
 }
 
 fn main() -> anyhow::Result<()> {
@@ -83,6 +91,7 @@ fn main() -> anyhow::Result<()> {
         min_gap,
         mode,
     } = args;
+    let mode: Mode = mode.into();
 
     let inputs = collect_images(&input)?;
     if inputs.is_empty() {
@@ -142,18 +151,7 @@ fn main() -> anyhow::Result<()> {
             .to_rgb8();
 
         // 预览总是产出：带彩框原图，随时可人工核对切分框。
-        let widgets: Vec<Widget> = rects
-            .iter()
-            .enumerate()
-            .map(|(idx, r)| Widget {
-                id: idx,
-                label: String::new(),
-                rect: *r,
-                color: [255, 0, 0],
-                area_ratio: (r.2 * r.3) as f32 / (img.width() * img.height()) as f32,
-                source: WidgetSource::Color,
-            })
-            .collect();
+        let widgets = ocr_layout::panels::rects_to_widgets(rects, img.width() * img.height());
         let preview = out_dir.join(format!("{name}-preview.png"));
         annotate(&img, &widgets)
             .save(&preview)
@@ -192,173 +190,4 @@ fn collect_images(input: &Path) -> anyhow::Result<Vec<PathBuf>> {
         .collect();
     out.sort();
     Ok(out)
-}
-
-/// 自动判定的边界极差上限（px）：组内参与格的 left / x1 / 高度极差都不超过
-/// 此值时视为「等大卡片」（精灵图），否则视为自由布局。
-const SPRITE_SPREAD_MAX: u32 = 12;
-
-/// 组内尺寸一致性（sprite 模式）。
-///
-/// 各格收缩后的尺寸有 ±几 px 噪声（渐变带内边缘位置的抖动），同源格子会
-/// 漂移出 872/868/865 这种渐小尺寸。统一到组内**最紧**：`left = max`、
-/// `x1 = min`、`height = min`——每边都裁到组内最深，零白边保证；多裁的
-/// 1-4px 是边缘渐变带，无视觉内容。
-///
-/// 参与格 = 边界可信的格子：收缩后 `x0 > 0` 且 `x1 < w` 且 `y1 < h`。
-/// 贴源图边的格子（如 4.jpg 底格卡片超出源图、全宽到底）边界不可信，
-/// 不参与统计也保持原样——统一它们会裁掉真实内容。
-///
-/// 自由模式（Free）跳过统一。自动模式（Auto）先算组内极差再决定。
-fn unify_sizes(results: &mut [(String, u32, u32, Vec<(u32, u32, u32, u32)>)], mode: Mode) {
-    use std::collections::HashMap;
-
-    let mut groups: HashMap<u32, Vec<usize>> = HashMap::new();
-    for (i, (_, w, _, _)) in results.iter().enumerate() {
-        groups.entry(*w).or_default().push(i);
-    }
-
-    for (_, idxs) in groups {
-        let mut lefts: Vec<u32> = Vec::new();
-        let mut x1s: Vec<u32> = Vec::new();
-        let mut heights: Vec<u32> = Vec::new();
-        for &i in &idxs {
-            let (_, w, h, rects) = &results[i];
-            for r in rects {
-                let (x0, y0, rw, rh) = *r;
-                if x0 == 0 || x0 + rw == *w || y0 + rh == *h {
-                    continue; // 贴边格：卡片被源图裁断，边界不可信
-                }
-                lefts.push(x0);
-                x1s.push(x0 + rw);
-                heights.push(rh);
-            }
-        }
-        if lefts.len() < 2 {
-            continue; // 可信格不足 2 个，无一致性可言
-        }
-
-        // Auto 判据：三个维度的极差都在限内 → 等大卡片（精灵图）。
-        if mode == Mode::Auto {
-            let spread = |v: &[u32]| v.iter().max().unwrap() - v.iter().min().unwrap();
-            let is_sprite = spread(&lefts) <= SPRITE_SPREAD_MAX
-                && spread(&x1s) <= SPRITE_SPREAD_MAX
-                && spread(&heights) <= SPRITE_SPREAD_MAX;
-            if !is_sprite {
-                eprintln!("[mode] auto → free (边界极差超 {SPRITE_SPREAD_MAX}px)");
-                continue;
-            }
-        }
-        if mode == Mode::Free {
-            continue;
-        }
-
-        // Sprite：统一到组内最紧（零白边；多裁的是边缘渐变带）。
-        let ul = *lefts.iter().max().unwrap();
-        let ux1 = *x1s.iter().min().unwrap();
-        let uh = *heights.iter().min().unwrap();
-        for &i in &idxs {
-            let (_, w, h, rects) = &mut results[i];
-            for r in rects.iter_mut() {
-                if r.0 == 0 || r.0 + r.2 == *w || r.1 + r.3 == *h {
-                    continue; // 特殊格（贴源图边）保持原样
-                }
-                *r = (ul, r.1, ux1 - ul, uh);
-            }
-        }
-    }
-}
-
-/// 核心：行投影切行 + 四边收缩。见模块文档。
-fn split_panels(img: &RgbImage, threshold: u8, min_gap: u32) -> Vec<(u32, u32, u32, u32)> {
-    let (w, h) = (img.width() as usize, img.height() as usize);
-    // 每像素最暗通道值：分隔带检测与边缘收缩的聚合信号。
-    let darkness: Vec<u8> = img
-        .pixels()
-        .map(|p| *p.0.iter().min().unwrap())
-        .collect();
-
-    // 行投影 → 行块（threshold 恰好分离白边 >=195 与卡片内容 <=180）。
-    let row_dark: Vec<u8> = (0..h)
-        .map(|y| (0..w).map(|x| darkness[y * w + x]).min().unwrap())
-        .collect();
-
-    let mut rects = Vec::new();
-    for (y0, y1) in bright_blocks(&row_dark, threshold, min_gap) {
-        // 四边收缩：从每条边向内跳过「整行/列 min >= threshold」的浅色边缘，
-        // 停在第一个内容行/列（阈值语义，渐变过渡也能正确定位）。
-        let y0t = (y0..y1).find(|&y| row_dark[y] < threshold).unwrap_or(y0);
-        let y1t = (y0..y1)
-            .rev()
-            .find(|&y| row_dark[y] < threshold)
-            .map(|y| y + 1)
-            .unwrap_or(y0t);
-        if y1t <= y0t {
-            continue;
-        }
-
-        let col_dark: Vec<u8> = (0..w)
-            .map(|x| (y0t..y1t).map(|y| darkness[y * w + x]).min().unwrap())
-            .collect();
-        let x0t = (0..w).find(|&x| col_dark[x] < threshold).unwrap_or(0);
-        let x1t = (0..w)
-            .rev()
-            .find(|&x| col_dark[x] < threshold)
-            .map(|x| x + 1)
-            .unwrap_or(x0t);
-        if x1t <= x0t {
-            continue;
-        }
-
-        rects.push((x0t as u32, y0t as u32, (x1t - x0t) as u32, (y1t - y0t) as u32));
-    }
-    rects
-}
-
-/// 从最暗值序列找内容区间：连续亮（>= 阈值）且长度 >= `min_gap` 的段为分隔，
-/// 分隔之间的部分即内容块。
-fn bright_blocks(dark: &[u8], threshold: u8, min_gap: u32) -> Vec<(usize, usize)> {
-    let min_gap = min_gap as usize;
-    let mut gaps: Vec<(usize, usize)> = Vec::new();
-    let mut start: Option<usize> = None;
-    for (i, &v) in dark.iter().enumerate() {
-        if v >= threshold {
-            if start.is_none() {
-                start = Some(i);
-            }
-        } else if let Some(s) = start.take() {
-            if i - s >= min_gap {
-                gaps.push((s, i));
-            }
-        }
-    }
-    if let Some(s) = start
-        && dark.len() - s >= min_gap
-    {
-        gaps.push((s, dark.len()));
-    }
-
-    let mut blocks = Vec::new();
-    let mut prev = 0usize;
-    for (a, b) in gaps {
-        if a > prev {
-            blocks.push((prev, a));
-        }
-        prev = b;
-    }
-    if dark.len() > prev {
-        blocks.push((prev, dark.len()));
-    }
-    blocks
-}
-
-/// 从源图裁出矩形（手写像素拷贝，不依赖 image 的 crop API 版本差异）。
-fn crop_rgb(img: &RgbImage, x: u32, y: u32, w: u32, h: u32) -> RgbImage {
-    let mut out = RgbImage::new(w, h);
-    for yy in 0..h {
-        for xx in 0..w {
-            *out.get_pixel_mut(xx, yy) = *img.get_pixel(x + xx, y + yy);
-        }
-    }
-    out
 }

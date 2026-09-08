@@ -13,6 +13,11 @@
 //! 输出 [`Widget`]：每个候选控件的包围盒、代表色、面积占比、关联文字、以及它
 //! 主要来自哪种信号（`source`）。
 
+pub mod panels;
+
+// 重导出：纯图片 UI（漫画格/精灵图）的切分能力，见 [`panels`]。
+pub use panels::{Mode, split_panels, unify_sizes};
+
 use anyhow::Result;
 use color_analysis::{SegmentOpts, segment_by_color};
 use image::RgbImage;

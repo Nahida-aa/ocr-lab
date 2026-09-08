@@ -15,3 +15,34 @@ use image::{RgbImage, RgbaImage};
 pub fn rgba_to_rgb(img: &RgbaImage) -> RgbImage {
     image::DynamicImage::ImageRgba8(img.clone()).to_rgb8()
 }
+
+/// 从 RGB 图裁出矩形（手写像素拷贝，不依赖 image 的 crop API 版本差异）。
+pub fn crop_rgb(img: &RgbImage, x: u32, y: u32, w: u32, h: u32) -> RgbImage {
+    let mut out = RgbImage::new(w, h);
+    for yy in 0..h {
+        for xx in 0..w {
+            *out.get_pixel_mut(xx, yy) = *img.get_pixel(x + xx, y + yy);
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use image::Rgb;
+
+    #[test]
+    fn crops_sub_region() {
+        let mut img = RgbImage::new(4, 4);
+        for y in 0..4 {
+            for x in 0..4 {
+                *img.get_pixel_mut(x, y) = Rgb([(x * 10) as u8, (y * 10) as u8, 0]);
+            }
+        }
+        let out = crop_rgb(&img, 1, 2, 2, 2);
+        assert_eq!(out.dimensions(), (2, 2));
+        assert_eq!(*out.get_pixel(0, 0), Rgb([10, 20, 0]));
+        assert_eq!(*out.get_pixel(1, 1), Rgb([20, 30, 0]));
+    }
+}

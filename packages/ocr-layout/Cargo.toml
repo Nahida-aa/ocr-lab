@@ -28,3 +28,4 @@ anyhow.workspace = true
 # examples/split-panels 的 CLI 解析（库本体不需要）。
 [dev-dependencies]
 clap.workspace = true
+image-util.workspace = true
