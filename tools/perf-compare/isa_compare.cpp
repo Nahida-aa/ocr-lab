@@ -147,7 +147,7 @@ int main(int argc, char** argv) {
         cv::Mat isa;
         extract_isa(frame, isa);
         char path[256];
-        snprintf(path, sizeof(path), "/home/aa/repos/ai_ls/ocr-lab/tools/perf-compare/isa_out/cpp_%d_%d.png", (int)t_ms, frame_idx);
+        snprintf(path, sizeof(path), "/home/aa/repos/ai_ls/vision-lab/tools/perf-compare/isa_out/cpp_%d_%d.png", (int)t_ms, frame_idx);
         save_isa(isa, path);
     }
     return 0;

@@ -1237,7 +1237,7 @@ mod probe {
     #[ignore]
     fn pipe_throughput() {
         let path = std::path::Path::new(
-            "/home/aa/repos/ai_ls/ocr-lab/tests/bench/subtitle-ocr/ref/狗/2/video_source.mp4",
+            "/home/aa/repos/ai_ls/vision-lab/tests/bench/subtitle-ocr/ref/狗/2/video_source.mp4",
         );
         let p = crate::params::Params::default();
         let mut ts = TransformStream::open(path, &p, None).unwrap();

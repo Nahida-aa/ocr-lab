@@ -1,4 +1,4 @@
-# ocr-lab 路线图
+# vision-lab 路线图
 
 ## 目标
 
@@ -83,7 +83,7 @@ graph TD
 ## 目录结构
 
 ```
-ocr-lab/
+vision-lab/
 ├── Cargo.toml              # workspace（crates/*）；[patch.crates-io] 覆盖 gpui 到 zed d88f682
 ├── ROADMAP.md              # 本文件
 ├── data/models/rapidocr/        # 权重（gitignore，152M）

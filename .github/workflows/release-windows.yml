@@ -1,7 +1,7 @@
 name: release-windows
 
 # 手动触发: 构建 subtitle-finder / subtitle-ocr / ocr-post 的 Windows (x86_64-pc-windows-msvc)
-# 资产并上传到 ocr-lab 对应 GitHub Release。
+# 资产并上传到 vision-lab 对应 GitHub Release。
 #
 # 资产形态: zip (exe + 运行时 dll)。动态链接官方 OpenCV 5.0.0 prebuilt + vcpkg ffmpeg,
 # zip 里 exe 与全部所需 dll 平铺 (Windows PE 优先同目录找 dll), 解压目录即 bin dir。
