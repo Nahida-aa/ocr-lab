@@ -1,0 +1,157 @@
+name: release-windows
+
+# 手动触发: 构建 subtitle-finder / subtitle-ocr / ocr-post 的 Windows (x86_64-pc-windows-msvc)
+# 资产并上传到 ocr-lab 对应 GitHub Release。
+#
+# 资产形态: zip (exe + 运行时 dll)。动态链接 vcpkg opencv4[ffmpeg] 与 ffmpeg,
+# zip 里 exe 与全部所需 dll 平铺 (Windows PE 优先同目录找 dll), 解压目录即 bin dir。
+# 命名: <bin>-x86_64-pc-windows-msvc.zip, 与 Linux 的单文件资产 `<bin>-x86_64-unknown-linux-gnu`
+# 并存于同一 tag。
+#
+# 已知前提:
+#   - 全局 .cargo/config.toml 带 -C target-feature=+avx2 (x86-64 2013+ 通用), 直接适用。
+#   - onnxruntime 经 ort 的 download-binaries 拉 prebuilt, Windows x64 有预编译, 无需本机装。
+#   - opencv crate 构建需要 clang (bindgen 解析 C++ 头), 故安装 LLVM。
+#   - ffmpeg-next (ffmpeg-sys-next) 在 Windows 经 FFMPEG_DIR 指向 vcpkg installed 根。
+#   - 冒烟仅验证 exe 可启动 (dll 齐全), 完整 OCR 需模型, 留给真机。
+
+on:
+  workflow_dispatch:
+    inputs:
+      upload_ocr:
+        description: "构建并上传 subtitle-ocr + ocr-post 到 subtitle-ocr-v0.1.0"
+        type: boolean
+        default: true
+      upload_finder:
+        description: "构建并上传 subtitle-finder 到 subtitle-finder-v0.1.0"
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: setup rust (stable MSVC)
+        shell: pwsh
+        run: |
+          rustup default stable-x86_64-pc-windows-msvc
+          rustc -vV
+          cargo -V
+
+      - name: install llvm (clang for opencv crate bindgen)
+        shell: pwsh
+        run: |
+          if (Get-Command clang -ErrorAction SilentlyContinue) {
+            Write-Host "clang already present"
+          } else {
+            choco install llvm --no-progress -y
+            # choco 装完 PATH 需刷新 (llvm 在 C:\Program Files\LLVM\bin)
+            $env:Path = "C:\Program Files\LLVM\bin;$env:Path"
+          }
+          clang --version
+
+      - name: provision vcpkg + opencv/ffmpeg
+        shell: pwsh
+        run: |
+          # windows-latest 预装 vcpkg (VCPKG_INSTALLATION_ROOT); 缺失则 clone 到 RUNNER_TEMP
+          if ($env:VCPKG_INSTALLATION_ROOT -and (Test-Path "$env:VCPKG_INSTALLATION_ROOT\vcpkg.exe")) {
+            $vcpkgRoot = $env:VCPKG_INSTALLATION_ROOT
+          } else {
+            $vcpkgRoot = "$env:RUNNER_TEMP\vcpkg"
+            if (-not (Test-Path "$vcpkgRoot\vcpkg.exe")) {
+              git clone --depth 1 https://github.com/microsoft/vcpkg $vcpkgRoot
+              & "$vcpkgRoot\bootstrap-vcpkg.bat" -disableMetrics
+            }
+          }
+          Write-Host "VCPKG_ROOT=$vcpkgRoot"
+          echo "VCPKG_ROOT=$vcpkgRoot" >> $env:GITHUB_ENV
+          & "$vcpkgRoot\vcpkg.exe" version
+
+          # opencv4[ffmpeg] videoio 依赖 vcpkg ffmpeg port, 一并显式安装 (供 ffmpeg-sys-next 使用)
+          & "$vcpkgRoot\vcpkg.exe" install "opencv4[ffmpeg]:x64-windows" "ffmpeg:x64-windows" "pkgconf:x64-windows"
+          if ($LASTEXITCODE -ne 0) { throw "vcpkg install failed" }
+
+      - name: set linkage env
+        shell: pwsh
+        run: |
+          $installed = "$env:VCPKG_ROOT\installed\x64-windows"
+          # opencv crate: 显式给出 lib/include 与导入库名 (vcpkg 4.x 库名带 4 后缀)
+          echo "OPENCV_LIB_DIR=$installed\lib" >> $env:GITHUB_ENV
+          echo "OPENCV_INCLUDE_DIR=$installed\include" >> $env:GITHUB_ENV
+          echo "OPENCV_LIBS=opencv_core4;opencv_imgproc4;opencv_videoio4" >> $env:GITHUB_ENV
+          # ffmpeg-sys-next: FFMPEG_DIR 指向 vcpkg installed 根 (lib+include 布局)
+          echo "FFMPEG_DIR=$installed" >> $env:GITHUB_ENV
+          echo "FFMPEG_PKG_CONFIG_PATH=$installed\lib\pkgconfig" >> $env:GITHUB_ENV
+          # GITHUB_TOKEN 用于 gh release upload
+          echo "GH_TOKEN=$env:GITHUB_TOKEN" >> $env:GITHUB_ENV
+
+      - name: build release bins
+        shell: pwsh
+        run: |
+          cargo build --release -p subtitle-ocr --bin subtitle-ocr --bin ocr-post -p subtitle-finder --bin subtitle-finder
+          if ($LASTEXITCODE -ne 0) { throw "cargo build failed" }
+          Get-ChildItem target\release\*.exe | Where-Object { $_.Name -match 'subtitle-ocr|ocr-post|subtitle-finder' } | Select-Object Name, Length
+
+      - name: smoke test (dll 完整性)
+        shell: pwsh
+        run: |
+          # 动态 dll 缺失时 Win 加载 exe 即失败; --help 退出码 0 证明依赖齐全
+          $exes = @("subtitle-ocr", "ocr-post", "subtitle-finder") | Where-Object {
+            ($_ -eq "subtitle-finder" -and "${{ github.event.inputs.upload_finder }}" -ne "false") -or
+            ($_ -in @("subtitle-ocr","ocr-post") -and "${{ github.event.inputs.upload_ocr }}" -ne "false")
+          }
+          foreach ($e in $exes) {
+            & ".\target\release\$e.exe" --help *> $null
+            if ($LASTEXITCODE -ne 0) { throw "$e.exe failed to start (missing dll?)" }
+            Write-Host "$e.exe OK (exit=0)"
+          }
+
+      - name: package zips + sha256
+        shell: pwsh
+        run: |
+          $installed = "$env:VCPKG_ROOT\installed\x64-windows"
+          $outDir = "$env:RUNNER_TEMP\out"
+          New-Item -ItemType Directory -Force -Path $outDir | Out-Null
+          $bins = @()
+          if ("${{ github.event.inputs.upload_ocr }}" -ne "false") { $bins += @("subtitle-ocr","ocr-post") }
+          if ("${{ github.event.inputs.upload_finder }}" -ne "false") { $bins += "subtitle-finder" }
+          # 所有 vcpkg dll (opencv/ffmpeg/3p) 平铺进每个 zip, 与 exe 同目录
+          $dlls = Get-ChildItem "$installed\bin\*.dll"
+
+          foreach ($b in $bins) {
+            $staging = "$outDir\$b"
+            New-Item -ItemType Directory -Force -Path $staging | Out-Null
+            Copy-Item ".\target\release\$b.exe" $staging
+            Copy-Item $dlls.FullName $staging
+            $asset = "$outDir\$b-x86_64-pc-windows-msvc.zip"
+            Compress-Archive -Path "$staging\*" -DestinationPath $asset -Force
+            $hash = (Get-FileHash $asset -Algorithm SHA256).Hash.ToLower()
+            Write-Host "ASSET=$asset SHA256=$hash SIZE=$((Get-Item $asset).Length)"
+            echo "$b-x86_64-pc-windows-msvc.zip`t$hash" >> "$outDir\sha256.txt"
+          }
+          echo "OUT_DIR=$outDir" >> $env:GITHUB_ENV
+
+      - name: upload assets to releases
+        shell: pwsh
+        run: |
+          if ("${{ github.event.inputs.upload_ocr }}" -ne "false") {
+            gh release upload subtitle-ocr-v0.1.0 "$env:OUT_DIR\subtitle-ocr-x86_64-pc-windows-msvc.zip" "$env:OUT_DIR\ocr-post-x86_64-pc-windows-msvc.zip" --clobber
+            if ($LASTEXITCODE -ne 0) { throw "upload ocr failed" }
+          }
+          if ("${{ github.event.inputs.upload_finder }}" -ne "false") {
+            gh release upload subtitle-finder-v0.1.0 "$env:OUT_DIR\subtitle-finder-x86_64-pc-windows-msvc.zip" --clobber
+            if ($LASTEXITCODE -ne 0) { throw "upload finder failed" }
+          }
+
+      - name: print sha256
+        shell: pwsh
+        run: |
+          Get-Content "$env:OUT_DIR\sha256.txt"
