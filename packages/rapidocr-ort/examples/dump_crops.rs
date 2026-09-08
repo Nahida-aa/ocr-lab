@@ -18,7 +18,7 @@ fn main() {
     let img_path = &args[1];
     let out_dir = &args[2];
     let root = repo_root();
-    let model_dir = root.join("models/rapidocr");
+    let model_dir = root.join(rapidocr_ort::DEFAULT_MODEL_DIR);
     let img = rapidocr_ort::load_image(Path::new(img_path)).unwrap();
     let mut engine = OcrEngine::from_profile(ModelProfile::V4, &model_dir).unwrap();
     let boxes = engine.detect_raw_boxes(&img);

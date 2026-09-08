@@ -16,7 +16,7 @@ fn main() {
     let args: Vec<String> = std::env::args().collect();
     let img_path = &args[1];
     let root = repo_root();
-    let model_dir = root.join("models/rapidocr");
+    let model_dir = root.join(rapidocr_ort::DEFAULT_MODEL_DIR);
     let img = rapidocr_ort::load_image(Path::new(img_path)).expect("读图失败");
     let (h, w, _) = img.dim();
     let mut engine = OcrEngine::from_profile(ModelProfile::V4, &model_dir).expect("加载引擎失败");

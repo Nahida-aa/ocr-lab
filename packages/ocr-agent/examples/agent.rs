@@ -188,10 +188,10 @@ fn main() -> anyhow::Result<()> {
     // ---- 诊断：raise testing_08 → 截全屏 → OCR 列出所有控件 ----
     // 用来确认「切前台 + 截屏」到底有没有真的抓到 testing_08（而不是被别的窗口盖住）。
     if dump {
-        let model_dir = repo_root().join("models/rapidocr");
+        let model_dir = repo_root().join(rapidocr_ort::DEFAULT_MODEL_DIR);
         let mut analyzer =
             LayoutAnalyzer::with_ocr(ModelProfile::V3, &model_dir, Default::default())
-                .context("构建 OCR 引擎失败（确认 models/rapidocr 权重就绪）")?;
+                .context("构建 OCR 引擎失败（确认 data/models/rapidocr 权重就绪）")?;
         // 先切前台（即使 dry-run 也切，便于诊断）。
         let fg = ocr_agent::KdeForegrounder::new("testing_08");
         fg.raise().context("KdeForegrounder::raise 失败")?;
@@ -220,10 +220,10 @@ fn main() -> anyhow::Result<()> {
     // 这是 live 闭环里真正用来识别的同一帧（testing_08 自身合成表面，窗口相对坐标）。
     // 标注图含每个控件的边框 + 中心十字 + 文本标签，存到 tmp/annotated_window.png。
     if dump_stream {
-        let model_dir = repo_root().join("models/rapidocr");
+        let model_dir = repo_root().join(rapidocr_ort::DEFAULT_MODEL_DIR);
         let mut analyzer =
             LayoutAnalyzer::with_ocr(ModelProfile::V3, &model_dir, Default::default())
-                .context("构建 OCR 引擎失败（确认 models/rapidocr 权重就绪）")?;
+                .context("构建 OCR 引擎失败（确认 data/models/rapidocr 权重就绪）")?;
 
         let (_saved_mon, saved_win) = load_tokens();
         let cap = match &saved_win {
@@ -275,10 +275,10 @@ fn main() -> anyhow::Result<()> {
     // app 位置，仅供你看「看 + 定位」对不对，不跑点击全程。----
     // 默认闭环也用「两帧」：第一帧可能有过渡/特殊情况，故优先用第二帧做识别与定位。
     if dump_both {
-        let model_dir = repo_root().join("models/rapidocr");
+        let model_dir = repo_root().join(rapidocr_ort::DEFAULT_MODEL_DIR);
         let mut analyzer =
             LayoutAnalyzer::with_ocr(ModelProfile::V3, &model_dir, Default::default())
-                .context("构建 OCR 引擎失败（确认 models/rapidocr 权重就绪）")?;
+                .context("构建 OCR 引擎失败（确认 data/models/rapidocr 权重就绪）")?;
 
         let (saved_mon, saved_win) = load_tokens();
         let cap_full = match &saved_mon {
@@ -508,10 +508,10 @@ fn main() -> anyhow::Result<()> {
     // ---- 端到端验证「看 + 定位 + 操作」：抓两帧算当前 Reload 绝对坐标，
     // 再用 screen-operator 点它（不读 count、不判 delta，只验证点得准不准）。----
     if click_reload {
-        let model_dir = repo_root().join("models/rapidocr");
+        let model_dir = repo_root().join(rapidocr_ort::DEFAULT_MODEL_DIR);
         let mut analyzer =
             LayoutAnalyzer::with_ocr(ModelProfile::V3, &model_dir, Default::default())
-                .context("构建 OCR 引擎失败（确认 models/rapidocr 权重就绪）")?;
+                .context("构建 OCR 引擎失败（确认 data/models/rapidocr 权重就绪）")?;
 
         // 先把目标提到最前（Wayland 输入要求点击点最上层）。
         let fg = ocr_agent::KdeForegrounder::new("testing_08");
@@ -608,7 +608,7 @@ fn main() -> anyhow::Result<()> {
         let scale = win_img.width() as f32 / lw.max(1) as f32;
         let gx = (lx as f32 * scale) as i32;
         let gy = (ly as f32 * scale) as i32;
-        let model_dir = repo_root().join("models/rapidocr");
+        let model_dir = repo_root().join(rapidocr_ort::DEFAULT_MODEL_DIR);
         let widgets = LayoutAnalyzer::with_ocr(ModelProfile::V3, &model_dir, Default::default())?
             .analyze(&win_img)?;
         let reload = widgets
@@ -648,7 +648,7 @@ fn main() -> anyhow::Result<()> {
     if move_only {
         let fg = ocr_agent::KdeForegrounder::new("testing_08");
         fg.raise().context("raise 失败")?;
-        let model_dir = repo_root().join("models/rapidocr");
+        let model_dir = repo_root().join(rapidocr_ort::DEFAULT_MODEL_DIR);
         let mut analyzer =
             LayoutAnalyzer::with_ocr(ModelProfile::V3, &model_dir, Default::default())
                 .context("构建 OCR 引擎失败")?;
@@ -730,9 +730,9 @@ fn main() -> anyhow::Result<()> {
     // 注意：本机若有两个同名 testing_08 进程，portal 选窗可能不确定——请确保只运行
     // 你要验证的那一个（关掉另一个），否则可能识别/点到另一个实例。
     if live {
-        let model_dir = repo_root().join("models/rapidocr");
+        let model_dir = repo_root().join(rapidocr_ort::DEFAULT_MODEL_DIR);
         let analyzer = LayoutAnalyzer::with_ocr(ModelProfile::V3, &model_dir, Default::default())
-            .context("构建 OCR 引擎失败（确认 models/rapidocr 权重就绪）")?;
+            .context("构建 OCR 引擎失败（确认 data/models/rapidocr 权重就绪）")?;
 
         // 前台器：点击前 raise 目标到最前。
         let fg = ocr_agent::KdeForegrounder::new("testing_08");
@@ -866,9 +866,9 @@ fn main() -> anyhow::Result<()> {
 
     // ---- 闭环验证模式：直接对比两帧计数 ----
     if let (Some(b), Some(a)) = (verify_before, verify_after) {
-        let model_dir = repo_root().join("models/rapidocr");
+        let model_dir = repo_root().join(rapidocr_ort::DEFAULT_MODEL_DIR);
         let analyzer = LayoutAnalyzer::with_ocr(ModelProfile::V3, &model_dir, Default::default())
-            .context("构建 OCR 引擎失败（确认 models/rapidocr 权重就绪）")?;
+            .context("构建 OCR 引擎失败（确认 data/models/rapidocr 权重就绪）")?;
         let mut agent = Agent::new(analyzer, Box::new(PrintExecutor));
 
         let img_b = image::open(&b)
@@ -919,9 +919,9 @@ fn main() -> anyhow::Result<()> {
         None
     };
 
-    let model_dir = repo_root().join("models/rapidocr");
+    let model_dir = repo_root().join(rapidocr_ort::DEFAULT_MODEL_DIR);
     let analyzer = LayoutAnalyzer::with_ocr(ModelProfile::V3, &model_dir, Default::default())
-        .context("构建 OCR 引擎失败（确认 models/rapidocr 权重就绪）")?;
+        .context("构建 OCR 引擎失败（确认 data/models/rapidocr 权重就绪）")?;
 
     // 选择执行器：--real 时用推断（或手动）偏移，否则 PrintExecutor。
     let executor: Box<dyn Executor> = if real {

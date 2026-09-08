@@ -11,7 +11,7 @@ fn main() {
     let warp = args.iter().any(|a| a == "--warp-crop");
     let img_path = &args[1];
     let root = repo_root();
-    let model_dir = root.join("models/rapidocr");
+    let model_dir = root.join(rapidocr_ort::DEFAULT_MODEL_DIR);
     let img = rapidocr_ort::load_image(Path::new(img_path)).expect("读取图片失败");
     let mut engine = rapidocr_ort::OcrEngine::from_profile(
         rapidocr_ort::ModelProfile::V4,

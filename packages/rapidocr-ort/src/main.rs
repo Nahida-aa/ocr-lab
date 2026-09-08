@@ -18,8 +18,8 @@ struct Cli {
     /// 输入图片路径
     image: String,
 
-    /// 模型目录（默认仓库根 models/rapidocr）
-    #[arg(long, default_value = "models/rapidocr")]
+    /// 模型目录（默认仓库根 data/models/rapidocr，可经 RAPIDOCR_MODEL_DIR 覆盖）
+    #[arg(long, env = "RAPIDOCR_MODEL_DIR", default_value = rapidocr_ort::DEFAULT_MODEL_DIR)]
     model_dir: String,
 }
 

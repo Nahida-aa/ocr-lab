@@ -15,7 +15,7 @@
 //! - subtitle-finder 的关键帧 = 每个字幕段的一张代表帧（原始 BGR，含背景）。
 //! - 用 subtitle-ocr 的 `SubtitleOcr::ocr_image` 对代表帧识别文本（bottom_only 裁底部）。
 //! - 关键帧自带 start_ms/end_ms 时间轴，直接拼成字幕行。
-//! - 模型目录默认仓库根 `models/rapidocr`。
+//! - 模型目录默认仓库根 `data/models/rapidocr`。
 //! - `--from-dir <kf_dir>`：读已提取的关键帧 PNG（subtitle-finder 落盘格式
 //!   `{start}_{end}_{i}.png`），**只跑 OCR，不重新提取**（解耦提取与识别）。
 //! - `--out <dir>`：额外写 `ocr.json`（对齐 bench 的 result.segments 结构）到该目录。
@@ -23,7 +23,7 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
-use rapidocr_ort::ModelProfile;
+use rapidocr_ort::{DEFAULT_MODEL_DIR, ModelProfile};
 use subtitle_ocr::{OcrOptions, SubtitleOcr};
 
 fn main() -> Result<()> {
@@ -55,10 +55,10 @@ fn main() -> Result<()> {
         i += 1;
     }
 
-    // 2) 初始化 subtitle-ocr（模型目录仓库根 models/rapidocr）。
-    let model_dir = bench_subtitle_ocr::repo_root().join("models").join("rapidocr");
+    // 2) 初始化 subtitle-ocr（模型目录仓库根 data/models/rapidocr）。
+    let model_dir = bench_subtitle_ocr::repo_root().join(DEFAULT_MODEL_DIR);
     if !model_dir.exists() {
-        anyhow::bail!("模型目录不存在: {}（用 --model 指定或放 models/rapidocr）", model_dir.display());
+        anyhow::bail!("模型目录不存在: {}（用 --model 指定或放 data/models/rapidocr）", model_dir.display());
     }
     let mut ocr = SubtitleOcr::from_profile(ModelProfile::V3, &model_dir, OcrOptions::default())?;
 

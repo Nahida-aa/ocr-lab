@@ -29,8 +29,8 @@ struct Cli {
     #[arg(long, value_enum, default_value_t = rapidocr_ort::ModelProfile::V4)]
     model: rapidocr_ort::ModelProfile,
 
-    /// 模型目录（默认仓库根 models/rapidocr）
-    #[arg(long, default_value = "models/rapidocr")]
+    /// 模型目录（默认仓库根 data/models/rapidocr，可经 RAPIDOCR_MODEL_DIR 覆盖）
+    #[arg(long, env = "RAPIDOCR_MODEL_DIR", default_value = rapidocr_ort::DEFAULT_MODEL_DIR)]
     model_dir: String,
 
     /// 输入图片路径（单图模式，不携带时间戳，输出 timestampMs=0；与 --dir 互斥）
@@ -126,7 +126,7 @@ fn main() -> Result<()> {
     };
 
     let mut ocr = SubtitleOcr::from_profile(cli.model, &model_dir, opts)
-        .context("构建字幕 OCR 引擎失败（确认 models/rapidocr 权重已就绪）")?;
+        .context("构建字幕 OCR 引擎失败（确认 data/models/rapidocr 权重已就绪）")?;
 
     // 构建待识别条目：--dir 一张图可对应 1~2 个时刻（ms_ms 双时刻），
     // 单图 <image> 无时间。

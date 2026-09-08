@@ -53,7 +53,7 @@ fn main() -> anyhow::Result<()> {
     };
 
     let root = repo_root();
-    let model_dir = root.join("models/rapidocr");
+    let model_dir = root.join(rapidocr_ort::DEFAULT_MODEL_DIR);
 
     // 计时：模型加载（读权重 + 建 session）与纯推理分开统计。
     let t_load0 = std::time::Instant::now();

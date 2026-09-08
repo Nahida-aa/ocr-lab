@@ -54,7 +54,7 @@ fn main() {
     let out_path = &pos[1];
 
     let root = repo_root();
-    let model_dir = root.join("models/rapidocr");
+    let model_dir = root.join(rapidocr_ort::DEFAULT_MODEL_DIR);
 
     let img = image::open(Path::new(in_path)).expect("读图失败").to_rgb8();
     let (w, h) = img.dimensions();

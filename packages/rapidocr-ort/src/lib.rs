@@ -4,7 +4,7 @@
 //!
 //! 设计要点：
 //! - **模型运行时可选**：通过 [`ModelProfile`]（`--model` 参数）选择 v3 / v6-tiny /
-//!   v6-medium 套件，权重从 `models/rapidocr/` 加载，不条件编译。三件套（det/rec/cls）
+//!   v6-medium 套件，权重从 `data/models/rapidocr/` 加载，不条件编译。三件套（det/rec/cls）
 //!   与字典随 profile 走。
 //! - **既是库也是二进制**：库暴露 [`OcrEngine`] 给上层（如 ui_probe）复用；二进制
 //!   `rapidocr-ort` 直接对一张图片出 JSON（文字 + 坐标）。
@@ -38,12 +38,16 @@ use serde::Serialize;
 use std::path::Path;
 use tracing::debug;
 
+/// 默认模型目录的单一源头：各 CLI 的 `--model-dir` 默认值、示例、测试统一引用
+/// 该常量（相对仓库根解析），避免路径字符串散落多处。
+pub const DEFAULT_MODEL_DIR: &str = "data/models/rapidocr";
+
 /// 检测框过滤阈值：DB 后处理里框内平均概率低于它的框直接丢弃（PP-OCR 默认 0.6）。
 const BOX_THRESH: f32 = 0.6;
 
 /// 模型套件预设。枚举值即 `--model` 的取值。
 ///
-/// 每套对应 `models/rapidocr/` 下的一组权重 + 一个字典文件。新增套件只改这里，
+/// 每套对应 `data/models/rapidocr/` 下的一组权重 + 一个字典文件。新增套件只改这里，
 /// 不碰推理代码。
 #[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
 pub enum ModelProfile {
@@ -58,7 +62,7 @@ pub enum ModelProfile {
 }
 
 impl ModelProfile {
-    /// 返回 (det, rec, cls, dict) 四个文件的相对 `models/rapidocr/` 的路径。
+    /// 返回 (det, rec, cls, dict) 四个文件的相对 `data/models/rapidocr/` 的路径。
     fn paths(self) -> (&'static str, &'static str, &'static str, &'static str) {
         match self {
             ModelProfile::V3 => (
@@ -129,7 +133,7 @@ pub struct OcrEngine {
 impl OcrEngine {
     /// 按预设套件构建引擎。
     ///
-    /// `model_dir` 为 `models/rapidocr` 所在目录（默认仓库根的 `models/rapidocr`）。
+    /// `model_dir` 为 `data/models/rapidocr` 所在目录（默认仓库根的 `data/models/rapidocr`）。
     pub fn from_profile(profile: ModelProfile, model_dir: &Path) -> Result<Self> {
         let (det, rec, cls, dict) = profile.paths();
         let dir = model_dir.to_path_buf();
@@ -368,11 +372,11 @@ mod tests {
     #[test]
     fn v3_detects_text_on_fixtures() {
         let root = repo_root();
-        let model_dir = root.join("models/rapidocr");
+        let model_dir = root.join(DEFAULT_MODEL_DIR);
         let fixtures = root.join("tests/fixtures");
 
         let mut engine = OcrEngine::from_profile(ModelProfile::V4, &model_dir)
-            .expect("加载 v4 引擎失败（确认 models/rapidocr 权重已就绪）");
+            .expect("加载 v4 引擎失败（确认 data/models/rapidocr 权重已就绪）");
 
         let cases = [
             ("ui_stable1.png", "Count"),

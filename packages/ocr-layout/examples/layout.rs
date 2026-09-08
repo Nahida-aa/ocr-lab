@@ -2,7 +2,7 @@
 //!
 //!   cargo run -p ocr-layout --example layout -- <image.png> [model_dir] [quant_bits] [merge_distance] [min_area_ratio]
 //!
-//! 默认 model_dir 为仓库根 models/rapidocr；若只想要纯颜色分析（不加载 OCR），
+//! 默认 model_dir 为仓库根 data/models/rapidocr；若只想要纯颜色分析（不加载 OCR），
 //! 传 `--no-ocr`。输出每个控件的 id / label / rect / color / area_ratio / source。
 
 use anyhow::Context as _;
@@ -60,7 +60,7 @@ fn main() -> anyhow::Result<()> {
     let model_dir = positional
         .next()
         .map(PathBuf::from)
-        .unwrap_or_else(|| repo_root().join("models/rapidocr"));
+        .unwrap_or_else(|| repo_root().join(rapidocr_ort::DEFAULT_MODEL_DIR));
     let quant_bits = positional.next().and_then(|s| s.parse().ok()).unwrap_or(4);
     let merge_distance = positional.next().and_then(|s| s.parse().ok()).unwrap_or(6);
     let min_area_ratio = positional
@@ -82,7 +82,7 @@ fn main() -> anyhow::Result<()> {
         LayoutAnalyzer::color_only(opts)
     } else {
         LayoutAnalyzer::with_ocr(ModelProfile::V3, &model_dir, opts)
-            .context("构建 OCR 引擎失败（确认 models/rapidocr 权重就绪）")?
+            .context("构建 OCR 引擎失败（确认 data/models/rapidocr 权重就绪）")?
     };
 
     let widgets = analyzer.analyze(&img)?;

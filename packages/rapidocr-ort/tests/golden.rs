@@ -9,7 +9,7 @@
 
 use std::path::PathBuf;
 
-use rapidocr_ort::{ModelProfile, OcrEngine};
+use rapidocr_ort::{DEFAULT_MODEL_DIR, ModelProfile, OcrEngine};
 
 /// 仓库根：`packages/rapidocr-ort` 的上两级。
 fn repo_root() -> PathBuf {
@@ -22,7 +22,7 @@ fn repo_root() -> PathBuf {
 }
 
 fn engine_v4() -> OcrEngine {
-    let model_dir = repo_root().join("models/rapidocr");
+    let model_dir = repo_root().join(DEFAULT_MODEL_DIR);
     OcrEngine::from_profile(ModelProfile::V4, &model_dir)
         .expect("加载 v4 引擎失败")
         .with_warp_crop(false)
