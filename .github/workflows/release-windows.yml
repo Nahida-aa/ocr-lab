@@ -49,14 +49,22 @@ jobs:
       - name: install llvm (clang for opencv crate bindgen)
         shell: pwsh
         run: |
+          $llvm = "C:\Program Files\LLVM\bin"
           if (Get-Command clang -ErrorAction SilentlyContinue) {
             Write-Host "clang already present"
           } else {
             choco install llvm --no-progress -y
-            # choco 装完 PATH 需刷新 (llvm 在 C:\Program Files\LLVM\bin)
-            $env:Path = "C:\Program Files\LLVM\bin;$env:Path"
           }
-          clang --version
+          # choco/host PATH 不会自动进后续 step: 显式暴露 LLVM bin + libclang
+          echo "$llvm" >> $env:GITHUB_PATH
+          echo "LIBCLANG_PATH=$llvm" >> $env:GITHUB_ENV
+          & "$llvm\clang.exe" --version
+
+      - name: cache vcpkg packages
+        uses: actions/cache@v4
+        with:
+          path: C:/vcpkg/installed
+          key: vcpkg-opencv4ffmpeg-x64-windows-v1
 
       - name: provision vcpkg + opencv/ffmpeg
         shell: pwsh
