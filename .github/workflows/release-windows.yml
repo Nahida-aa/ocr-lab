@@ -13,7 +13,7 @@ name: release-windows
 #   - onnxruntime 经 ort 的 download-binaries 拉 prebuilt, Windows x64 有预编译, 无需本机装。
 #   - opencv crate 构建需要 clang (bindgen 解析 C++ 头), 故安装 LLVM。
 #   - OpenCV 用官方 windows 预编译 5.0.0 (vcpkg 只有 opencv4, 与 Linux 系统 v5 头不一致)。
-#     prebuilt 带 OpenCVConfig.cmake, 经 OPENCV_CMAKE_ARGS=-DOpenCV_DIR=... 让 crate cmake probe 命中。
+#     经 OPENCV_INCLUDE_PATHS/LINK_PATHS/LINK_LIBS (environment probe) 指向 prebuilt。
 #   - ffmpeg-next (ffmpeg-sys-next) 在 Windows 经 FFMPEG_DIR 指向 vcpkg installed 根。
 #   - 冒烟仅验证 exe 可启动 (dll 齐全), 完整 OCR 需模型, 留给真机。
 
@@ -103,8 +103,12 @@ jobs:
         shell: pwsh
         run: |
           $installed = "$env:VCPKG_ROOT\installed\x64-windows"
-          # opencv crate: 用官方 prebuilt 5.0.0 的 cmake config, 与 Linux 同为 v5 API
-          echo "OPENCV_CMAKE_ARGS=-DOpenCV_DIR=C:/opencv5/opencv/build" >> $env:GITHUB_ENV
+          # opencv crate: environment probe, 直接用官方 prebuilt 5.0.0 (与 Linux v5 一致)。
+          # 不用 cmake probe: 官方 OpenCVConfig.cmake 需匹配 ARCH/RUNTIME, 而 probe 在
+          # Ninja/无 MSVC 编译器下会当成 mingw → 找不到 vc16 二进制; env probe 从 header 取版本。
+          echo "OPENCV_INCLUDE_PATHS=C:/opencv5/opencv/build/include" >> $env:GITHUB_ENV
+          echo "OPENCV_LINK_PATHS=C:/opencv5/opencv/build/x64/vc16/lib" >> $env:GITHUB_ENV
+          echo "OPENCV_LINK_LIBS=opencv_world500" >> $env:GITHUB_ENV
           # ffmpeg-sys-next: FFMPEG_DIR 指向 vcpkg installed 根 (lib+include 布局)
           echo "FFMPEG_DIR=$installed" >> $env:GITHUB_ENV
           echo "FFMPEG_PKG_CONFIG_PATH=$installed\lib\pkgconfig" >> $env:GITHUB_ENV
