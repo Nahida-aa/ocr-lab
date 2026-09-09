@@ -3,7 +3,7 @@
 - Video: 170.1s internal reference video
 - Frame extraction: `select='not(mod(n,step))'` at 2fps → **341 frames**
 - Configuration: `subtitle_only=true, text_score_threshold=0.45`
-- GT: `packages/benchmark/ref/metadata/ocr_manual.json` (75 segments, 559 normalized chars)
+- GT: `vox-lab/packages/benchmark/ref/metadata/ocr_manual.json` (75 segments, 559 normalized chars)
 - Date: 2025-06-23
 
 ## Summary
