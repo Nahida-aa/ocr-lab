@@ -3,7 +3,7 @@
 //! 存放不依赖引擎、可独立测试的感知后处理函数。目前包含：
 //! - [`nms`]：重叠框去重（复刻 cpp runOcr 的 IoU 过滤）。
 
-use rapidocr_ort::OcrBoxResult;
+use ocr_types::OcrBoxResult;
 
 /// 按面积降序，剔除被已保留大框覆盖超过 70% 的小框（IoU 口径）。
 pub fn nms(boxes: Vec<OcrBoxResult>) -> Vec<OcrBoxResult> {

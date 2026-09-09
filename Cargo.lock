@@ -4708,6 +4708,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "ocr-types"
+version = "0.1.0"
+dependencies = [
+ "serde",
+]
+
+[[package]]
 name = "once_cell"
 version = "1.21.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5605,6 +5612,7 @@ dependencies = [
  "glam",
  "image",
  "ndarray",
+ "ocr-types",
  "opencv",
  "ort",
  "serde",
@@ -6595,11 +6603,22 @@ dependencies = [
  "image",
  "indicatif",
  "ndarray",
+ "ocr-types",
  "rapidocr-ort",
  "serde",
  "serde_json",
+ "subtitle-ocr-post",
  "tracing",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "subtitle-ocr-post"
+version = "0.1.0"
+dependencies = [
+ "ocr-types",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

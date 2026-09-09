@@ -1,0 +1,10 @@
+[package]
+name = "ocr-types"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Pure data types + utility functions for OCR pipeline (no heavy deps like ort/opencv)."
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }

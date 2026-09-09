@@ -42,6 +42,8 @@ name = "ocr-post"
 path = "src/bin/ocr_post_cli.rs"
 
 [dependencies]
+ocr-types = { workspace = true }
+subtitle-ocr-post = { workspace = true }
 # OCR 引擎（det/rec/cls 推理 + 模型加载 + 字典），本包只做字幕专属逻辑。
 # 纯感知层（合并逻辑已迁入本包的 ocr_post::merge_frames / merge-frames CLI）。
 rapidocr-ort = { workspace = true }

@@ -34,7 +34,6 @@ use crate::geometry_util::polygon_metrics;
 use anyhow::{Context, Result};
 use ndarray::Array3;
 use ort::session::Session;
-use serde::Serialize;
 use std::path::Path;
 use tracing::debug;
 
@@ -94,23 +93,10 @@ impl ModelProfile {
 }
 
 /// 单个文字识别结果（一个检测出的文本框区域 + 识别文本）。
-#[derive(Clone, Debug, Serialize)]
-pub struct OcrBoxResult {
-    /// 识别出的文字。
-    pub text: String,
-    /// 文字置信度（rec 分支平均字符概率），反映「字认得准不准」。
-    pub text_confidence: f32,
-    /// 框置信度（det 后处理里框内平均概率），反映「框定位得准不准」。
-    pub box_confidence: f32,
-    /// 四个顶点（顺时针：左上、右上、右下、左下），原图像素坐标。
-    pub bbox: [[f32; 2]; 4],
-    /// 横向值域 `[min_x, max_x]`（像素坐标），便于按列/区域过滤。
-    pub x_range: [f32; 2],
-    /// 纵向值域 `[min_y, max_y]`（像素坐标），便于按行/区域过滤。
-    pub y_range: [f32; 2],
-    /// 几何中心（四点平均），便于操作回灌（点击中心点）。
-    pub center: [f32; 2],
-}
+///
+/// 唯一定义源在 `ocr-types`（无重型依赖），本 crate re-export 保持旧路径
+/// `rapidocr_ort::OcrBoxResult` 兼容。
+pub use ocr_types::OcrBoxResult;
 
 /// OCR 引擎：持有 det / cls / rec 三个 Session 与字典。
 pub struct OcrEngine {

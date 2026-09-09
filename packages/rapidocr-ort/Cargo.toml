@@ -15,6 +15,8 @@ name = "rapidocr-ort"
 path = "src/main.rs"
 
 [dependencies]
+# 纯数据类型（OcrBoxResult 的唯一定义源，无重型依赖）。
+ocr-types = { workspace = true }
 # ONNX Runtime 推理（workspace 已 pin rc.13）。开 ndarray feature 以便直接吃
 # ndarray::Array 构造输入张量。模型权重在 data/models/rapidocr 下，通过 --model 运行
 # 时参数选择，不条件编译。
