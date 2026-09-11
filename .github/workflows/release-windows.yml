@@ -1,6 +1,6 @@
 name: release-windows
 
-# 手动触发: 构建 subtitle-finder / subtitle-ocr / ocr-post 的 Windows (x86_64-pc-windows-msvc)
+# 手动触发: 构建 subtitle-finder / subtitle-ocr 的 Windows (x86_64-pc-windows-msvc)
 # 资产并上传到 vision-lab 对应 GitHub Release。
 #
 # 资产形态: zip (exe + 运行时 dll)。动态链接官方 OpenCV 5.0.0 prebuilt + vcpkg ffmpeg,
@@ -158,7 +158,7 @@ jobs:
           $outDir = "$env:RUNNER_TEMP\out"
           New-Item -ItemType Directory -Force -Path $outDir | Out-Null
           $bins = @()
-          if ("${{ github.event.inputs.upload_ocr }}" -ne "false") { $bins += @("subtitle-ocr","ocr-post") }
+          if ("${{ github.event.inputs.upload_ocr }}" -ne "false") { $bins += "subtitle-ocr" }
           if ("${{ github.event.inputs.upload_finder }}" -ne "false") { $bins += "subtitle-finder" }
           # opencv prebuilt + vcpkg ffmpeg 的全部 dll 平铺进每个 zip, 与 exe 同目录
           # (opencv_world500 + videoio ffmpeg/msmf 插件 + ffmpeg 库)
