@@ -1,4 +1,4 @@
-//! 命令行：`ocr-post --frames <ocr.json> --out <dir> [--video-height PX] [--stop-at STEP] [--threshold T]`
+//! 命令行：`subtitle-ocr-post --frames <ocr.json> --out <dir> [--video-height PX] [--stop-at STEP] [--threshold T]`
 //!
 //! 统合字幕后处理的 5 个步骤（原 `subtitle-ocr` 包的 5 个独立 CLI），一条命令在
 //! 内存中串起、按需落盘各中间产物：
@@ -149,7 +149,7 @@ impl InputFrames {
 
 #[derive(Parser, Debug)]
 #[command(
-    name = "ocr-post",
+    name = "subtitle-ocr-post",
     about = "字幕后处理管线：adjust-box → filter-box → merge → adjust-segment → filter-segment"
 )]
 struct Cli {
@@ -178,13 +178,13 @@ struct Cli {
     threshold: f32,
 }
 
-/// 仓库根：二进制在 `target/debug/ocr-post`，上溯两级到 workspace 根。
+/// 仓库根：二进制在 `target/debug/subtitle-ocr-post`，上溯两级到 workspace 根。
 fn current_exe_repo_root() -> Result<PathBuf> {
     let exe = std::env::current_exe().context("获取当前可执行文件路径失败")?;
     let exe_dir = exe.parent().context("可执行文件无父目录")?.to_path_buf();
     let root = exe_dir
         .join("..") // target/debug 或 target/release
-        .join("..") // packages/subtitle-ocr
+        .join("..") // packages/subtitle-ocr-post
         .canonicalize()
         .context("解析仓库根失败（确认从仓库内构建）")?;
     Ok(root)

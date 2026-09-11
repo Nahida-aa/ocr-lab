@@ -2,7 +2,7 @@
 name = "subtitle-ocr-post"
 # 独立版本号（不继承 workspace 的 0.1.0）：本 crate 是给下游直接当库用的（LocalDub
 # 经 fnrpc 调用），算法语义变化需按自己的 semver 走，不必跟着二进制包的发版节奏。
-version = "0.1.1"
+version = "0.1.2"
 edition.workspace = true
 license.workspace = true
 publish.workspace = true
@@ -13,32 +13,10 @@ default = []
 # 为 OCR 结果类型导出 specta::Type（供 LocalDub fnrpc 注册进 bindings）。
 specta-types = ["specta", "ocr-types/specta-types"]
 
-# —— 后处理 CLI（从 subtitle-ocr 迁来）——
-# 这些 bin 只用本包的纯算法（无 ort/opencv/ffmpeg），放在这里就不必跟着
-# subtitle-ocr 的推理依赖树走（Windows CI 免装 LLVM + OpenCV prebuilt）。
-[[bin]]
-name = "merge-frames"
-path = "src/bin/merge_frames_cli.rs"
-
-[[bin]]
-name = "ocr-frames-adjust-box"
-path = "src/bin/ocr_frames_adjust_box_cli.rs"
-
-[[bin]]
-name = "ocr-frames-filter-box"
-path = "src/bin/ocr_frames_filter_box_cli.rs"
-
-[[bin]]
-name = "ocr-segment-adjust"
-path = "src/bin/ocr_segment_adjust_cli.rs"
-
-[[bin]]
-name = "ocr-segment-filter"
-path = "src/bin/ocr_segment_filter_cli.rs"
-
-[[bin]]
-name = "ocr-post"
-path = "src/bin/ocr_post_cli.rs"
+# 后处理 CLI：单一汇总入口（src/main.rs）。5 个单步 CLI 已合并进
+# `ocr-post`（现二进制名 = 包名 subtitle-ocr-post），单步只在本项目内单测，
+# 不对外发单步能力。本 bin 只用纯算法（无 ort/opencv/ffmpeg），Windows 构建
+# 免装 LLVM + OpenCV prebuilt + vcpkg ffmpeg。
 
 [dependencies]
 ocr-types = { workspace = true }

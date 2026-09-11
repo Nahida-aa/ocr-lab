@@ -1,24 +1,23 @@
 name: release-post-windows
 
-# 手动触发: 构建 subtitle-ocr-post 的 6 个后处理 CLI
-# （ocr-post / merge-frames / ocr-frames-adjust-box / ocr-frames-filter-box /
-# ocr-segment-adjust / ocr-segment-filter）的 Windows (x86_64-pc-windows-msvc) 资产，
-# 上传到 subtitle-ocr-post 对应 GitHub Release。
+# 手动触发: 构建 subtitle-ocr-post 的单一后处理 CLI 二进制（subtitle-ocr-post）
+# 的 Windows (x86_64-pc-windows-msvc) 资产，上传到 subtitle-ocr-post 对应
+# GitHub Release。
 #
-# 这些 CLI 只依赖纯 Rust（无 ort / opencv / ffmpeg），故 Windows 构建不需要
+# 该 CLI 只依赖纯 Rust（无 ort / opencv / ffmpeg），故 Windows 构建不需要
 # LLVM/clang、OpenCV prebuilt、vcpkg ffmpeg，也不需要 onnxruntime —— 产物是
 # 自带运行时的单 exe，zip 里只平铺 exe 即可。与 release-windows.yml（重型
 # subtitle-ocr / subtitle-finder，需 opencv+ffmpeg）正交。
 #
-# 命名: <bin>-x86_64-pc-windows-msvc.zip，上传到 <tag>。
+# 命名: subtitle-ocr-post-x86_64-pc-windows-msvc.zip，上传到 <tag>。
 
 on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "上传目标 release tag（默认 subtitle-ocr-post-v0.1.1）"
+        description: "上传目标 release tag（默认 subtitle-ocr-post-v0.1.2）"
         type: string
-        default: "subtitle-ocr-post-v0.1.1"
+        default: "subtitle-ocr-post-v0.1.2"
       threshold:
         description: "构建阈值（预留，暂未用）"
         type: string
@@ -46,29 +45,27 @@ jobs:
           rustc -vV
           cargo -V
 
-      - name: build release bins (pure Rust, no system deps)
+      - name: build release bin (pure Rust, no system deps)
         shell: pwsh
         run: |
-          cargo build --release -p subtitle-ocr-post --bins
+          cargo build --release -p subtitle-ocr-post
           if ($LASTEXITCODE -ne 0) { throw "cargo build failed" }
-          Get-ChildItem target\release\*.exe | Where-Object { $_.Name -match 'ocr-post|merge-frames|ocr-frames|ocr-segment' } | Select-Object Name, Length
+          Get-ChildItem target\release\subtitle-ocr-post.exe | Select-Object Name, Length
 
-      - name: package zips (exe only)
+      - name: package zip (exe only)
         shell: pwsh
         run: |
           $outDir = "$env:RUNNER_TEMP\out"
           New-Item -ItemType Directory -Force -Path $outDir | Out-Null
-          $bins = @("ocr-post","merge-frames","ocr-frames-adjust-box","ocr-frames-filter-box","ocr-segment-adjust","ocr-segment-filter")
-          foreach ($b in $bins) {
-            $staging = "$outDir\$b"
-            New-Item -ItemType Directory -Force -Path $staging | Out-Null
-            Copy-Item ".\target\release\$b.exe" $staging
-            $asset = "$outDir\$b-x86_64-pc-windows-msvc.zip"
-            Compress-Archive -Path "$staging\*" -DestinationPath $asset -Force
-            $hash = (Get-FileHash $asset -Algorithm SHA256).Hash.ToLower()
-            Write-Host "ASSET=$asset SHA256=$hash SIZE=$((Get-Item $asset).Length)"
-            echo "$b-x86_64-pc-windows-msvc.zip`t$hash" >> "$outDir\sha256.txt"
-          }
+          $b = "subtitle-ocr-post"
+          $staging = "$outDir\$b"
+          New-Item -ItemType Directory -Force -Path $staging | Out-Null
+          Copy-Item ".\target\release\$b.exe" $staging
+          $asset = "$outDir\$b-x86_64-pc-windows-msvc.zip"
+          Compress-Archive -Path "$staging\*" -DestinationPath $asset -Force
+          $hash = (Get-FileHash $asset -Algorithm SHA256).Hash.ToLower()
+          Write-Host "ASSET=$asset SHA256=$hash SIZE=$((Get-Item $asset).Length)"
+          echo "$b-x86_64-pc-windows-msvc.zip`t$hash" >> "$outDir\sha256.txt"
           echo "OUT_DIR=$outDir" >> $env:GITHUB_ENV
 
       - name: upload assets to release
