@@ -4,19 +4,22 @@ use crate::segment_adjust::OcrSegmentWithAdjust;
 use serde::Serialize;
 
 #[derive(Clone, Debug, Serialize)]
+#[cfg_attr(feature = "specta-types", derive(specta::Type))]
 pub struct OcrSegmentFilterResult {
     pub meta: OcrSegmentFilterMeta,
     pub result: OcrSegmentFilterData,
 }
 
 #[derive(Clone, Debug, Serialize)]
+#[cfg_attr(feature = "specta-types", derive(specta::Type))]
 pub struct OcrSegmentFilterMeta {
-    pub segment_count: usize,
+    pub segment_count: u32,
     pub text_confidence_threshold: f32,
-    pub dropped: usize,
+    pub dropped: u32,
 }
 
 #[derive(Clone, Debug, Serialize)]
+#[cfg_attr(feature = "specta-types", derive(specta::Type))]
 pub struct OcrSegmentFilterData {
     pub text: String,
     pub segments: Vec<OcrSegmentWithAdjust>,
@@ -41,7 +44,11 @@ pub fn ocr_segment_filter_with_meta(
     let dropped = segments.len() - filtered.len();
     let text = filtered.iter().map(|s| s.base.base.text.as_str()).collect::<Vec<_>>().join(" ");
     OcrSegmentFilterResult {
-        meta: OcrSegmentFilterMeta { segment_count: filtered.len(), text_confidence_threshold, dropped },
+        meta: OcrSegmentFilterMeta {
+            segment_count: filtered.len() as u32,
+            text_confidence_threshold,
+            dropped: dropped as u32,
+        },
         result: OcrSegmentFilterData { text, segments: filtered },
     }
 }

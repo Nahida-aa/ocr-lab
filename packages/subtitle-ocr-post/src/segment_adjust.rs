@@ -31,6 +31,7 @@ impl OcrSegmentAdjustArgs {
 
 /// 应用置信度调整后的字幕段。
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "specta-types", derive(specta::Type))]
 pub struct OcrSegmentWithAdjust {
     #[serde(flatten)]
     pub base: OcrSegment,
@@ -52,7 +53,7 @@ fn compute_y_penalty(seg: &OcrSegment, avg_centroid: f32, video_height: f32, adj
 
 fn compute_iso_penalty(seg: &OcrSegment, non_empty_ts: &[u64], iso_threshold_ms: u64) -> f32 {
     if seg.frame_count != Some(1) { return 0.0; }
-    let mid = (seg.base.start_ms + seg.base.end_ms) / 2;
+    let mid = (seg.base.start_ms as u64 + seg.base.end_ms as u64) / 2;
     let before = non_empty_ts.iter().rev().find(|&&t| t < mid).copied();
     let after = non_empty_ts.iter().find(|&&t| t > mid).copied();
     let nearest_gap: f64 = match (before, after) {

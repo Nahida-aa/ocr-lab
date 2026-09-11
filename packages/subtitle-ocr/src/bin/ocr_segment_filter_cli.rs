@@ -26,8 +26,8 @@ use tracing::info;
 struct InputSegmentWithAdjust {
     // —— base: OcrSegment ——（flatten SubtitleSegment：text/start_ms/end_ms）
     text: String,
-    start_ms: u64,
-    end_ms: u64,
+    start_ms: u32,
+    end_ms: u32,
     #[serde(default)]
     y_range: Option<[f32; 2]>,
     text_confidence: f32,
@@ -154,7 +154,7 @@ fn main() -> Result<()> {
     if cli.bare {
         let filtered: Vec<OcrSegmentWithAdjust> =
             subtitle_ocr::ocr_segment_filter(&segments, cli.text_confidence_threshold);
-        write_out(&repo_root, &cli.out, &filtered, filtered.len())?;
+        write_out(&repo_root, &cli.out, &filtered, filtered.len() as u32)?;
         if cli.out.is_none() {
             println!("{}", serde_json::to_string_pretty(&filtered)?);
         }
@@ -175,7 +175,7 @@ fn write_out<T: serde::Serialize>(
     repo_root: &std::path::Path,
     out: &Option<PathBuf>,
     value: &T,
-    segment_count: usize,
+    segment_count: u32,
 ) -> Result<()> {
     if let Some(out) = out {
         let path = resolve_path(repo_root, out);

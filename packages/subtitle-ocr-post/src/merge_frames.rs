@@ -34,16 +34,16 @@ fn merge_two_segments(
 pub fn base_merge_frames(frames: &[FrameResult], _args: &MergeFramesArgs) -> Vec<OcrSegment> {
     let mut segments: Vec<OcrSegment> = Vec::new();
     let mut current_text = String::new();
-    let mut current_start: u64 = 0;
-    let mut current_end: u64 = 0;
+    let mut current_start: u32 = 0;
+    let mut current_end: u32 = 0;
     let mut current_box_y: Option<[f32; 2]> = None;
-    let mut gap_start: u64 = 0;
+    let mut gap_start: u32 = 0;
     let mut current_confidences: Vec<f32> = Vec::new();
     let mut current_frames: Vec<SegmentFrame> = Vec::new();
 
     let flush = |current_text: &str,
-                     current_start: u64,
-                     end_ms: u64,
+                     current_start: u32,
+                     end_ms: u32,
                      current_box_y: Option<[f32; 2]>,
                      current_confidences: &[f32],
                      current_frames: Vec<SegmentFrame>,
@@ -64,19 +64,19 @@ pub fn base_merge_frames(frames: &[FrameResult], _args: &MergeFramesArgs) -> Vec
     for f in frames {
         if f.text.is_empty() {
             if !current_text.is_empty() && gap_start == 0 {
-                gap_start = f.timestamp;
+                gap_start = f.timestamp as u32;
             }
             continue;
         }
         if gap_start > 0 {
-            let gap_ms = f.timestamp.saturating_sub(gap_start);
+            let gap_ms = (f.timestamp as u32).saturating_sub(gap_start);
             if gap_ms <= 1500
                 && (normalize(&f.text) == normalize(&current_text)
                     || is_substring_of(&f.text, &current_text)
                     || is_substring_of(&current_text, &f.text))
             {
                 current_confidences.push(f.text_confidence as f32);
-                current_end = f.timestamp;
+                current_end = f.timestamp as u32;
                 gap_start = 0;
                 continue;
             }
@@ -99,20 +99,20 @@ pub fn base_merge_frames(frames: &[FrameResult], _args: &MergeFramesArgs) -> Vec
                 );
             }
             current_text = f.text.clone();
-            current_start = f.timestamp;
-            current_end = f.timestamp;
+            current_start = f.timestamp as u32;
+            current_end = f.timestamp as u32;
             current_box_y = Some(f.y_range);
             current_confidences = vec![f.text_confidence as f32];
             current_frames = vec![SegmentFrame {
-                timestamp: f.timestamp,
+                timestamp: f.timestamp as u32,
                 text: f.text.clone(),
                 text_confidence: f.text_confidence as f32,
             }];
         } else {
             current_confidences.push(f.text_confidence as f32);
-            current_end = f.timestamp;
+            current_end = f.timestamp as u32;
             current_frames.push(SegmentFrame {
-                timestamp: f.timestamp,
+                timestamp: f.timestamp as u32,
                 text: f.text.clone(),
                 text_confidence: f.text_confidence as f32,
             });
@@ -211,7 +211,7 @@ pub fn remove_triplet_noise(segments: &[OcrSegment]) -> Vec<OcrSegment> {
 
 /// 去重 / 重叠合并（时间重叠/相接、文本近邻的段合并）。
 pub fn dedup_overlap(segments: &[OcrSegment], dedup_edit_distance: u32) -> Vec<OcrSegment> {
-    const TOUCH_GAP_MS: u64 = 500;
+    const TOUCH_GAP_MS: u32 = 500;
     let mut out: Vec<OcrSegment> = Vec::new();
     for cur in segments {
         if let Some(prev) = out.last_mut() {
@@ -242,7 +242,7 @@ pub fn dedup_overlap(segments: &[OcrSegment], dedup_edit_distance: u32) -> Vec<O
 
 /// 合并归一化后文本相同、间隔 ≤ 2s 且不重叠的相邻段。
 pub fn merge_adjacent_same_text(segments: &[OcrSegment]) -> Vec<OcrSegment> {
-    const MAX_GAP_MS: u64 = 2000;
+    const MAX_GAP_MS: u32 = 2000;
     let mut out: Vec<OcrSegment> = segments.to_vec();
     for i in (1..out.len()).rev() {
         let prev_norm = normalize(&out[i - 1].base.text);

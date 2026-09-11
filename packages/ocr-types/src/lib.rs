@@ -58,19 +58,21 @@ pub struct FrameResult {
 
 /// 一段字幕：文本与时间跨度。
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "specta-types", derive(specta::Type))]
 pub struct SubtitleSegment {
     /// 字幕文本。
     pub text: String,
     /// 起始时间（毫秒）。
-    pub start_ms: u64,
+    pub start_ms: u32,
     /// 结束时间（毫秒）。
-    pub end_ms: u64,
+    pub end_ms: u32,
 }
 
 /// 一条字幕段（extends SubtitleSegment with OCR-specific fields）。
 ///
 /// TS 用 `extends SubtitleSegment`；Rust 用 `#[serde(flatten)]` 内嵌。
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "specta-types", derive(specta::Type))]
 pub struct OcrSegment {
     #[serde(flatten)]
     pub base: SubtitleSegment,
@@ -89,11 +91,12 @@ pub struct OcrSegment {
 
 /// 组成字幕段的单个帧明细。
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "specta-types", derive(specta::Type))]
 pub struct SegmentFrame {
     /// 帧文本。
     pub text: String,
     /// 帧时刻（毫秒）。
-    pub timestamp: u64,
+    pub timestamp: u32,
     /// 文本置信度。
     pub text_confidence: f32,
 }

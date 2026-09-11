@@ -97,10 +97,18 @@ gpui_platform = { version = "0.1.0" }
 gpui_web = { version = "0.1.0" }
 gpui_util = { version = "0.1.0" }
 gpui_wgpu = { version = "0.1.0" }
+# specta 类型导出（LocalDub 经 fnrpc 注册 OCR 结果类型到 bindings）。rc.26 未发布到
+# crates.io，实际的 git 源由下方 [patch.crates-io] 覆盖（与 LocalDub/fnrpc 同一 rev）。
+specta = { version = "=2.0.0-rc.26", features = ["derive"] }
 
 # [patch.crates-io]：把 crates.io 上的 gpui 系列包整体替换为 zed 仓库对应 rev。
 # 注意 patch 必须写在 workspace 根（子包里的 patch 会被 cargo 忽略并报错）。
 [patch.crates-io]
+specta = { git = "https://github.com/specta-rs/specta.git", rev = "7bfd7428d675201f2beec8a0f0221599a2b3ea45" }
+specta-macros = { git = "https://github.com/specta-rs/specta.git", rev = "7bfd7428d675201f2beec8a0f0221599a2b3ea45" }
+specta-serde = { git = "https://github.com/specta-rs/specta.git", rev = "7bfd7428d675201f2beec8a0f0221599a2b3ea45" }
+specta-typescript = { git = "https://github.com/specta-rs/specta.git", rev = "7bfd7428d675201f2beec8a0f0221599a2b3ea45" }
+specta-util = { git = "https://github.com/specta-rs/specta.git", rev = "7bfd7428d675201f2beec8a0f0221599a2b3ea45" }
 gpui = { git = "https://github.com/zed-industries/zed", rev = "d88f68217b370f7a66d0c4b4971db31c0dff6df7", version = "=0.2.2" }
 gpui_macros = { git = "https://github.com/zed-industries/zed", rev = "d88f68217b370f7a66d0c4b4971db31c0dff6df7", version = "=0.1.0" }
 gpui_platform = { git = "https://github.com/zed-industries/zed", rev = "d88f68217b370f7a66d0c4b4971db31c0dff6df7", version = "=0.1.0" }

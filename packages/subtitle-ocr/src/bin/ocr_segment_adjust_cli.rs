@@ -136,8 +136,8 @@ impl InputFrames {
 #[derive(Debug, Deserialize)]
 struct InputSegment {
     text: String,
-    start_ms: u64,
-    end_ms: u64,
+    start_ms: u32,
+    end_ms: u32,
     #[serde(default)]
     y_range: Option<[f32; 2]>,
     #[serde(default)]
