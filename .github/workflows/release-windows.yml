@@ -21,13 +21,21 @@ on:
   workflow_dispatch:
     inputs:
       upload_ocr:
-        description: "构建并上传 subtitle-ocr + ocr-post 到 subtitle-ocr-v0.1.0"
+        description: "构建并上传 subtitle-ocr 主 bin 到 tag_ocr"
         type: boolean
         default: true
       upload_finder:
-        description: "构建并上传 subtitle-finder 到 subtitle-finder-v0.1.0"
+        description: "构建并上传 subtitle-finder 到 tag_finder"
         type: boolean
         default: true
+      tag_ocr:
+        description: "subtitle-ocr 上传目标 tag（默认 subtitle-ocr-v0.1.1）"
+        type: string
+        default: "subtitle-ocr-v0.1.1"
+      tag_finder:
+        description: "subtitle-finder 上传目标 tag（默认 subtitle-finder-v0.1.0）"
+        type: string
+        default: "subtitle-finder-v0.1.0"
 
 permissions:
   contents: write
@@ -119,7 +127,10 @@ jobs:
       - name: build release bins
         shell: pwsh
         run: |
-          cargo build --release -p subtitle-ocr --bin subtitle-ocr --bin ocr-post -p subtitle-finder --bin subtitle-finder
+          # 注意：ocr-post / merge-frames 等后处理 CLI 已迁到 subtitle-ocr-post
+          # （见 release-post-windows.yml，纯 Rust 无需 opencv/ffmpeg），本 workflow
+          # 只负责重型推理 bin。
+          cargo build --release -p subtitle-ocr --bin subtitle-ocr -p subtitle-finder --bin subtitle-finder
           if ($LASTEXITCODE -ne 0) { throw "cargo build failed" }
           Get-ChildItem target\release\*.exe | Where-Object { $_.Name -match 'subtitle-ocr|ocr-post|subtitle-finder' } | Select-Object Name, Length
 
@@ -130,9 +141,10 @@ jobs:
           # onnxruntime.dll 由 ort-sys 拷到 target\release (exe 同目录自动搜索);
           # opencv/ffmpeg dll 不在 exe 同目录, 需经 PATH 提供 (与 zip 平铺布局等效)
           $env:PATH = "C:\opencv5\opencv\build\x64\vc16\bin;$env:VCPKG_ROOT\installed\x64-windows\bin;$env:PATH"
-          $exes = @("subtitle-ocr", "ocr-post", "subtitle-finder") | Where-Object {
+          # ocr-post 等后处理 CLI 不在本 workflow 产物里（见 release-post-windows.yml）
+          $exes = @("subtitle-ocr", "subtitle-finder") | Where-Object {
             ($_ -eq "subtitle-finder" -and "${{ github.event.inputs.upload_finder }}" -ne "false") -or
-            ($_ -in @("subtitle-ocr","ocr-post") -and "${{ github.event.inputs.upload_ocr }}" -ne "false")
+            ($_ -eq "subtitle-ocr" -and "${{ github.event.inputs.upload_ocr }}" -ne "false")
           }
           foreach ($e in $exes) {
             & ".\target\release\$e.exe" --help *> $null
@@ -172,11 +184,11 @@ jobs:
         shell: pwsh
         run: |
           if ("${{ github.event.inputs.upload_ocr }}" -ne "false") {
-            gh release upload subtitle-ocr-v0.1.0 "$env:OUT_DIR\subtitle-ocr-x86_64-pc-windows-msvc.zip" "$env:OUT_DIR\ocr-post-x86_64-pc-windows-msvc.zip" --clobber
+            gh release upload "${{ github.event.inputs.tag_ocr }}" "$env:OUT_DIR\subtitle-ocr-x86_64-pc-windows-msvc.zip" --clobber
             if ($LASTEXITCODE -ne 0) { throw "upload ocr failed" }
           }
           if ("${{ github.event.inputs.upload_finder }}" -ne "false") {
-            gh release upload subtitle-finder-v0.1.0 "$env:OUT_DIR\subtitle-finder-x86_64-pc-windows-msvc.zip" --clobber
+            gh release upload "${{ github.event.inputs.tag_finder }}" "$env:OUT_DIR\subtitle-finder-x86_64-pc-windows-msvc.zip" --clobber
             if ($LASTEXITCODE -ne 0) { throw "upload finder failed" }
           }
 
