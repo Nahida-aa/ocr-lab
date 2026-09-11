@@ -160,6 +160,17 @@ fn main() -> Result<()> {
     }
     pb.finish();
 
+    // 画面高度：取首张输入图的尺寸（只读文件头，不解码像素）。`y_range` 是图像坐标系，
+    // 故这里就是下游 Y 惩罚所需的分母；抽帧为原始尺寸时亦等于视频帧高。
+    // 读不到（无图 / 格式异常）时留 None，由下游回退到显式传值。
+    let video_height = entries.first().and_then(|e| match image::image_dimensions(&e.path) {
+        Ok((_, h)) => Some(h),
+        Err(err) => {
+            tracing::warn!(path = %e.path.display(), %err, "读取图片尺寸失败，meta.video_height 留空");
+            None
+        }
+    });
+
     // --out：额外落地 OcrFramesResult（文件名由调用方指定，如 asr_ocr_frames.json）
     if let Some(out) = &cli.out {
         let path = resolve_path(&repo_root, out);
@@ -175,6 +186,7 @@ fn main() -> Result<()> {
                 // 本包为 rust 实现；设备固定 cpu（cpp 侧才区分 cuda 等）。
                 engine: "ort-rust".to_string(),
                 device: OcrDevice::Cpu,
+                video_height,
             },
         };
         let json = serde_json::to_string_pretty(&result).context("序列化 OcrFramesResult 失败")?;

@@ -1,4 +1,4 @@
-//! 命令行：`ocr-post --frames <ocr.json> --video <video> --out <dir> [--stop-at STEP] [--threshold T]`
+//! 命令行：`ocr-post --frames <ocr.json> --out <dir> [--video-height PX] [--stop-at STEP] [--threshold T]`
 //!
 //! 统合字幕后处理的 5 个步骤（原 `subtitle-ocr` 包的 5 个独立 CLI），一条命令在
 //! 内存中串起、按需落盘各中间产物：
@@ -12,12 +12,16 @@
 //! 各中间产物文件名沿用原 justfile 约定，均写到 `--out` 目录下（自动创建）。
 //! `--stop-at` 可只跑到某一步（默认 `filter-segment` 全跑完）；`--threshold` 为
 //! 最后一步的过滤阈值（默认 0.6，对齐 justfile filter-segment 默认）。
+//!
+//! 第 4 步需要的画面高度取自 `--frames` 的 `meta.video_height`（识别侧写入的图像
+//! 坐标系高度），老 JSON 没有该字段时用 `--video-height <px>` 显式给；本 CLI 不读
+//! 视频文件（为拿一个高度链接 ffmpeg 不划算）。
 
 use anyhow::{Context, Result};
 use clap::{Parser, ValueEnum};
 use serde::Deserialize;
 use std::path::PathBuf;
-use subtitle_ocr::{
+use subtitle_ocr_post::{
     BoxAdjustedArgs, FrameResult, MergeFramesArgs, OcrBoxResult, OcrSegmentAdjustArgs,
     compute_box_x_stats, compute_box_y_stats, merge_frames, ocr_frames_adjust_box,
     ocr_frames_filter_box, ocr_segment_adjust, ocr_segment_filter_with_meta,
@@ -100,19 +104,30 @@ impl InputFrame {
     }
 }
 
+/// 输入 meta 里本 CLI 消费的字段（其余忽略）。`video_height` 由识别侧写入。
+#[derive(Debug, Deserialize)]
+struct InputMeta {
+    #[serde(default)]
+    video_height: Option<u32>,
+}
+
 /// 兼容 frames 输入的两种形态：裸 `FrameResult[]`，或 `{ frames, meta }`
 ///（`subtitle-ocr --out` 输出形状）。
 #[derive(Debug, Deserialize)]
 #[serde(untagged)]
 enum InputFrames {
-    Wrapped { frames: Vec<InputFrame> },
+    Wrapped {
+        frames: Vec<InputFrame>,
+        #[serde(default)]
+        meta: Option<InputMeta>,
+    },
     Bare(Vec<InputFrame>),
 }
 
 impl InputFrames {
     fn into_frames(self) -> Vec<FrameResult> {
         match self {
-            InputFrames::Wrapped { frames } => frames
+            InputFrames::Wrapped { frames, .. } => frames
                 .into_iter()
                 .map(InputFrame::into_frame_result)
                 .collect(),
@@ -120,6 +135,14 @@ impl InputFrames {
                 .into_iter()
                 .map(InputFrame::into_frame_result)
                 .collect(),
+        }
+    }
+
+    /// meta 里带的画面高度（老 JSON / 裸数组形态没有 → None）。
+    fn meta_video_height(&self) -> Option<u32> {
+        match self {
+            InputFrames::Wrapped { meta, .. } => meta.as_ref().and_then(|m| m.video_height),
+            InputFrames::Bare(_) => None,
         }
     }
 }
@@ -134,9 +157,13 @@ struct Cli {
     #[arg(long)]
     frames: PathBuf,
 
-    /// 视频文件路径：用于读视频高度（段 Y 偏移惩罚归一化分母）。
+    /// 画面像素高度（段 Y 偏移惩罚的归一化分母）。
+    ///
+    /// 优先用 frames JSON 的 `meta.video_height`（识别侧写好的图像坐标系高度）；
+    /// 老 JSON / cpp 产出没有该字段时，用本参数显式指定（如 `ffprobe -v error
+    /// -select_streams v:0 -show_entries stream=height -of csv=p=0` 取到的值）。
     #[arg(long)]
-    video: PathBuf,
+    video_height: Option<u32>,
 
     /// 输出目录：各中间产物 JSON 写到此处（自动创建）。
     #[arg(long)]
@@ -171,20 +198,22 @@ fn resolve_path(repo_root: &std::path::Path, p: &std::path::Path) -> PathBuf {
     }
 }
 
-/// 读视频文件获取像素高度（Y 偏移惩罚归一化分母）。
-fn video_height(video: &std::path::Path) -> Result<f32> {
-    ffmpeg_next::init().context("ffmpeg 初始化失败")?;
-    let ictx = ffmpeg_next::format::input(video).context("打开视频失败")?;
-    let input = ictx
-        .streams()
-        .best(ffmpeg_next::media::Type::Video)
-        .ok_or_else(|| anyhow::anyhow!("视频没有视频流"))?;
-    let decoder = ffmpeg_next::codec::context::Context::from_parameters(input.parameters())
-        .context("创建解码上下文失败")?
-        .decoder()
-        .video()
-        .context("创建视频解码器失败")?;
-    Ok(decoder.height() as f32)
+/// 取画面高度（Y 偏移惩罚归一化分母）：显式参数 > frames meta > 报错。
+fn resolve_video_height(
+    explicit: Option<u32>,
+    parsed: &InputFrames,
+) -> Result<f32> {
+    if let Some(h) = explicit {
+        return Ok(h as f32);
+    }
+    if let Some(h) = parsed.meta_video_height() {
+        return Ok(h as f32);
+    }
+    anyhow::bail!(
+        "无法确定画面高度：frames JSON 的 meta.video_height 缺失，\
+         请用 --video-height <px> 指定（ffprobe -v error -select_streams v:0 \
+         -show_entries stream=height -of csv=p=0 <video>）"
+    )
 }
 
 /// 序列化并写 JSON 到 out 目录，打印落盘位置。
@@ -202,7 +231,6 @@ fn main() -> Result<()> {
 
     let repo_root = current_exe_repo_root()?;
     let frames_path = resolve_path(&repo_root, &cli.frames);
-    let video_path = resolve_path(&repo_root, &cli.video);
     let out_dir = resolve_path(&repo_root, &cli.out);
     std::fs::create_dir_all(&out_dir)
         .with_context(|| format!("创建输出目录失败: {}", out_dir.display()))?;
@@ -212,6 +240,7 @@ fn main() -> Result<()> {
         .with_context(|| format!("读取 frames 文件失败: {}", frames_path.display()))?;
     let parsed: InputFrames = serde_json::from_str(&raw)
         .context("解析 frames JSON 失败（需为 FrameResult[] 或 {frames,meta}）")?;
+    let vh = resolve_video_height(cli.video_height, &parsed)?;
     let frames = parsed.into_frames();
     println!("读取 {} 帧", frames.len());
 
@@ -250,8 +279,7 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
-    // ─── 4. adjust-segment（frames 用 filter 后的干净帧，高度从视频读）───
-    let vh = video_height(&video_path)?;
+    // ─── 4. adjust-segment（frames 用 filter 后的干净帧，高度取自 frames meta / 参数）───
     let y_stats2 = compute_box_y_stats(&filtered.frames);
     let seg_adjust = ocr_segment_adjust(
         &merged.segments,

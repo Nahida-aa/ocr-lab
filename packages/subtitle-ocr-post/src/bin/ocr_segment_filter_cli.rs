@@ -1,8 +1,8 @@
 //! 命令行：`ocr-segment-filter <adjusted.json> [--text-confidence-threshold F] [--bare] [--out PATH]`
 //!
 //! 读入 `ocr-segment-adjust` 产出的调整后 JSON（`OcrSegmentWithAdjust[]` 数组，或
-//! `OcrSegmentFilterResult { meta, result }`），跑 [`subtitle_ocr::ocr_segment_filter`] /
-//! [`subtitle_ocr::ocr_segment_filter_with_meta`] 按置信度阈值过滤字幕段，把低于阈值的段丢弃。
+//! `OcrSegmentFilterResult { meta, result }`），跑 [`subtitle_ocr_post::ocr_segment_filter`] /
+//! [`subtitle_ocr_post::ocr_segment_filter_with_meta`] 按置信度阈值过滤字幕段，把低于阈值的段丢弃。
 //! 结果默认到 stdout；指定 `--out` 时落盘到文件、不再向 stdout 打印。
 //!
 //! 置信度优先级（对齐 TS `ocrSegmentFilter`）：段若带 `adjusted_confidence` 则优先用它，
@@ -16,7 +16,7 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use serde::Deserialize;
 use std::path::PathBuf;
-use subtitle_ocr::{OcrSegmentFilterResult, OcrSegmentWithAdjust, SubtitleSegment};
+use subtitle_ocr_post::{OcrSegmentFilterResult, OcrSegmentWithAdjust, SubtitleSegment};
 use tracing::info;
 
 /// 输入里单条调整后字幕段（镜像 [`OcrSegmentWithAdjust`]：`base`（`OcrSegment`，其内再 flatten
@@ -47,7 +47,7 @@ struct InputSegmentWithAdjust {
 impl InputSegmentWithAdjust {
     fn into_ocr_segment_with_adjust(self) -> OcrSegmentWithAdjust {
         OcrSegmentWithAdjust {
-            base: subtitle_ocr::OcrSegment {
+            base: subtitle_ocr_post::OcrSegment {
                 base: SubtitleSegment {
                     text: self.text,
                     start_ms: self.start_ms,
@@ -153,14 +153,14 @@ fn main() -> Result<()> {
     // 指定了 --out 时结果已落盘，不再向 stdout 重复打印（避免刷屏 + 与文件重复）。
     if cli.bare {
         let filtered: Vec<OcrSegmentWithAdjust> =
-            subtitle_ocr::ocr_segment_filter(&segments, cli.text_confidence_threshold);
+            subtitle_ocr_post::ocr_segment_filter(&segments, cli.text_confidence_threshold);
         write_out(&repo_root, &cli.out, &filtered, filtered.len() as u32)?;
         if cli.out.is_none() {
             println!("{}", serde_json::to_string_pretty(&filtered)?);
         }
     } else {
         let result: OcrSegmentFilterResult =
-            subtitle_ocr::ocr_segment_filter_with_meta(&segments, cli.text_confidence_threshold);
+            subtitle_ocr_post::ocr_segment_filter_with_meta(&segments, cli.text_confidence_threshold);
         write_out(&repo_root, &cli.out, &result, result.meta.segment_count)?;
         if cli.out.is_none() {
             println!("{}", serde_json::to_string_pretty(&result)?);

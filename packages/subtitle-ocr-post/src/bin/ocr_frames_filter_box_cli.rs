@@ -1,8 +1,8 @@
 //! 命令行：`ocr-frames-filter-box <adjusted.json> [--out PATH]`
 //!
 //! 读入 `ocr-frames-adjust-box` 产出的调整后 JSON（`OcrBoxAdjustResult`，即
-//! `FrameResultBoxWithAdjust[]` 带 `meta`），跑 [`subtitle_ocr::ocr_frames_filter_box`]
-//! 剔除 `is_outlier` 的框、重聚合得到干净帧，输出 [`subtitle_ocr::OcrFramesBoxFilteredResult`]
+//! `FrameResultBoxWithAdjust[]` 带 `meta`），跑 [`subtitle_ocr_post::ocr_frames_filter_box`]
+//! 剔除 `is_outlier` 的框、重聚合得到干净帧，输出 [`subtitle_ocr_post::OcrFramesBoxFilteredResult`]
 //! （`{ frames, meta }`）。结果默认到 stdout；指定 `--out` 时落盘到文件、不再向
 //! stdout 打印（结果较大）。
 //!
@@ -15,7 +15,7 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use serde::Deserialize;
 use std::path::PathBuf;
-use subtitle_ocr::{
+use subtitle_ocr_post::{
     FrameResultBoxWithAdjust, OcrBoxResult, OcrBoxResultWithAdjust, OcrFramesBoxFilteredResult,
 };
 use tracing::info;
@@ -193,7 +193,7 @@ fn main() -> Result<()> {
         .context("解析调整后 JSON 失败（需为 FrameResultBoxWithAdjust[] 或 {frames,meta}）")?;
     let frames = parsed.into_frames();
 
-    let result: OcrFramesBoxFilteredResult = subtitle_ocr::ocr_frames_filter_box(&frames);
+    let result: OcrFramesBoxFilteredResult = subtitle_ocr_post::ocr_frames_filter_box(&frames);
 
     if let Some(out) = &cli.out {
         let path = resolve_path(&repo_root, out);

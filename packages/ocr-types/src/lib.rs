@@ -165,6 +165,16 @@ pub struct OcrFramesMeta {
     pub engine: String,
     /// OCR 运行设备。
     pub device: OcrDevice,
+    /// 画面像素高度（`y_range` 所在的图像坐标系高度，通常即视频帧高）。
+    ///
+    /// 下游 `ocr-segment-adjust` 的 Y 偏移惩罚用它当归一化分母
+    /// （见 `compute_y_penalty`）。由识别侧（读图时）填入，本 crate 不读视频。
+    ///
+    /// 命名沿用 `video_height`：分母的本意是「画面高度」，而抽帧通常为原始尺寸，
+    /// 二者相等；若抽帧有缩放，这里存图像高度才是正确的（与 `y_range` 同坐标系）。
+    /// 老 JSON（含 cpp 侧产出）没有此字段 → `None`，调用方需回退到显式传值。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub video_height: Option<u32>,
 }
 
 /// 一次 stage 的原始 OCR 帧输出（`asr_ocr_frames.json | sf_ocr_frames.json` 等）。
