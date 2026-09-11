@@ -30,6 +30,17 @@ fn merge_two_segments(
     }
 }
 
+/// 同一文本相邻帧允许的最大时间间隔（ms）：超过则视为「同一句字幕重复出现」，断成新段。
+///
+/// 背景：`base_merge_frames` 的断段原本只靠两种信号——文本变化、或中间夹空文本帧且间隔
+/// > 1500ms。而上游 `ocr_frames_filter_box` 会把无框的空帧整帧丢掉（见
+/// `box_filter.rs`），喂进来的帧序列里没有空帧，于是相隔十几秒的两句相同文本（如两个
+/// 「啊」）会被粘成一段，段的 end_ms 被拉长到十几秒后。这里补一个纯时间戳兜底。
+///
+/// 阈值取 4000：本仓库实测数据（workfolder/师尊带我炸修真/2）中同一条字幕内相邻帧的
+/// 最大间隔是 3266ms（丢帧导致），而跨段重复文本的间隔是 12667ms，4000 落在两者之间。
+const MAX_SAME_TEXT_GAP_MS: u32 = 4000;
+
 /// 把逐帧 `FrameResult` 合并成带时间轴的字幕段（`base_merge_frames`）。
 pub fn base_merge_frames(frames: &[FrameResult], _args: &MergeFramesArgs) -> Vec<OcrSegment> {
     let mut segments: Vec<OcrSegment> = Vec::new();
@@ -91,7 +102,14 @@ pub fn base_merge_frames(frames: &[FrameResult], _args: &MergeFramesArgs) -> Vec
             current_confidences.clear();
             current_frames = Vec::new();
         }
-        if current_text.is_empty() || normalize(&f.text) != normalize(&current_text) {
+        // 文本相同但间隔过大：不是同一句字幕的延续，而是同一文本再次出现 → 断段。
+        // （该分支本就会先 flush 旧段再开新段，复用即可。）
+        let same_text_too_far = !current_text.is_empty()
+            && (f.timestamp as u32).saturating_sub(current_end) > MAX_SAME_TEXT_GAP_MS;
+        if current_text.is_empty()
+            || same_text_too_far
+            || normalize(&f.text) != normalize(&current_text)
+        {
             if !current_text.is_empty() {
                 flush(
                     &current_text, current_start, current_end, current_box_y,
@@ -297,6 +315,34 @@ mod tests {
         assert_eq!(segs[0].base.start_ms, 100);
         assert_eq!(segs[0].base.end_ms, 200);
         assert_eq!(segs[1].base.text, "world");
+    }
+
+    #[test]
+    fn base_merge_splits_same_text_far_apart() {
+        // 上游 filter 丢掉了空帧，只剩 4 帧「啊」：前两句是一句，后两句是另一句（相隔 12.6s）。
+        let frames = vec![
+            make_frame("啊", 3200),
+            make_frame("啊", 4366),
+            make_frame("啊", 17033),
+            make_frame("啊", 18266),
+        ];
+        let segs = base_merge_frames(&frames, &MergeFramesArgs::default());
+        assert_eq!(segs.len(), 2);
+        assert_eq!(segs[0].base.start_ms, 3200);
+        assert_eq!(segs[0].base.end_ms, 4366);
+        assert_eq!(segs[0].frame_count, Some(2));
+        assert_eq!(segs[1].base.start_ms, 17033);
+        assert_eq!(segs[1].base.end_ms, 18266);
+    }
+
+    #[test]
+    fn base_merge_keeps_same_text_within_gap() {
+        // 同一句字幕因丢帧只留两帧，间隔 3266ms（实测最大值），不能被误切。
+        let frames = vec![make_frame("我徒弟哈哈亲生的", 36100), make_frame("我徒弟哈哈亲生的", 39366)];
+        let segs = base_merge_frames(&frames, &MergeFramesArgs::default());
+        assert_eq!(segs.len(), 1);
+        assert_eq!(segs[0].base.start_ms, 36100);
+        assert_eq!(segs[0].base.end_ms, 39366);
     }
 
     #[test]
