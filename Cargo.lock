@@ -6641,7 +6641,7 @@ dependencies = [
 
 [[package]]
 name = "subtitle-ocr-post"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "ocr-types",
  "serde",
